@@ -3,7 +3,7 @@ use colored::Colorize;
 use dialoguer::{Input, Select, Confirm};
 
 use omniplanner::agenda::{Evento, HorarioEscritura, TipoEvento};
-use omniplanner::canvas::{Canvas, Punto, Trazo};
+use omniplanner::canvas::{Canvas, Elemento};
 use omniplanner::diagrams::{Diagrama, Nodo, TipoConexion, TipoDiagrama, TipoNodo};
 use omniplanner::mapper::{Codificacion, EsquemaMapa, Mapper};
 use omniplanner::memoria::Recuerdo;
@@ -875,50 +875,51 @@ fn recordar_evento(state: &mut AppState) {
 fn menu_canvas(state: &mut AppState) {
     loop {
         limpiar();
-        separador("✏️  CANVAS — Escritura a mano");
+        separador("🎨 CANVAS — Board de Ideas");
 
         if !state.canvases.is_empty() {
             for c in &state.canvases {
-                println!("  🖼️  [{}] {} ({}x{}) — {} trazos", c.id.dimmed(), c.nombre, c.ancho, c.alto, c.trazos.len());
+                println!("  🖼️  [{}] {} — {} elementos", c.id.dimmed(), c.nombre, c.total_elementos());
             }
         } else {
-            println!("  {}", "(sin canvas — crea tu primer lienzo)".dimmed());
+            println!("  {}", "(sin canvas — crea tu primer board de ideas)".dimmed());
         }
 
         let opciones = &[
             "🖼️  Nuevo canvas",
-            "✏️  Dibujar trazo",
-            "🔍 Reconocer escritura",
-            "💾 Exportar a SVG",
+            "📝 Agregar nota / idea",
+            "🖼️  Agregar imagen",
+            "📋 Agregar lista",
+            "── Agregar sección",
+            "👁️  Ver canvas completo",
+            "✏️  Editar elemento",
+            "🗑️  Eliminar elemento",
+            "🌐 Exportar a HTML (abrir en navegador)",
+            "🗑️  Eliminar canvas completo",
             "← Volver al menú",
         ];
 
         match menu("¿Qué deseas hacer?", opciones) {
             Some(0) => nuevo_canvas(state),
-            Some(1) => dibujar_trazo(state),
-            Some(2) => reconocer_canvas(state),
-            Some(3) => exportar_canvas(state),
+            Some(1) => agregar_nota_canvas(state),
+            Some(2) => agregar_imagen_canvas(state),
+            Some(3) => agregar_lista_canvas(state),
+            Some(4) => agregar_seccion_canvas(state),
+            Some(5) => ver_canvas(state),
+            Some(6) => editar_elemento_canvas(state),
+            Some(7) => eliminar_elemento_canvas(state),
+            Some(8) => exportar_canvas_html(state),
+            Some(9) => eliminar_canvas(state),
             _ => return,
         }
     }
 }
 
 fn nuevo_canvas(state: &mut AppState) {
-    separador("🖼️  Nuevo canvas");
-    let nombre = match pedir_texto("Nombre") { Some(t) => t, None => return };
-    let ancho: u32 = Input::new()
-        .with_prompt("  Ancho (px)")
-        .default(800u32)
-        .interact_text()
-        .unwrap_or(800);
-    let alto: u32 = Input::new()
-        .with_prompt("  Alto (px)")
-        .default(600u32)
-        .interact_text()
-        .unwrap_or(600);
-
-    let c = Canvas::new(nombre.clone(), ancho, alto);
-    println!("  {} [{}] {} ({}x{})", "✓ Canvas creado:".green().bold(), c.id, nombre, ancho, alto);
+    separador("🖼️  Nuevo canvas / board");
+    let nombre = match pedir_texto("Nombre (ej: Ideas proyecto, Brainstorm, Inspiración)") { Some(t) => t, None => return };
+    let c = Canvas::new(nombre.clone(), 800, 600);
+    println!("  {} [{}] {}", "✓ Canvas creado:".green().bold(), c.id, nombre);
     state.canvases.push(c);
     pausa();
 }
@@ -930,52 +931,218 @@ fn seleccionar_canvas(state: &AppState) -> Option<usize> {
         return None;
     }
     let nombres: Vec<String> = state.canvases.iter()
-        .map(|c| format!("[{}] {} ({} trazos)", c.id, c.nombre, c.trazos.len()))
+        .map(|c| format!("[{}] {} ({} elementos)", c.id, c.nombre, c.total_elementos()))
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
     menu("Selecciona canvas", &refs)
 }
 
-fn dibujar_trazo(state: &mut AppState) {
+fn agregar_nota_canvas(state: &mut AppState) {
     let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
-    println!("  Ingresa puntos como: x,y ; x,y ; x,y");
-    let puntos_str = match pedir_texto("Puntos") { Some(t) => t, None => return };
-    let mut trazo = Trazo::new("#000000".to_string(), 2.0);
-    for par in puntos_str.split(';') {
-        let coords: Vec<&str> = par.split(',').collect();
-        if coords.len() >= 2 {
-            if let (Ok(x), Ok(y)) = (coords[0].trim().parse::<f64>(), coords[1].trim().parse::<f64>()) {
-                trazo.agregar_punto(Punto { x, y, presion: 1.0, timestamp_ms: 0 });
+    println!("  Escribe tu nota o idea. Puede ser larga, un resumen,");
+    println!("  una cita, lo que quieras poner en el board.");
+    let contenido = match pedir_texto("Nota") { Some(t) => t, None => return };
+
+    let colores = &["🔵 Azul", "🟢 Verde", "🟡 Amarillo", "🔴 Rojo", "🟣 Morado", "⚪ Blanco"];
+    let ci = match menu("Color de la nota", colores) { Some(i) => i, None => return };
+    let color = match ci {
+        0 => "#00d4ff",
+        1 => "#4ecdc4",
+        2 => "#f9ca24",
+        3 => "#ff6b6b",
+        4 => "#a29bfe",
+        _ => "#ffffff",
+    };
+
+    state.canvases[idx].agregar_elemento(Elemento::nota(contenido, color.to_string()));
+    println!("  {} Nota agregada al canvas", "✓".green().bold());
+    pausa();
+}
+
+fn agregar_imagen_canvas(state: &mut AppState) {
+    let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
+    println!("  Ingresa la ruta al archivo de imagen o una URL.");
+    println!("  Ejemplos:");
+    println!("    C:\\Users\\fotos\\idea.png");
+    println!("    /storage/emulated/0/DCIM/foto.jpg");
+    println!("    https://ejemplo.com/imagen.png");
+    let ruta = match pedir_texto("Ruta o URL de la imagen") { Some(t) => t, None => return };
+
+    // Verificar si es archivo local
+    if !ruta.starts_with("http://") && !ruta.starts_with("https://") {
+        if !std::path::Path::new(&ruta).exists() {
+            println!("  {} El archivo '{}' no existe. ¿Agregar de todos modos?", "⚠️".to_string(), ruta);
+            if !Confirm::new()
+                .with_prompt("  ¿Continuar?")
+                .default(false)
+                .interact()
+                .unwrap_or(false)
+            {
+                return;
             }
         }
     }
-    let n = trazo.puntos.len();
-    state.canvases[idx].agregar_trazo(trazo);
-    println!("  {} {} puntos agregados", "✓".green(), n);
+
+    state.canvases[idx].agregar_elemento(Elemento::imagen(ruta));
+    println!("  {} Imagen agregada al canvas", "✓".green().bold());
     pausa();
 }
 
-fn reconocer_canvas(state: &mut AppState) {
+fn agregar_lista_canvas(state: &mut AppState) {
     let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
-    let resultados = state.canvases[idx].reconocer_escritura();
-    if resultados.is_empty() {
-        println!("  {}", "No se reconoció escritura.".yellow());
+    println!("  Escribe los items separados por coma o punto y coma.");
+    let items_str = match pedir_texto("Items (separados por , o ;)") { Some(t) => t, None => return };
+
+    let items: Vec<&str> = items_str.split(|c| c == ',' || c == ';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if items.is_empty() {
+        println!("  {}", "No se ingresaron items.".yellow());
+        pausa();
+        return;
+    }
+
+    let contenido = items.join("\n");
+
+    let colores = &["🟢 Verde", "🔵 Azul", "🟡 Amarillo", "⚪ Blanco"];
+    let ci = match menu("Color", colores) { Some(i) => i, None => return };
+    let color = match ci {
+        0 => "#4ecdc4",
+        1 => "#00d4ff",
+        2 => "#f9ca24",
+        _ => "#ffffff",
+    };
+
+    state.canvases[idx].agregar_elemento(Elemento::lista(contenido, color.to_string()));
+    println!("  {} Lista con {} items agregada", "✓".green().bold(), items.len());
+    pausa();
+}
+
+fn agregar_seccion_canvas(state: &mut AppState) {
+    let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
+    let titulo = match pedir_texto("Título de la sección") { Some(t) => t, None => return };
+    state.canvases[idx].agregar_elemento(Elemento::seccion(titulo));
+    println!("  {} Sección agregada", "✓".green().bold());
+    pausa();
+}
+
+fn ver_canvas(state: &AppState) {
+    let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
+    let c = &state.canvases[idx];
+    separador(&format!("🎨 {}", c.nombre));
+
+    if c.elementos.is_empty() && c.trazos.is_empty() {
+        println!("  {}", "(canvas vacío)".dimmed());
     } else {
-        separador("🔍 Reconocimiento");
-        for r in resultados {
-            println!("  {}", r);
+        for elem in &c.elementos {
+            match &elem.tipo {
+                omniplanner::canvas::TipoElemento::Nota => {
+                    println!("  📝 [{}] {}", elem.id.dimmed(), elem.contenido);
+                    println!("     {}", elem.creado.format("%d/%m/%Y %H:%M").to_string().dimmed());
+                }
+                omniplanner::canvas::TipoElemento::Imagen => {
+                    println!("  🖼️  [{}] {}", elem.id.dimmed(), elem.contenido);
+                    println!("     {}", elem.creado.format("%d/%m/%Y %H:%M").to_string().dimmed());
+                }
+                omniplanner::canvas::TipoElemento::Lista => {
+                    println!("  📋 [{}] Lista:", elem.id.dimmed());
+                    for (i, item) in elem.contenido.lines().enumerate() {
+                        println!("     {}. {}", i + 1, item);
+                    }
+                    println!("     {}", elem.creado.format("%d/%m/%Y %H:%M").to_string().dimmed());
+                }
+                omniplanner::canvas::TipoElemento::Seccion => {
+                    println!();
+                    println!("  {} {} {}", "──".dimmed(), elem.contenido.bold(), "──".dimmed());
+                }
+            }
+            println!();
+        }
+        if !c.trazos.is_empty() {
+            println!("  {} {} trazos legacy", "✏️".to_string(), c.trazos.len());
         }
     }
     pausa();
 }
 
-fn exportar_canvas(state: &AppState) {
+fn editar_elemento_canvas(state: &mut AppState) {
     let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
-    let salida = match pedir_texto("Archivo de salida (ej: dibujo.svg)") { Some(t) => t, None => return };
-    let svg = state.canvases[idx].exportar_svg();
-    match std::fs::write(&salida, &svg) {
-        Ok(_) => println!("  {} Exportado a '{}'", "✓".green(), salida),
-        Err(e) => println!("  {} {}", "✗".red(), e),
+    if state.canvases[idx].elementos.is_empty() {
+        println!("  {}", "No hay elementos para editar.".yellow());
+        pausa();
+        return;
+    }
+
+    let nombres: Vec<String> = state.canvases[idx].elementos.iter()
+        .map(|e| format!("[{}] {}", e.id, e))
+        .collect();
+    let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+    let ei = match menu("¿Cuál elemento?", &refs) { Some(i) => i, None => return };
+
+    let nuevo = match pedir_texto("Nuevo contenido") { Some(t) => t, None => return };
+    state.canvases[idx].elementos[ei].contenido = nuevo;
+    println!("  {} Elemento actualizado", "✓".green().bold());
+    pausa();
+}
+
+fn eliminar_elemento_canvas(state: &mut AppState) {
+    let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
+    if state.canvases[idx].elementos.is_empty() {
+        println!("  {}", "No hay elementos para eliminar.".yellow());
+        pausa();
+        return;
+    }
+
+    let nombres: Vec<String> = state.canvases[idx].elementos.iter()
+        .map(|e| format!("[{}] {}", e.id, e))
+        .collect();
+    let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+    let ei = match menu("¿Cuál eliminar?", &refs) { Some(i) => i, None => return };
+
+    let id = state.canvases[idx].elementos[ei].id.clone();
+    state.canvases[idx].eliminar_elemento(&id);
+    println!("  {} Elemento eliminado", "✓".green().bold());
+    pausa();
+}
+
+fn exportar_canvas_html(state: &AppState) {
+    let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
+    let nombre_archivo = format!("{}.html", state.canvases[idx].nombre.replace(' ', "_").to_lowercase());
+    let sugerencia = pedir_texto_opcional(&format!("Archivo (Enter = {})", nombre_archivo));
+    let archivo = if sugerencia.is_empty() { nombre_archivo } else { sugerencia };
+
+    let html = state.canvases[idx].exportar_html();
+    match std::fs::write(&archivo, &html) {
+        Ok(_) => {
+            println!("  {} Exportado a '{}'", "✓".green(), archivo);
+            if Confirm::new()
+                .with_prompt("  ¿Abrir en navegador?")
+                .default(true)
+                .interact()
+                .unwrap_or(false)
+            {
+                let _ = open::that(&archivo);
+            }
+        }
+        Err(e) => println!("  {} Error: {}", "✗".red(), e),
+    }
+    pausa();
+}
+
+fn eliminar_canvas(state: &mut AppState) {
+    let idx = match seleccionar_canvas(state) { Some(i) => i, None => return };
+    let nombre = state.canvases[idx].nombre.clone();
+
+    if Confirm::new()
+        .with_prompt(&format!("  ¿Eliminar canvas '{}'? Esto no se puede deshacer", nombre))
+        .default(false)
+        .interact()
+        .unwrap_or(false)
+    {
+        state.canvases.remove(idx);
+        println!("  {} Canvas '{}' eliminado", "✓".green().bold(), nombre);
     }
     pausa();
 }
@@ -2093,7 +2260,8 @@ fn menu_sync(state: &mut AppState) {
             "📅 Importar archivo .ics",
             "📅 Sincronizar → Google Calendar",
             "📅 Importar ← Google Calendar",
-            "� Abrir Dashboard Web (ver desde celular)",
+            "🔄 Re-sincronizar todo (limpiar mapeo y volver a enviar)",
+            "🌐 Abrir Dashboard Web (ver desde celular)",
             "💾 Exportar estado completo (data.json)",
             "💾 Importar estado completo (data.json)",
             "📧 Enviar resumen diario",
@@ -2109,14 +2277,15 @@ fn menu_sync(state: &mut AppState) {
             Some(1) => importar_ics(state),
             Some(2) => sync_push_google(state),
             Some(3) => sync_pull_google(state),
-            Some(4) => iniciar_dashboard_web(state),
-            Some(5) => exportar_estado(state),
-            Some(6) => importar_estado(state),
-            Some(7) => enviar_resumen(state),
-            Some(8) => enviar_recordatorio(state),
-            Some(9) => enviar_followup_email(state),
-            Some(10) => configurar_google(state),
-            Some(11) => configurar_email(state),
+            Some(4) => resync_google(state),
+            Some(5) => iniciar_dashboard_web(state),
+            Some(6) => exportar_estado(state),
+            Some(7) => importar_estado(state),
+            Some(8) => enviar_resumen(state),
+            Some(9) => enviar_recordatorio(state),
+            Some(10) => enviar_followup_email(state),
+            Some(11) => configurar_google(state),
+            Some(12) => configurar_email(state),
             _ => return,
         }
     }
@@ -2220,6 +2389,37 @@ fn importar_ics(state: &mut AppState) {
         println!("  {} {} eventos importados", "✓".green(), count);
     }
     pausa();
+}
+
+fn resync_google(state: &mut AppState) {
+    if !state.sync.google_autenticado() {
+        println!("  {} Primero configura y autentica Google Calendar", "✗".red());
+        pausa();
+        return;
+    }
+
+    separador("🔄 Re-sincronizar todo");
+    println!("  Esto limpiará el registro de sincronización y enviará");
+    println!("  todos los eventos y tareas de nuevo a Google Calendar.");
+    println!();
+    println!("  {} eventos registrados, {} tareas registradas",
+        state.sync.mapa_eventos.len(), state.sync.mapa_tareas.len());
+
+    if !Confirm::new()
+        .with_prompt("  ¿Continuar?")
+        .default(false)
+        .interact()
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    state.sync.mapa_eventos.clear();
+    state.sync.mapa_tareas.clear();
+    println!("  {} Mapeo limpiado. Sincronizando...", "✓".green());
+    println!();
+
+    sync_push_google(state);
 }
 
 fn sync_push_google(state: &mut AppState) {
