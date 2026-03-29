@@ -24,13 +24,13 @@ pub struct SyncConfig {
     pub email_remitente: String,
     pub email_destinatario: String,
 
-    // GitHub Gist sync (deprecado — usar Google Drive)
+    // GitHub Gist sync (método principal de sincronización)
     #[serde(default)]
     pub gist_token: String,
     #[serde(default)]
     pub gist_id: String,
 
-    // Google Drive sync
+    // Google Drive sync (deprecado — usar Gist)
     #[serde(default)]
     pub drive_file_id: String,
 
