@@ -3031,19 +3031,19 @@ fn menu_sync(state: &mut AppState) {
             "❌ No configurado".red().to_string()
         };
 
-        let gist_estado = if state.sync.gist_configurado() {
-            if state.sync.gist_id.is_empty() {
-                "⚠️  Token OK, sin Gist creado".yellow().to_string()
+        let drive_estado = if state.sync.google_autenticado() {
+            if state.sync.drive_configurado() {
+                "✅ Sincronizado".green().to_string()
             } else {
-                "✅ Configurado".green().to_string()
+                "⚠️  Listo (sin archivo aún)".yellow().to_string()
             }
         } else {
-            "❌ No configurado".red().to_string()
+            "❌ Autentica Google primero".red().to_string()
         };
 
         println!("  Google Calendar: {}", gcal);
         println!("  Email SMTP:      {}", email);
-        println!("  GitHub Gist:     {}", gist_estado);
+        println!("  Google Drive:    {}", drive_estado);
         println!(
             "  Eventos sincronizados: {}  |  Tareas sincronizadas: {}",
             state.sync.mapa_eventos.len(),
@@ -3051,9 +3051,9 @@ fn menu_sync(state: &mut AppState) {
         );
 
         let opciones = &[
-            "☁️  Subir datos a Gist (push)",
-            "☁️  Descargar datos de Gist (pull)",
-            "⚙️  Configurar GitHub Gist",
+            "☁️  Subir datos a Google Drive (push)",
+            "☁️  Descargar datos de Google Drive (pull)",
+            "☁️  Buscar archivo en Drive (otro dispositivo)",
             "───────────────────────────",
             "📅 Exportar a archivo .ics",
             "📅 Importar archivo .ics",
@@ -3072,9 +3072,9 @@ fn menu_sync(state: &mut AppState) {
         ];
 
         match menu("¿Qué deseas hacer?", opciones) {
-            Some(0) => gist_push(state),
-            Some(1) => gist_pull(state),
-            Some(2) => configurar_gist(state),
+            Some(0) => drive_push(state),
+            Some(1) => drive_pull(state),
+            Some(2) => drive_buscar(state),
             Some(3) => {} // separador
             Some(4) => exportar_ics(state),
             Some(5) => importar_ics(state),
@@ -3095,62 +3095,14 @@ fn menu_sync(state: &mut AppState) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  GitHub Gist — Sincronización de data.json
+//  Google Drive — Sincronización de data.json
 // ══════════════════════════════════════════════════════════════
 
-fn configurar_gist(state: &mut AppState) {
-    separador("⚙️  Configurar GitHub Gist");
-    println!("  Necesitas un Personal Access Token de GitHub con permiso 'gist'.");
-    println!("  Créalo en: https://github.com/settings/tokens/new");
-    println!("  Marca solo el scope: {}\n", "gist".cyan());
+fn drive_push(state: &mut AppState) {
+    separador("☁️  Subir datos a Google Drive");
 
-    if !state.sync.gist_token.is_empty() {
-        let censurado = format!("{}...{}", &state.sync.gist_token[..4], &state.sync.gist_token[state.sync.gist_token.len().saturating_sub(4)..]);
-        println!("  Token actual: {}", censurado.yellow());
-        if !state.sync.gist_id.is_empty() {
-            println!("  Gist ID:      {}", state.sync.gist_id.yellow());
-        }
-        println!();
-    }
-
-    let token: String = Input::new()
-        .with_prompt("  Token (vacío=mantener actual)")
-        .allow_empty(true)
-        .interact_text()
-        .unwrap_or_default();
-
-    if !token.is_empty() {
-        state.sync.gist_token = token.trim().to_string();
-        println!("  {} Token guardado.", "✓".green());
-    }
-
-    if !state.sync.gist_id.is_empty() {
-        println!("\n  Gist ID actual: {}", state.sync.gist_id.yellow());
-        println!("  Si quieres usar otro Gist existente, pega su ID:");
-    } else {
-        println!("\n  Si ya tienes un Gist (ej. de otro dispositivo), pega su ID.");
-        println!("  Si no, déjalo vacío y se creará uno nuevo al hacer push.");
-    }
-
-    let gist_id: String = Input::new()
-        .with_prompt("  Gist ID (vacío=mantener/auto-crear)")
-        .allow_empty(true)
-        .interact_text()
-        .unwrap_or_default();
-
-    if !gist_id.is_empty() {
-        state.sync.gist_id = gist_id.trim().to_string();
-        println!("  {} Gist ID guardado.", "✓".green());
-    }
-
-    pausa();
-}
-
-fn gist_push(state: &mut AppState) {
-    separador("☁️  Subir datos a GitHub Gist");
-
-    if state.sync.gist_token.is_empty() {
-        println!("  {} Primero configura tu token en '⚙️ Configurar GitHub Gist'.", "✗".red());
+    if !state.sync.google_autenticado() {
+        println!("  {} Primero autentica tu cuenta de Google (Configurar Google Calendar).", "✗".red());
         pausa();
         return;
     }
@@ -3166,125 +3118,69 @@ fn gist_push(state: &mut AppState) {
     };
 
     let ahora = chrono::Local::now().format("%d/%m/%Y %H:%M").to_string();
-    let descripcion = format!("OmniPlanner sync — {}", ahora);
 
-    if state.sync.gist_id.is_empty() {
-        // Crear Gist nuevo
-        println!("  Creando Gist privado...");
-        let body = serde_json::json!({
-            "description": descripcion,
-            "public": false,
-            "files": {
-                "omniplanner_data.json": {
-                    "content": json
-                }
-            }
-        });
-
-        match ureq::post("https://api.github.com/gists")
-            .set("Authorization", &format!("Bearer {}", state.sync.gist_token))
-            .set("User-Agent", "OmniPlanner")
-            .set("Accept", "application/vnd.github+json")
-            .send_json(body)
-        {
-            Ok(resp) => {
-                if let Ok(data) = resp.into_json::<serde_json::Value>() {
-                    if let Some(id) = data["id"].as_str() {
-                        state.sync.gist_id = id.to_string();
-                        println!("  {} Gist creado: {}", "✓".green(), id.cyan());
-                        println!("  {} Guarda este ID para configurar otros dispositivos:", "💡".to_string());
-                        println!("       {}", id.yellow().bold());
-                    }
-                }
-            }
-            Err(e) => {
-                println!("  {} Error creando Gist: {}", "✗".red(), e);
-            }
-        }
+    if state.sync.drive_file_id.is_empty() {
+        println!("  Creando archivo en Google Drive...");
     } else {
-        // Actualizar Gist existente
-        println!("  Actualizando Gist {}...", &state.sync.gist_id[..8.min(state.sync.gist_id.len())]);
-        let body = serde_json::json!({
-            "description": descripcion,
-            "files": {
-                "omniplanner_data.json": {
-                    "content": json
-                }
-            }
-        });
+        println!("  Actualizando archivo en Google Drive...");
+    }
 
-        let url = format!("https://api.github.com/gists/{}", state.sync.gist_id);
-        match ureq::request("PATCH", &url)
-            .set("Authorization", &format!("Bearer {}", state.sync.gist_token))
-            .set("User-Agent", "OmniPlanner")
-            .set("Accept", "application/vnd.github+json")
-            .send_json(body)
-        {
-            Ok(_) => {
-                println!("  {} Datos subidos correctamente.", "✓".green());
+    match sync::drive::drive_push(&state.sync, &json) {
+        Ok(file_id) => {
+            if state.sync.drive_file_id.is_empty() {
+                println!("  {} Archivo creado en Drive", "✓".green());
+            } else {
+                println!("  {} Datos actualizados en Drive", "✓".green());
             }
-            Err(e) => {
-                println!("  {} Error actualizando Gist: {}", "✗".red(), e);
+            state.sync.drive_file_id = file_id;
+            println!("  {} {} tareas, {} eventos, {} diagramas, {} canvas, {} recuerdos",
+                "📦".to_string(),
+                state.tasks.tareas.len(),
+                state.agenda.eventos.len(),
+                state.diagramas.len(),
+                state.canvases.len(),
+                state.memoria.recuerdos.len(),
+            );
+            println!("  {} {}", "🕐".to_string(), ahora);
+        }
+        Err(e) => {
+            println!("  {} Error: {}", "✗".red(), e);
+            if e.contains("401") || e.contains("403") {
+                println!("  {} Intenta re-autenticar Google (puede que falte el permiso de Drive).", "💡".to_string());
             }
         }
     }
-
-    println!("  {} {}", "📦".to_string(), ahora);
     pausa();
 }
 
-fn gist_pull(state: &mut AppState) {
-    separador("☁️  Descargar datos de GitHub Gist");
+fn drive_pull(state: &mut AppState) {
+    separador("☁️  Descargar datos de Google Drive");
 
-    if state.sync.gist_token.is_empty() {
-        println!("  {} Primero configura tu token en '⚙️ Configurar GitHub Gist'.", "✗".red());
+    if !state.sync.google_autenticado() {
+        println!("  {} Primero autentica tu cuenta de Google.", "✗".red());
         pausa();
         return;
     }
 
-    if state.sync.gist_id.is_empty() {
-        println!("  {} No hay Gist ID configurado. Configúralo primero o haz push desde otro dispositivo.", "✗".red());
+    if state.sync.drive_file_id.is_empty() {
+        println!("  {} No hay archivo de Drive vinculado.", "✗".red());
+        println!("  {} Usa 'Buscar archivo en Drive' si ya subiste datos desde otro dispositivo.", "💡".to_string());
         pausa();
         return;
     }
 
-    println!("  Descargando Gist {}...", &state.sync.gist_id[..8.min(state.sync.gist_id.len())]);
+    println!("  Descargando de Google Drive...");
 
-    let url = format!("https://api.github.com/gists/{}", state.sync.gist_id);
-    let resp = match ureq::get(&url)
-        .set("Authorization", &format!("Bearer {}", state.sync.gist_token))
-        .set("User-Agent", "OmniPlanner")
-        .set("Accept", "application/vnd.github+json")
-        .call()
-    {
-        Ok(r) => r,
+    let contenido = match sync::drive::drive_pull(&state.sync) {
+        Ok(c) => c,
         Err(e) => {
-            println!("  {} Error descargando Gist: {}", "✗".red(), e);
+            println!("  {} Error: {}", "✗".red(), e);
             pausa();
             return;
         }
     };
 
-    let gist_data: serde_json::Value = match resp.into_json() {
-        Ok(v) => v,
-        Err(e) => {
-            println!("  {} Error leyendo respuesta: {}", "✗".red(), e);
-            pausa();
-            return;
-        }
-    };
-
-    let contenido = match gist_data["files"]["omniplanner_data.json"]["content"].as_str() {
-        Some(c) => c,
-        None => {
-            println!("  {} No se encontró 'omniplanner_data.json' en el Gist.", "✗".red());
-            pausa();
-            return;
-        }
-    };
-
-    // Parsear los datos remotos
-    let remoto: AppState = match serde_json::from_str(contenido) {
+    let remoto: AppState = match serde_json::from_str(&contenido) {
         Ok(s) => s,
         Err(e) => {
             println!("  {} Error parseando datos remotos: {}", "✗".red(), e);
@@ -3293,7 +3189,6 @@ fn gist_pull(state: &mut AppState) {
         }
     };
 
-    // Mostrar resumen de lo que viene
     println!("\n  {} Datos remotos:", "📊".to_string());
     println!("    Tareas:    {}", remoto.tasks.tareas.len());
     println!("    Eventos:   {}", remoto.agenda.eventos.len());
@@ -3322,13 +3217,57 @@ fn gist_pull(state: &mut AppState) {
         return;
     }
 
-    // Preservar config de sync local (token y gist_id)
+    // Preservar config de sync local
     let sync_local = state.sync.clone();
     *state = remoto;
-    state.sync.gist_token = sync_local.gist_token;
-    state.sync.gist_id = sync_local.gist_id;
+    state.sync.google_client_id = sync_local.google_client_id;
+    state.sync.google_client_secret = sync_local.google_client_secret;
+    state.sync.google_access_token = sync_local.google_access_token;
+    state.sync.google_refresh_token = sync_local.google_refresh_token;
+    state.sync.drive_file_id = sync_local.drive_file_id;
+    state.sync.smtp_server = sync_local.smtp_server;
+    state.sync.smtp_port = sync_local.smtp_port;
+    state.sync.smtp_usuario = sync_local.smtp_usuario;
+    state.sync.smtp_password = sync_local.smtp_password;
+    state.sync.email_remitente = sync_local.email_remitente;
+    state.sync.email_destinatario = sync_local.email_destinatario;
 
     println!("  {} Datos descargados y aplicados.", "✓".green());
+    pausa();
+}
+
+fn drive_buscar(state: &mut AppState) {
+    separador("☁️  Buscar archivo en Google Drive");
+
+    if !state.sync.google_autenticado() {
+        println!("  {} Primero autentica tu cuenta de Google.", "✗".red());
+        pausa();
+        return;
+    }
+
+    println!("  Buscando 'omniplanner_data.json' en tu Drive...");
+
+    match sync::drive::drive_buscar(&state.sync) {
+        Ok(Some(file_id)) => {
+            println!("  {} Archivo encontrado: {}", "✓".green(), file_id.cyan());
+            if Confirm::new()
+                .with_prompt("  ¿Vincular este archivo para sincronizar?")
+                .default(true)
+                .interact()
+                .unwrap_or(false)
+            {
+                state.sync.drive_file_id = file_id;
+                println!("  {} Vinculado. Ya puedes hacer pull para descargar los datos.", "✓".green());
+            }
+        }
+        Ok(None) => {
+            println!("  {} No se encontró ningún archivo de OmniPlanner en Drive.", "⚠".yellow());
+            println!("  Haz push primero desde el dispositivo que tenga tus datos.");
+        }
+        Err(e) => {
+            println!("  {} Error: {}", "✗".red(), e);
+        }
+    }
     pausa();
 }
 

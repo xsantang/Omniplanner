@@ -221,7 +221,7 @@ pub fn google_auth_url(config: &SyncConfig) -> String {
          ?client_id={}\
          &redirect_uri={}\
          &response_type=code\
-         &scope=https://www.googleapis.com/auth/calendar\
+         &scope=https://www.googleapis.com/auth/calendar%20https://www.googleapis.com/auth/drive.file\
          &access_type=offline\
          &prompt=consent",
         config.google_client_id,

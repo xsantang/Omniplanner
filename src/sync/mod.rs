@@ -1,5 +1,6 @@
 pub mod calendario;
 pub mod correo;
+pub mod drive;
 pub mod servidor;
 
 use serde::{Deserialize, Serialize};
@@ -23,11 +24,15 @@ pub struct SyncConfig {
     pub email_remitente: String,
     pub email_destinatario: String,
 
-    // GitHub Gist sync
+    // GitHub Gist sync (deprecado — usar Google Drive)
     #[serde(default)]
     pub gist_token: String,
     #[serde(default)]
     pub gist_id: String,
+
+    // Google Drive sync
+    #[serde(default)]
+    pub drive_file_id: String,
 
     // Mapeo de IDs locales → Google Calendar event IDs
     pub mapa_eventos: HashMap<String, String>,
@@ -61,6 +66,8 @@ impl Default for SyncConfig {
             gist_token: String::new(),
             gist_id: String::new(),
 
+            drive_file_id: String::new(),
+
             auto_sync: false,
             notificar_follow_ups: false,
             resumen_diario: false,
@@ -86,5 +93,9 @@ impl SyncConfig {
 
     pub fn gist_configurado(&self) -> bool {
         !self.gist_token.is_empty()
+    }
+
+    pub fn drive_configurado(&self) -> bool {
+        !self.drive_file_id.is_empty()
     }
 }
