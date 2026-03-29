@@ -3125,7 +3125,26 @@ fn drive_push(state: &mut AppState) {
         println!("  Actualizando archivo en Google Drive...");
     }
 
-    match sync::drive::drive_push(&state.sync, &json) {
+    let resultado = match sync::drive::drive_push(&state.sync, &json) {
+        Ok(file_id) => Ok(file_id),
+        Err(e) if e.contains("401") || e.contains("403") => {
+            println!("  {} Token expirado, refrescando...", "🔄".to_string());
+            match sync::calendario::google_refrescar_token(&mut state.sync) {
+                Ok(()) => {
+                    println!("  {} Token refrescado, reintentando...", "✓".green());
+                    sync::drive::drive_push(&state.sync, &json)
+                }
+                Err(re) => {
+                    println!("  {} No se pudo refrescar token: {}", "✗".red(), re);
+                    println!("  {} Re-autentica Google desde Configurar Google Calendar.", "💡".to_string());
+                    Err(e)
+                }
+            }
+        }
+        Err(e) => Err(e),
+    };
+
+    match resultado {
         Ok(file_id) => {
             if state.sync.drive_file_id.is_empty() {
                 println!("  {} Archivo creado en Drive", "✓".green());
@@ -3145,9 +3164,6 @@ fn drive_push(state: &mut AppState) {
         }
         Err(e) => {
             println!("  {} Error: {}", "✗".red(), e);
-            if e.contains("401") || e.contains("403") {
-                println!("  {} Intenta re-autenticar Google (puede que falte el permiso de Drive).", "💡".to_string());
-            }
         }
     }
     pausa();
@@ -3173,6 +3189,28 @@ fn drive_pull(state: &mut AppState) {
 
     let contenido = match sync::drive::drive_pull(&state.sync) {
         Ok(c) => c,
+        Err(e) if e.contains("401") || e.contains("403") => {
+            println!("  {} Token expirado, refrescando...", "🔄".to_string());
+            match sync::calendario::google_refrescar_token(&mut state.sync) {
+                Ok(()) => {
+                    println!("  {} Token refrescado, reintentando...", "✓".green());
+                    match sync::drive::drive_pull(&state.sync) {
+                        Ok(c) => c,
+                        Err(e2) => {
+                            println!("  {} Error: {}", "✗".red(), e2);
+                            pausa();
+                            return;
+                        }
+                    }
+                }
+                Err(re) => {
+                    println!("  {} No se pudo refrescar token: {}", "✗".red(), re);
+                    println!("  {} Re-autentica Google desde Configurar Google Calendar.", "💡".to_string());
+                    pausa();
+                    return;
+                }
+            }
+        }
         Err(e) => {
             println!("  {} Error: {}", "✗".red(), e);
             pausa();
@@ -3247,7 +3285,22 @@ fn drive_buscar(state: &mut AppState) {
 
     println!("  Buscando 'omniplanner_data.json' en tu Drive...");
 
-    match sync::drive::drive_buscar(&state.sync) {
+    let resultado = match sync::drive::drive_buscar(&state.sync) {
+        Ok(r) => Ok(r),
+        Err(e) if e.contains("401") || e.contains("403") => {
+            println!("  {} Token expirado, refrescando...", "🔄".to_string());
+            match sync::calendario::google_refrescar_token(&mut state.sync) {
+                Ok(()) => sync::drive::drive_buscar(&state.sync),
+                Err(re) => {
+                    println!("  {} No se pudo refrescar token: {}", "✗".red(), re);
+                    Err(e)
+                }
+            }
+        }
+        Err(e) => Err(e),
+    };
+
+    match resultado {
         Ok(Some(file_id)) => {
             println!("  {} Archivo encontrado: {}", "✓".green(), file_id.cyan());
             if Confirm::new()
