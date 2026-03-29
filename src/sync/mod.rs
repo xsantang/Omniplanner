@@ -1,6 +1,7 @@
 pub mod calendario;
 pub mod correo;
 pub mod drive;
+pub mod gist;
 pub mod servidor;
 
 use serde::{Deserialize, Serialize};
