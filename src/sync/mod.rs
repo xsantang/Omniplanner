@@ -23,6 +23,12 @@ pub struct SyncConfig {
     pub email_remitente: String,
     pub email_destinatario: String,
 
+    // GitHub Gist sync
+    #[serde(default)]
+    pub gist_token: String,
+    #[serde(default)]
+    pub gist_id: String,
+
     // Mapeo de IDs locales → Google Calendar event IDs
     pub mapa_eventos: HashMap<String, String>,
     pub mapa_tareas: HashMap<String, String>,
@@ -52,6 +58,9 @@ impl Default for SyncConfig {
             mapa_eventos: HashMap::new(),
             mapa_tareas: HashMap::new(),
 
+            gist_token: String::new(),
+            gist_id: String::new(),
+
             auto_sync: false,
             notificar_follow_ups: false,
             resumen_diario: false,
@@ -73,5 +82,9 @@ impl SyncConfig {
 
     pub fn google_autenticado(&self) -> bool {
         self.google_access_token.is_some()
+    }
+
+    pub fn gist_configurado(&self) -> bool {
+        !self.gist_token.is_empty()
     }
 }
