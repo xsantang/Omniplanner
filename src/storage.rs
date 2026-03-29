@@ -9,6 +9,7 @@ use crate::diagrams::Diagrama;
 use crate::vcs::DataVcs;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
+use crate::sync::SyncConfig;
 
 /// Estado completo de la aplicación (persistible)
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,6 +22,8 @@ pub struct AppState {
     pub mapper: Mapper,
     #[serde(default)]
     pub memoria: Memoria,
+    #[serde(default)]
+    pub sync: SyncConfig,
 }
 
 impl AppState {
@@ -33,6 +36,7 @@ impl AppState {
             vcs: DataVcs::new(),
             mapper: Mapper::new(),
             memoria: Memoria::new(),
+            sync: SyncConfig::default(),
         }
     }
 

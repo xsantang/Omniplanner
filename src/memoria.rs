@@ -108,4 +108,89 @@ impl Memoria {
     pub fn palabras_clave(&self) -> Vec<&String> {
         self.indice.keys().collect()
     }
+
+    /// Eliminar un recuerdo por ID
+    pub fn eliminar_recuerdo(&mut self, id: &str) -> bool {
+        let len_antes = self.recuerdos.len();
+        // Quitar del índice
+        if let Some(r) = self.recuerdos.iter().find(|r| r.id == id) {
+            for palabra in &r.palabras_clave {
+                if let Some(ids) = self.indice.get_mut(palabra) {
+                    ids.retain(|rid| rid != id);
+                    if ids.is_empty() {
+                        self.indice.remove(palabra);
+                    }
+                }
+            }
+        }
+        self.recuerdos.retain(|r| r.id != id);
+        self.recuerdos.len() != len_antes
+    }
+
+    /// Eliminar una palabra clave de un recuerdo específico
+    pub fn quitar_palabra_de_recuerdo(&mut self, recuerdo_id: &str, palabra: &str) -> bool {
+        let p = palabra.to_lowercase();
+        let mut encontrada = false;
+        if let Some(r) = self.recuerdos.iter_mut().find(|r| r.id == recuerdo_id) {
+            let antes = r.palabras_clave.len();
+            r.palabras_clave.retain(|pc| pc != &p);
+            encontrada = r.palabras_clave.len() != antes;
+        }
+        // Actualizar índice
+        if encontrada {
+            if let Some(ids) = self.indice.get_mut(&p) {
+                ids.retain(|rid| rid != recuerdo_id);
+                if ids.is_empty() {
+                    self.indice.remove(&p);
+                }
+            }
+        }
+        encontrada
+    }
+
+    /// Eliminar una palabra clave globalmente (de todos los recuerdos)
+    pub fn eliminar_palabra_global(&mut self, palabra: &str) -> usize {
+        let p = palabra.to_lowercase();
+        let mut count = 0;
+        for r in &mut self.recuerdos {
+            let antes = r.palabras_clave.len();
+            r.palabras_clave.retain(|pc| pc != &p);
+            if r.palabras_clave.len() != antes {
+                count += 1;
+            }
+        }
+        self.indice.remove(&p);
+        count
+    }
+
+    /// Agregar palabra clave a un recuerdo existente
+    pub fn agregar_palabra_a_recuerdo(&mut self, recuerdo_id: &str, palabra: &str) -> bool {
+        let p = palabra.to_lowercase();
+        if let Some(r) = self.recuerdos.iter_mut().find(|r| r.id == recuerdo_id) {
+            if !r.palabras_clave.contains(&p) {
+                r.palabras_clave.push(p.clone());
+                self.indice.entry(p).or_default().push(recuerdo_id.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Editar el contenido de un recuerdo
+    pub fn editar_contenido(&mut self, recuerdo_id: &str, nuevo_contenido: String) -> bool {
+        if let Some(r) = self.recuerdos.iter_mut().find(|r| r.id == recuerdo_id) {
+            r.contenido = nuevo_contenido;
+            return true;
+        }
+        false
+    }
+
+    /// Obtener recuerdos por palabra clave exacta
+    pub fn recuerdos_con_palabra(&self, palabra: &str) -> Vec<&Recuerdo> {
+        let p = palabra.to_lowercase();
+        self.recuerdos
+            .iter()
+            .filter(|r| r.palabras_clave.contains(&p))
+            .collect()
+    }
 }

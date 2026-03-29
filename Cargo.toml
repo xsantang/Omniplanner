@@ -14,3 +14,6 @@ colored = "2"
 sha2 = "0.10"
 dialoguer = "0.11"
 console = "0.15"
+ureq = { version = "2", features = ["json"] }
+lettre = "0.11"
+open = "5"
