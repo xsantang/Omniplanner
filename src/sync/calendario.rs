@@ -181,6 +181,8 @@ fn formato_tipo_evento(tipo: &TipoEvento) -> &str {
         TipoEvento::Recordatorio => "REMINDER",
         TipoEvento::FollowUp => "FOLLOW-UP",
         TipoEvento::Cita => "APPOINTMENT",
+        TipoEvento::Cumpleanos => "BIRTHDAY",
+        TipoEvento::Pago => "PAYMENT",
         TipoEvento::Otro(_) => "OTHER",
     }
 }

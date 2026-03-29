@@ -2,7 +2,7 @@ use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Wee
 use colored::Colorize;
 use dialoguer::{Input, Select, Confirm};
 
-use omniplanner::agenda::{Evento, HorarioEscritura, TipoEvento};
+use omniplanner::agenda::{DiaMarcado, Evento, Frecuencia, HorarioEscritura, TipoDiaMarcado, TipoEvento};
 use omniplanner::canvas::{Canvas, Elemento};
 use omniplanner::diagrams::{Diagrama, Nodo, TipoConexion, TipoDiagrama, TipoNodo};
 use omniplanner::mapper::{Codificacion, EsquemaMapa, Mapper};
@@ -60,38 +60,81 @@ fn pedir_texto_opcional(prompt: &str) -> String {
         .unwrap_or_default()
 }
 
+fn formatear_fecha_es(f: NaiveDate) -> String {
+    let dia = f.day();
+    let mes = match f.month() {
+        1 => "enero", 2 => "febrero", 3 => "marzo", 4 => "abril",
+        5 => "mayo", 6 => "junio", 7 => "julio", 8 => "agosto",
+        9 => "septiembre", 10 => "octubre", 11 => "noviembre", 12 => "diciembre",
+        _ => "",
+    };
+    let anio = f.year();
+    let dow = match f.weekday() {
+        Weekday::Mon => "lunes", Weekday::Tue => "martes", Weekday::Wed => "miércoles",
+        Weekday::Thu => "jueves", Weekday::Fri => "viernes", Weekday::Sat => "sábado",
+        Weekday::Sun => "domingo",
+    };
+    format!("{} {} de {} de {}", dow, dia, mes, anio)
+}
+
 fn pedir_fecha(prompt: &str) -> Option<NaiveDate> {
     println!("    {} Formatos: hoy, mañana, 28/03/2026, 28-03-2026, 28032026,", "💡".to_string());
     println!("    {}           28 de marzo de 2026, march 28 2026, 2026-03-28", " ".to_string());
     loop {
         let s = pedir_texto_opcional(&format!("{} (vacío=cancelar)", prompt));
         if s.is_empty() { return None; }
-        match parsear_fecha(&s) {
-            Some(f) => {
-                println!("    {} Fecha: {}", "✓".green(), f.format("%A %d de %B de %Y"));
+        let candidatos = parsear_fecha_candidatos(&s);
+        match candidatos.len() {
+            0 => {
+                println!("    {} No pude entender esa fecha. Intenta otro formato.", "✗".red());
+            }
+            1 => {
+                let f = candidatos[0];
+                println!("    {} Fecha: {}", "✓".green(), formatear_fecha_es(f));
                 return Some(f);
             }
-            None => {
-                println!("    {} No pude entender esa fecha. Intenta otro formato.", "✗".red());
+            _ => {
+                println!("\n    {} Fecha ambigua — ¿cuál quisiste decir?\n", "⚠".yellow());
+                let opciones: Vec<String> = candidatos.iter().enumerate().map(|(i, f)| {
+                    let letra = (b'A' + i as u8) as char;
+                    format!("  {} → {} ({})", letra, formatear_fecha_es(*f), f.format("%d/%m/%Y"))
+                }).collect();
+                let sel = Select::new()
+                    .items(&opciones)
+                    .default(0)
+                    .interact_opt()
+                    .unwrap_or(None);
+                match sel {
+                    Some(idx) => {
+                        let f = candidatos[idx];
+                        println!("    {} Fecha: {}", "✓".green(), formatear_fecha_es(f));
+                        return Some(f);
+                    }
+                    None => {
+                        println!("    {} Cancelado, intenta de nuevo.", "✗".red());
+                    }
+                }
             }
         }
     }
 }
 
-fn parsear_fecha(input: &str) -> Option<NaiveDate> {
+/// Devuelve todas las interpretaciones válidas de una fecha (sin duplicados).
+/// Si no hay ambigüedad devuelve 0 o 1 candidato; si la hay, 2+.
+fn parsear_fecha_candidatos(input: &str) -> Vec<NaiveDate> {
     let s = input.trim().to_lowercase();
     let hoy = Local::now().date_naive();
 
-    // Atajos: hoy, mañana, ayer, pasado mañana
+    // Atajos: hoy, mañana, etc. — no ambiguos
     match s.as_str() {
-        "hoy" | "today" => return Some(hoy),
-        "mañana" | "manana" | "tomorrow" => return Some(hoy + Duration::days(1)),
-        "ayer" | "yesterday" => return Some(hoy - Duration::days(1)),
-        "pasado mañana" | "pasado manana" => return Some(hoy + Duration::days(2)),
+        "hoy" | "today" => return vec![hoy],
+        "mañana" | "manana" | "tomorrow" => return vec![hoy + Duration::days(1)],
+        "ayer" | "yesterday" => return vec![hoy - Duration::days(1)],
+        "pasado mañana" | "pasado manana" => return vec![hoy + Duration::days(2)],
         _ => {}
     }
 
-    // Día de la semana: "lunes", "martes", etc. → próximo día
+    // Día de la semana — no ambiguo
     if let Some(target) = dia_semana_a_weekday(&s) {
         let hoy_wd = hoy.weekday().num_days_from_monday();
         let target_wd = target.num_days_from_monday();
@@ -100,53 +143,66 @@ fn parsear_fecha(input: &str) -> Option<NaiveDate> {
         } else {
             7 - (hoy_wd - target_wd)
         };
-        return Some(hoy + Duration::days(dias as i64));
+        return vec![hoy + Duration::days(dias as i64)];
     }
 
-    // Formato ISO: 2026-03-28
+    // ISO: 2026-03-28 — no ambiguo
     if let Ok(f) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-        return Some(f);
+        return vec![f];
     }
 
-    // dd/mm/yyyy o dd-mm-yyyy
-    if let Ok(f) = NaiveDate::parse_from_str(&s, "%d/%m/%Y") {
-        return Some(f);
-    }
-    if let Ok(f) = NaiveDate::parse_from_str(&s, "%d-%m-%Y") {
-        return Some(f);
-    }
-
-    // mm/dd/yyyy (american)
-    // No se usa por ambigüedad, preferimos dd/mm/yyyy
-
-    // Solo dígitos
-    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
-    if digits.len() == 6 {
-        // ddmmyy
-        if let Some(f) = parse_ddmmyy(&digits) { return Some(f); }
-        // mmddyy
-        if let Some(f) = parse_mmddyy(&digits) { return Some(f); }
-    }
-    if digits.len() == 8 {
-        // ddmmyyyy
-        if let Some(f) = parse_ddmmyyyy(&digits) { return Some(f); }
-        // yyyymmdd
-        if let Ok(f) = NaiveDate::parse_from_str(&digits, "%Y%m%d") {
-            return Some(f);
+    // dd/mm/yyyy o dd-mm-yyyy — el separador indica formato explícito, no ambiguo
+    if s.contains('/') || s.contains('-') {
+        if let Ok(f) = NaiveDate::parse_from_str(&s, "%d/%m/%Y") {
+            return vec![f];
         }
+        if let Ok(f) = NaiveDate::parse_from_str(&s, "%d-%m-%Y") {
+            return vec![f];
+        }
+        // Texto con separadores no reconocido
+        return vec![];
     }
 
-    // "28 de marzo de 2026", "28 marzo 2026"
+    // Texto con nombre de mes — no ambiguo
     if let Some(f) = parsear_fecha_texto_es(&s) {
-        return Some(f);
+        return vec![f];
     }
-
-    // "march 28, 2026", "march 28 2026", "mar 28 2026"
     if let Some(f) = parsear_fecha_texto_en(&s) {
-        return Some(f);
+        return vec![f];
     }
 
-    None
+    // ═══ Solo dígitos: aquí puede haber ambigüedad ═══
+    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+
+    if digits.len() == 8 {
+        let mut candidatos: Vec<NaiveDate> = Vec::new();
+
+        // Interpretación dd/mm/yyyy
+        if let Some(f) = parse_ddmmyyyy(&digits) { candidatos.push(f); }
+        // Interpretación mm/dd/yyyy
+        if let Some(f) = parse_mmddyyyy(&digits) {
+            if !candidatos.contains(&f) { candidatos.push(f); }
+        }
+        // Interpretación yyyy/mm/dd
+        if let Ok(f) = NaiveDate::parse_from_str(&digits, "%Y%m%d") {
+            if !candidatos.contains(&f) { candidatos.push(f); }
+        }
+
+        return candidatos;
+    }
+
+    if digits.len() == 6 {
+        let mut candidatos: Vec<NaiveDate> = Vec::new();
+
+        if let Some(f) = parse_ddmmyy(&digits) { candidatos.push(f); }
+        if let Some(f) = parse_mmddyy(&digits) {
+            if !candidatos.contains(&f) { candidatos.push(f); }
+        }
+
+        return candidatos;
+    }
+
+    vec![]
 }
 
 fn dia_semana_a_weekday(s: &str) -> Option<Weekday> {
@@ -172,18 +228,35 @@ fn mes_texto_a_numero(s: &str) -> Option<u32> {
         "junio" | "jun" | "june" => Some(6),
         "julio" | "jul" | "july" => Some(7),
         "agosto" | "ago" | "august" | "aug" => Some(8),
-        "septiembre" | "sep" | "september" | "sept" => Some(9),
+        "septiembre" | "setiembre" | "sep" | "sept" | "september" => Some(9),
         "octubre" | "oct" | "october" => Some(10),
         "noviembre" | "nov" | "november" => Some(11),
         "diciembre" | "dic" | "december" | "dec" => Some(12),
-        _ => None,
+        _ => {
+            // Búsqueda parcial por si hay variantes o typos
+            if s.starts_with("ene") { return Some(1); }
+            if s.starts_with("feb") { return Some(2); }
+            if s.starts_with("mar") && !s.starts_with("may") { return Some(3); }
+            if s.starts_with("abr") || s.starts_with("apr") { return Some(4); }
+            if s.starts_with("may") { return Some(5); }
+            if s.starts_with("jun") { return Some(6); }
+            if s.starts_with("jul") { return Some(7); }
+            if s.starts_with("ago") || s.starts_with("aug") { return Some(8); }
+            if s.starts_with("sep") || s.starts_with("set") { return Some(9); }
+            if s.starts_with("oct") { return Some(10); }
+            if s.starts_with("nov") { return Some(11); }
+            if s.starts_with("dic") || s.starts_with("dec") { return Some(12); }
+            None
+        }
     }
 }
 
 fn parsear_fecha_texto_es(s: &str) -> Option<NaiveDate> {
-    // "28 de marzo de 2026" o "28 marzo 2026"
-    let limpio: String = s.replace("de ", "").replace("del ", "");
-    let partes: Vec<&str> = limpio.split_whitespace().collect();
+    // "28 de marzo de 2026", "28 marzo 2026", "28 del marzo 2026"
+    // Filtrar palabras "de" y "del" en vez de replace (más seguro)
+    let partes: Vec<&str> = s.split_whitespace()
+        .filter(|p| *p != "de" && *p != "del")
+        .collect();
     if partes.len() >= 3 {
         let dia: u32 = partes[0].parse().ok()?;
         let mes = mes_texto_a_numero(partes[1])?;
@@ -234,6 +307,13 @@ fn parse_mmddyy(s: &str) -> Option<NaiveDate> {
 fn parse_ddmmyyyy(s: &str) -> Option<NaiveDate> {
     let d: u32 = s[0..2].parse().ok()?;
     let m: u32 = s[2..4].parse().ok()?;
+    let y: i32 = s[4..8].parse().ok()?;
+    NaiveDate::from_ymd_opt(y, m, d)
+}
+
+fn parse_mmddyyyy(s: &str) -> Option<NaiveDate> {
+    let m: u32 = s[0..2].parse().ok()?;
+    let d: u32 = s[2..4].parse().ok()?;
     let y: i32 = s[4..8].parse().ok()?;
     NaiveDate::from_ymd_opt(y, m, d)
 }
@@ -381,7 +461,21 @@ fn dashboard(state: &AppState) {
             format!("({} hoy)", eventos_hoy.len()).white());
         for e in &eventos_hoy {
             let fin = e.hora_fin.map(|h| format!("-{}", h.format("%H:%M"))).unwrap_or_default();
-            println!("    📌 {}{} {} ({})", e.hora_inicio.format("%H:%M"), fin, e.titulo, e.tipo);
+            let icono = match e.tipo {
+                TipoEvento::Cumpleanos => "🎂",
+                TipoEvento::Pago => "💰",
+                _ => "📌",
+            };
+            let concepto_txt = if e.concepto.is_empty() { String::new() } else { format!(" [{}]", e.concepto) };
+            println!("    {} {}{} {} ({}){}", icono, e.hora_inicio.format("%H:%M"), fin, e.titulo, e.tipo, concepto_txt.dimmed());
+            println!("       {} {} {}  {} {} {}",
+                "📆".to_string(),
+                "Evento:".dimmed(),
+                e.fecha.format("%d/%m/%Y").to_string().cyan(),
+                "🕐".to_string(),
+                "Registrado:".dimmed(),
+                e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
+            );
         }
     }
 
@@ -714,11 +808,33 @@ fn menu_agenda(state: &mut AppState) {
         if !state.agenda.eventos.is_empty() {
             for e in &state.agenda.eventos {
                 let fin = e.hora_fin.map(|h| format!("-{}", h.format("%H:%M"))).unwrap_or_default();
-                println!("  📌 {} | {}{} | {} ({})",
+                let recur = e.etiqueta_recurrencia();
+                let concepto = if e.concepto.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", e.concepto).dimmed().to_string()
+                };
+                let icono = match e.tipo {
+                    TipoEvento::Cumpleanos => "🎂",
+                    TipoEvento::Pago => "💰",
+                    _ => "📌",
+                };
+                println!("  {} {} | {}{} | {} ({}){}{}",
+                    icono,
                     e.id.dimmed(),
                     e.hora_inicio.format("%H:%M"), fin,
                     e.titulo,
-                    e.tipo
+                    e.tipo,
+                    recur,
+                    concepto,
+                );
+                println!("      {} {} {}  {} {} {}",
+                    "📆".to_string(),
+                    "Evento:".dimmed(),
+                    e.fecha.format("%d/%m/%Y").to_string().cyan(),
+                    "🕐".to_string(),
+                    "Registrado:".dimmed(),
+                    e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
                 );
             }
         } else {
@@ -736,6 +852,7 @@ fn menu_agenda(state: &mut AppState) {
         let opciones = &[
             "📌 Nuevo evento",
             "✏️  Nuevo horario de escritura",
+            "� Calendario anual",
             "🗑️  Eliminar evento",
             "🏷️  Recordar evento",
             "← Volver al menú",
@@ -744,8 +861,9 @@ fn menu_agenda(state: &mut AppState) {
         match menu("¿Qué deseas hacer?", opciones) {
             Some(0) => nuevo_evento(state),
             Some(1) => nuevo_horario(state),
-            Some(2) => eliminar_evento(state),
-            Some(3) => recordar_evento(state),
+            Some(2) => menu_calendario(state),
+            Some(3) => eliminar_evento(state),
+            Some(4) => recordar_evento(state),
             _ => return,
         }
     }
@@ -756,29 +874,79 @@ fn nuevo_evento(state: &mut AppState) {
     let titulo = match pedir_texto("Título") { Some(t) => t, None => return };
     let desc = pedir_texto_opcional("Descripción (opcional)");
 
-    let tipos = &["Reunión", "Recordatorio", "Follow-Up", "Cita", "Otro"];
+    let tipos = &["Reunión", "Recordatorio", "Follow-Up", "Cita", "🎂 Cumpleaños", "💰 Pago", "Otro"];
     let ti = match menu("Tipo de evento", tipos) { Some(i) => i, None => return };
     let tipo = match ti {
         0 => TipoEvento::Reunion,
         1 => TipoEvento::Recordatorio,
         2 => TipoEvento::FollowUp,
         3 => TipoEvento::Cita,
+        4 => TipoEvento::Cumpleanos,
+        5 => TipoEvento::Pago,
         _ => TipoEvento::Otro("Otro".to_string()),
     };
 
-    let fecha = match pedir_fecha("Fecha") { Some(f) => f, None => return };
-    let hora = match pedir_hora("Hora inicio") { Some(h) => h, None => return };
+    // Para cumpleaños solo pedir la fecha (se repite cada año automáticamente)
+    let es_cumple = matches!(tipo, TipoEvento::Cumpleanos);
 
-    let tiene_fin = Confirm::new()
-        .with_prompt("  ¿Tiene hora de fin?")
-        .default(true)
-        .interact()
-        .unwrap_or(false);
-    let hora_fin = if tiene_fin { pedir_hora("Hora fin") } else { None };
+    let fecha = match pedir_fecha(if es_cumple { "Fecha de nacimiento" } else { "Fecha" }) {
+        Some(f) => f,
+        None => return,
+    };
+
+    let hora = if es_cumple {
+        NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+    } else {
+        match pedir_hora("Hora inicio") { Some(h) => h, None => return }
+    };
+
+    let hora_fin = if es_cumple {
+        None
+    } else {
+        let tiene_fin = Confirm::new()
+            .with_prompt("  ¿Tiene hora de fin?")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if tiene_fin { pedir_hora("Hora fin") } else { None }
+    };
+
+    // Frecuencia de recurrencia
+    let frecuencia = if es_cumple {
+        Frecuencia::Anual
+    } else {
+        let frecuencias = &[
+            "Una sola vez",
+            "Semanal",
+            "Mensual",
+            "Trimestral (cada 3 meses)",
+            "Semestral (cada 6 meses)",
+            "Anual",
+        ];
+        let fi = match menu("¿Con qué frecuencia se repite?", frecuencias) { Some(i) => i, None => return };
+        match fi {
+            0 => Frecuencia::UnaVez,
+            1 => Frecuencia::Semanal,
+            2 => Frecuencia::Mensual,
+            3 => Frecuencia::Trimestral,
+            4 => Frecuencia::Semestral,
+            5 => Frecuencia::Anual,
+            _ => Frecuencia::UnaVez,
+        }
+    };
+
+    // Concepto: razón o motivo del evento
+    let concepto = if es_cumple {
+        let persona = pedir_texto_opcional("¿De quién es el cumpleaños? (concepto)");
+        if persona.is_empty() { titulo.clone() } else { persona }
+    } else {
+        pedir_texto_opcional("Concepto / razón del evento (opcional)")
+    };
 
     let tags = pedir_texto_opcional("Palabras clave (opcional, separadas por coma)");
 
-    let evento = Evento::new(titulo.clone(), desc, tipo, fecha, hora, hora_fin);
+    let mut evento = Evento::new(titulo.clone(), desc, tipo, fecha, hora, hora_fin);
+    evento = evento.con_frecuencia(frecuencia).con_concepto(concepto);
 
     if !tags.is_empty() {
         let palabras: Vec<String> = tags.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -866,6 +1034,523 @@ fn recordar_evento(state: &mut AppState) {
 
     println!("  {} Guardado en la memoria", "🧠".to_string());
     pausa();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Módulo: CALENDARIO ANUAL
+// ══════════════════════════════════════════════════════════════
+
+fn es_bisiesto(anio: i32) -> bool {
+    (anio % 4 == 0 && anio % 100 != 0) || anio % 400 == 0
+}
+
+fn dias_en_anio(anio: i32) -> u32 {
+    if es_bisiesto(anio) { 366 } else { 365 }
+}
+
+fn nombre_mes(mes: u32) -> &'static str {
+    match mes {
+        1 => "ENERO", 2 => "FEBRERO", 3 => "MARZO", 4 => "ABRIL",
+        5 => "MAYO", 6 => "JUNIO", 7 => "JULIO", 8 => "AGOSTO",
+        9 => "SEPTIEMBRE", 10 => "OCTUBRE", 11 => "NOVIEMBRE", 12 => "DICIEMBRE",
+        _ => "",
+    }
+}
+
+fn dias_en_mes(anio: i32, mes: u32) -> u32 {
+    match mes {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if es_bisiesto(anio) { 29 } else { 28 },
+        _ => 0,
+    }
+}
+
+fn colorear_dia(texto: &str, fecha: NaiveDate, es_hoy: bool, tiene_evento: bool, marcas: &[&DiaMarcado]) -> String {
+    let es_finde = matches!(fecha.weekday(), Weekday::Sat | Weekday::Sun);
+    if es_hoy {
+        texto.on_white().black().bold().to_string()
+    } else if !marcas.is_empty() {
+        match &marcas[0].tipo {
+            TipoDiaMarcado::Libre => texto.green().to_string(),
+            TipoDiaMarcado::Feriado => texto.red().bold().to_string(),
+            TipoDiaMarcado::Vacaciones => texto.cyan().to_string(),
+            TipoDiaMarcado::Vencimiento => texto.yellow().bold().to_string(),
+            TipoDiaMarcado::Importante => texto.magenta().bold().to_string(),
+            TipoDiaMarcado::Otro(_) => texto.blue().to_string(),
+        }
+    } else if tiene_evento {
+        texto.yellow().to_string()
+    } else if es_finde {
+        texto.red().dimmed().to_string()
+    } else {
+        texto.normal().to_string()
+    }
+}
+
+const ENCABEZADO_DIAS: &str = " Lu  Ma  Mi  Ju  Vi  Sá  Do ";
+
+fn centrar_texto(texto: &str, ancho: usize) -> (String, String) {
+    let visible = texto.chars().count();
+    let total_pad = ancho.saturating_sub(visible);
+    let izq = total_pad / 2;
+    let der = total_pad - izq;
+    (" ".repeat(izq), " ".repeat(der))
+}
+
+fn imprimir_mes(anio: i32, mes: u32, state: &AppState) {
+    let total_dias = dias_en_mes(anio, mes);
+    let primer_dia = NaiveDate::from_ymd_opt(anio, mes, 1).unwrap();
+    let offset = primer_dia.weekday().num_days_from_monday() as usize;
+    let hoy = Local::now().date_naive();
+
+    let header = format!("{} {}", nombre_mes(mes), anio);
+    let (pad_i, pad_d) = centrar_texto(&header, 28);
+    println!("    {}{}{}", pad_i, header.cyan().bold(), pad_d);
+    println!("    {}", ENCABEZADO_DIAS.dimmed());
+    print!("    ");
+
+    let mut col = 0usize;
+    for _ in 0..offset {
+        print!("    ");
+        col += 1;
+    }
+
+    for dia in 1..=total_dias {
+        let fecha = NaiveDate::from_ymd_opt(anio, mes, dia).unwrap();
+        let es_hoy = fecha == hoy;
+        let tiene_evento = state.agenda.eventos.iter().any(|e| e.ocurre_en(fecha));
+        let marcas = state.agenda.marcas_del_dia(fecha);
+        let texto = format!("{:>3}", dia);
+        let celda = colorear_dia(&texto, fecha, es_hoy, tiene_evento, &marcas);
+
+        print!("{} ", celda);
+        col += 1;
+
+        if col == 7 {
+            println!();
+            print!("    ");
+            col = 0;
+        }
+    }
+    println!();
+}
+
+fn imprimir_calendario_anual(anio: i32, state: &AppState) {
+    let bisiesto = if es_bisiesto(anio) { " (BISIESTO)" } else { "" };
+    println!(
+        "  {}",
+        format!(
+            "📆 CALENDARIO {} — {} días{}",
+            anio,
+            dias_en_anio(anio),
+            bisiesto
+        ).cyan().bold()
+    );
+    println!();
+
+    // Leyenda de colores
+    println!("  {} Hoy  {} Fin de semana  {} Evento  {} Libre  {} Feriado  {} Vacaciones  {} Vencimiento  {} Importante",
+        "██".on_white().black(),
+        "██".red().dimmed(),
+        "██".yellow(),
+        "██".green(),
+        "██".red().bold(),
+        "██".cyan(),
+        "██".yellow().bold(),
+        "██".magenta().bold(),
+    );
+    println!();
+
+    let separador_col = "   "; // 3 espacios entre columnas de meses
+
+    // Mostrar 3 meses por fila
+    for fila in 0..4 {
+        let meses: Vec<u32> = (1..=3).map(|m| fila * 3 + m).collect();
+
+        // Encabezados de mes — centrar ANTES de aplicar color
+        print!("  ");
+        for (i, &mes) in meses.iter().enumerate() {
+            if i > 0 { print!("{}", separador_col); }
+            let header = format!("{} {}", nombre_mes(mes), anio);
+            let (pad_i, pad_d) = centrar_texto(&header, 28);
+            print!("{}{}{}", pad_i, header.cyan().bold(), pad_d);
+        }
+        println!();
+
+        // Días de la semana
+        print!("  ");
+        for (i, _) in meses.iter().enumerate() {
+            if i > 0 { print!("{}", separador_col); }
+            print!("{}", ENCABEZADO_DIAS.dimmed());
+        }
+        println!();
+
+        // Líneas de días
+        let lineas_mes: Vec<Vec<String>> = meses.iter()
+            .map(|&m| generar_lineas_mes(anio, m, state))
+            .collect();
+
+        let max_lineas = lineas_mes.iter().map(|l| l.len()).max().unwrap_or(0);
+        for fila_linea in 0..max_lineas {
+            print!("  ");
+            for (i, lineas) in lineas_mes.iter().enumerate() {
+                if i > 0 { print!("{}", separador_col); }
+                if fila_linea < lineas.len() {
+                    print!("{}", lineas[fila_linea]);
+                } else {
+                    print!("{}", " ".repeat(28));
+                }
+            }
+            println!();
+        }
+        println!();
+    }
+}
+
+fn generar_lineas_mes(anio: i32, mes: u32, state: &AppState) -> Vec<String> {
+    let total_dias = dias_en_mes(anio, mes);
+    let primer_dia = NaiveDate::from_ymd_opt(anio, mes, 1).unwrap();
+    let offset = primer_dia.weekday().num_days_from_monday() as usize;
+    let hoy = Local::now().date_naive();
+
+    let mut lineas: Vec<String> = Vec::new();
+    let mut linea = String::new();
+    let mut col = 0usize;
+
+    // Celdas vacías al inicio
+    for _ in 0..offset {
+        linea.push_str("    ");
+        col += 1;
+    }
+
+    for dia in 1..=total_dias {
+        let fecha = NaiveDate::from_ymd_opt(anio, mes, dia).unwrap();
+        let es_hoy = fecha == hoy;
+        let tiene_evento = state.agenda.eventos.iter().any(|e| e.ocurre_en(fecha));
+        let marcas = state.agenda.marcas_del_dia(fecha);
+        let texto = format!("{:>3}", dia);
+        let celda = colorear_dia(&texto, fecha, es_hoy, tiene_evento, &marcas);
+
+        linea.push_str(&format!("{} ", celda));
+        col += 1;
+
+        if col == 7 {
+            lineas.push(linea);
+            linea = String::new();
+            col = 0;
+        }
+    }
+
+    // Rellenar última línea incompleta hasta 28 caracteres visibles
+    if col > 0 {
+        for _ in col..7 {
+            linea.push_str("    ");
+        }
+        lineas.push(linea);
+    }
+
+    lineas
+}
+
+fn calcular_diferencia_fechas() {
+    separador("📏 Calcular distancia entre fechas");
+
+    let desde = match pedir_fecha("Fecha inicio") { Some(f) => f, None => return };
+    let hasta = match pedir_fecha("Fecha fin") { Some(f) => f, None => return };
+
+    let dias = (hasta - desde).num_days();
+    let semanas = dias / 7;
+    let dias_restantes = dias % 7;
+    let meses_aprox = dias as f64 / 30.44;
+
+    println!();
+    println!("  {} {} → {}", "📅".to_string(), desde.format("%d/%m/%Y"), hasta.format("%d/%m/%Y"));
+    println!();
+    println!("  {} {} días calendario", "📏".to_string(), dias.to_string().cyan().bold());
+    println!("  {} {} semanas y {} días", "📅".to_string(),
+        semanas.to_string().cyan().bold(),
+        dias_restantes.to_string().cyan()
+    );
+    println!("  {} ~{:.1} meses", "🗓️".to_string(), meses_aprox);
+
+    // Contar fines de semana
+    let mut fines_semana = 0i64;
+    let mut dias_laborales = 0i64;
+    let mut fecha = desde;
+    let fin = hasta;
+    while fecha <= fin {
+        if matches!(fecha.weekday(), Weekday::Sat | Weekday::Sun) {
+            fines_semana += 1;
+        } else {
+            dias_laborales += 1;
+        }
+        fecha += Duration::days(1);
+    }
+    println!("  {} {} días laborales, {} fines de semana", "🏢".to_string(),
+        dias_laborales.to_string().green(),
+        fines_semana.to_string().red()
+    );
+    println!();
+    pausa();
+}
+
+fn avanzar_semanas() {
+    separador("📐 Avanzar semanas/días desde una fecha");
+
+    let desde = match pedir_fecha("Fecha base") { Some(f) => f, None => return };
+
+    let opciones = &["Semanas", "Días", "Meses"];
+    let unidad = match menu("¿Qué unidad avanzar?", opciones) { Some(i) => i, None => return };
+
+    let cantidad_str = pedir_texto_opcional("Cantidad");
+    let cantidad: i64 = match cantidad_str.parse() {
+        Ok(n) => n,
+        Err(_) => { println!("  {} Número inválido", "✗".red()); pausa(); return; }
+    };
+
+    let resultado = match unidad {
+        0 => desde + Duration::weeks(cantidad),
+        1 => desde + Duration::days(cantidad),
+        2 => {
+            // Avanzar meses
+            let meses_totales = desde.month0() as i64 + cantidad;
+            let anio_extra = meses_totales / 12;
+            let mes_nuevo = (meses_totales % 12) as u32 + 1;
+            let anio_nuevo = desde.year() as i64 + anio_extra;
+            let dia = desde.day().min(dias_en_mes(anio_nuevo as i32, mes_nuevo));
+            NaiveDate::from_ymd_opt(anio_nuevo as i32, mes_nuevo, dia).unwrap_or(desde)
+        }
+        _ => desde,
+    };
+
+    let nombre_unidad = match unidad { 0 => "semanas", 1 => "días", _ => "meses" };
+
+    println!();
+    println!("  {} {} + {} {} = {}", "📅".to_string(),
+        desde.format("%d/%m/%Y"),
+        cantidad.to_string().cyan().bold(),
+        nombre_unidad,
+        resultado.format("%A %d de %B de %Y").to_string().green().bold()
+    );
+
+    let dias_diff = (resultado - desde).num_days().abs();
+    println!("  {} ({} días calendario)", "📏".to_string(), dias_diff);
+    println!();
+    pausa();
+}
+
+fn marcar_dia_calendario(state: &mut AppState) {
+    separador("🎨 Marcar día en el calendario");
+
+    let opciones_modo = &["Marcar un día específico", "Marcar un rango de fechas", "Limpiar marcas de un día"];
+    let modo = match menu("¿Qué deseas hacer?", opciones_modo) { Some(i) => i, None => return };
+
+    if modo == 2 {
+        let fecha = match pedir_fecha("Fecha a limpiar") { Some(f) => f, None => return };
+        state.agenda.limpiar_marcas(fecha);
+        println!("  {} Marcas eliminadas para {}", "✓".green(), fecha.format("%d/%m/%Y"));
+        pausa();
+        return;
+    }
+
+    let tipos = &["Libre (verde)", "Feriado (rojo)", "Vacaciones (cyan)", "Vencimiento (amarillo)", "Importante (magenta)", "Otro (azul)"];
+    let ti = match menu("Tipo de marca", tipos) { Some(i) => i, None => return };
+    let tipo = match ti {
+        0 => TipoDiaMarcado::Libre,
+        1 => TipoDiaMarcado::Feriado,
+        2 => TipoDiaMarcado::Vacaciones,
+        3 => TipoDiaMarcado::Vencimiento,
+        4 => TipoDiaMarcado::Importante,
+        _ => {
+            let nombre = pedir_texto_opcional("Nombre del tipo");
+            TipoDiaMarcado::Otro(if nombre.is_empty() { "Otro".to_string() } else { nombre })
+        }
+    };
+
+    let nota = pedir_texto_opcional("Nota (opcional)");
+
+    if modo == 0 {
+        let fecha = match pedir_fecha("Fecha") { Some(f) => f, None => return };
+        state.agenda.marcar_dia(DiaMarcado { fecha, tipo, nota });
+        println!("  {} Día {} marcado", "✓".green(), fecha.format("%d/%m/%Y"));
+    } else {
+        let desde = match pedir_fecha("Desde") { Some(f) => f, None => return };
+        let hasta = match pedir_fecha("Hasta") { Some(f) => f, None => return };
+        let dias = (hasta - desde).num_days().abs() + 1;
+        state.agenda.marcar_rango(desde, hasta, tipo, nota);
+        println!("  {} {} días marcados ({} → {})", "✓".green(), dias,
+            desde.format("%d/%m/%Y"), hasta.format("%d/%m/%Y"));
+    }
+    pausa();
+}
+
+fn ver_mes_detallado(state: &AppState) {
+    separador("🔍 Ver mes en detalle");
+
+    let hoy = Local::now().date_naive();
+    let anio_str = pedir_texto_opcional(&format!("Año (Enter={})", hoy.year()));
+    let anio: i32 = if anio_str.is_empty() { hoy.year() } else {
+        match anio_str.parse() { Ok(a) => a, Err(_) => { println!("  {} Año inválido", "✗".red()); pausa(); return; } }
+    };
+
+    let meses_nombres = &["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    let default_mes = (hoy.month() - 1) as usize;
+    let mi = Select::new()
+        .with_prompt("  Mes")
+        .items(meses_nombres)
+        .default(default_mes)
+        .interact_opt()
+        .unwrap_or(None);
+    let mes = match mi { Some(i) => (i + 1) as u32, None => return };
+
+    limpiar();
+    println!();
+    imprimir_mes(anio, mes, state);
+    println!();
+
+    // Listar eventos del mes
+    let total_dias = dias_en_mes(anio, mes);
+    let mut hay_info = false;
+
+    for dia in 1..=total_dias {
+        let fecha = NaiveDate::from_ymd_opt(anio, mes, dia).unwrap();
+        let eventos: Vec<_> = state.agenda.eventos.iter().filter(|e| e.ocurre_en(fecha)).collect();
+        let marcas = state.agenda.marcas_del_dia(fecha);
+
+        if !eventos.is_empty() || !marcas.is_empty() {
+            hay_info = true;
+            let dia_nombre = match fecha.weekday() {
+                Weekday::Mon => "Lun", Weekday::Tue => "Mar", Weekday::Wed => "Mié",
+                Weekday::Thu => "Jue", Weekday::Fri => "Vie", Weekday::Sat => "Sáb", Weekday::Sun => "Dom",
+            };
+            println!("  {} {} {}:", "📌".to_string(), fecha.format("%d/%m"), dia_nombre);
+            for e in &eventos {
+                let fin = e.hora_fin.map(|h| format!("-{}", h.format("%H:%M"))).unwrap_or_default();
+                let icono = match e.tipo {
+                    TipoEvento::Cumpleanos => "🎂",
+                    TipoEvento::Pago => "💰",
+                    _ => "📅",
+                };
+                let recur = e.etiqueta_recurrencia();
+                let concepto_txt = if e.concepto.is_empty() { String::new() } else { format!(" [{}]", e.concepto) };
+                println!("      {} {}{} {}{}{}", icono, e.hora_inicio.format("%H:%M"), fin, e.titulo, recur, concepto_txt.dimmed());
+                println!("         {} {} {}  {} {} {}",
+                    "📆".to_string(),
+                    "Evento:".dimmed(),
+                    e.fecha.format("%d/%m/%Y").to_string().cyan(),
+                    "🕐".to_string(),
+                    "Registrado:".dimmed(),
+                    e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
+                );
+            }
+            for m in &marcas {
+                let nota_txt = if m.nota.is_empty() { String::new() } else { format!(" — {}", m.nota) };
+                println!("      🎨 {}{}", m.tipo, nota_txt);
+            }
+        }
+    }
+
+    if !hay_info {
+        println!("  {}", "(sin eventos ni marcas en este mes)".dimmed());
+    }
+
+    println!();
+    pausa();
+}
+
+fn ver_resumen_trimestral(state: &AppState) {
+    separador("📊 Resumen trimestral");
+
+    let hoy = Local::now().date_naive();
+    let anio = hoy.year();
+    let trimestre_actual = ((hoy.month() - 1) / 3) as usize;
+
+    let trimestres = &["Q1 (Ene-Mar)", "Q2 (Abr-Jun)", "Q3 (Jul-Sep)", "Q4 (Oct-Dic)"];
+    let qi = Select::new()
+        .with_prompt("  Trimestre")
+        .items(trimestres)
+        .default(trimestre_actual)
+        .interact_opt()
+        .unwrap_or(None);
+    let q = match qi { Some(i) => i, None => return };
+
+    let mes_inicio = (q as u32) * 3 + 1;
+    let mes_fin = mes_inicio + 2;
+
+    limpiar();
+    println!();
+    println!("  {}", format!("📊 {} {} — {}", trimestres[q], anio,
+        if es_bisiesto(anio) { "Año bisiesto" } else { "Año regular" }).cyan().bold());
+    println!();
+
+    let mut total_eventos = 0;
+    let mut total_marcas = 0;
+    let mut dias_libres = 0;
+    let mut dias_feriado = 0;
+
+    for mes in mes_inicio..=mes_fin {
+        let total_dias = dias_en_mes(anio, mes);
+        imprimir_mes(anio, mes, state);
+        println!();
+
+        for dia in 1..=total_dias {
+            let fecha = NaiveDate::from_ymd_opt(anio, mes, dia).unwrap();
+            total_eventos += state.agenda.eventos.iter().filter(|e| e.ocurre_en(fecha)).count();
+            let marcas = state.agenda.marcas_del_dia(fecha);
+            total_marcas += marcas.len();
+            for m in &marcas {
+                match m.tipo {
+                    TipoDiaMarcado::Libre => dias_libres += 1,
+                    TipoDiaMarcado::Feriado => dias_feriado += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    println!("  {} {} eventos programados", "📌".to_string(), total_eventos.to_string().cyan().bold());
+    println!("  {} {} días marcados ({} libres, {} feriados)", "🎨".to_string(),
+        total_marcas.to_string().cyan(), dias_libres.to_string().green(), dias_feriado.to_string().red());
+    println!();
+    pausa();
+}
+
+fn menu_calendario(state: &mut AppState) {
+    loop {
+        limpiar();
+        let hoy = Local::now().date_naive();
+        let anio = hoy.year();
+
+        imprimir_calendario_anual(anio, state);
+
+        let opciones = &[
+            "📆 Ver otro año",
+            "🔍 Ver mes en detalle",
+            "📏 Calcular distancia entre fechas",
+            "📐 Avanzar semanas/días/meses desde fecha",
+            "🎨 Marcar días (libre, feriado, vacaciones...)",
+            "📊 Resumen trimestral",
+            "← Volver",
+        ];
+
+        match menu("Calendario", opciones) {
+            Some(0) => {
+                let anio_str = pedir_texto_opcional("Año a mostrar");
+                if let Ok(a) = anio_str.parse::<i32>() {
+                    limpiar();
+                    imprimir_calendario_anual(a, state);
+                    pausa();
+                }
+            }
+            Some(1) => ver_mes_detallado(state),
+            Some(2) => calcular_diferencia_fechas(),
+            Some(3) => avanzar_semanas(),
+            Some(4) => marcar_dia_calendario(state),
+            Some(5) => ver_resumen_trimestral(state),
+            _ => return,
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1697,6 +2382,7 @@ fn buscar_memoria(state: &AppState) {
     for e in &state.agenda.eventos {
         let coincide = e.titulo.to_lowercase().contains(&q)
             || e.descripcion.to_lowercase().contains(&q)
+            || e.concepto.to_lowercase().contains(&q)
             || e.notas.iter().any(|n| n.to_lowercase().contains(&q));
         if coincide {
             let enlaces_info: Vec<String> = state.memoria.enlaces_de("evento", &e.id)
@@ -1707,18 +2393,116 @@ fn buscar_memoria(state: &AppState) {
             let hora_str = e.hora_fin
                 .map(|fin| format!("{} - {}", e.hora_inicio, fin))
                 .unwrap_or_else(|| format!("{}", e.hora_inicio));
-            hallazgos.push(Hallazgo {
-                icono: "📅",
-                modulo: "Evento".to_string(),
-                titulo: e.titulo.clone(),
-                detalle: if e.descripcion.is_empty() { String::new() } else { format!("{} | {}", hora_str, e.descripcion) },
-                fecha: e.fecha,
-                hora: Some(e.hora_inicio),
-                estado: format!("{}", e.tipo),
-                id: e.id.clone(),
-                palabras: Vec::new(),
-                enlaces_info,
-            });
+            let concepto_txt = if e.concepto.is_empty() { String::new() } else { format!(" [{}]", e.concepto) };
+            let recur_txt = e.etiqueta_recurrencia();
+
+            // Si es recurrente, buscar próxima ocurrencia futura y la más reciente pasada
+            if e.frecuencia != Frecuencia::UnaVez {
+                // Solo buscar ocurrencia en el año actual
+                let anio_actual = hoy_fecha.year();
+                let inicio_anio = NaiveDate::from_ymd_opt(anio_actual, 1, 1).unwrap();
+                let fin_anio = NaiveDate::from_ymd_opt(anio_actual, 12, 31).unwrap();
+                let ocurrencias_anio = e.frecuencia.proximas_ocurrencias(e.fecha, inicio_anio, fin_anio);
+
+                if let Some(&proxima) = ocurrencias_anio.iter().find(|&&f| f >= hoy_fecha) {
+                    // Próxima ocurrencia este año (aún no pasó)
+                    let icono_tipo = match e.tipo {
+                        TipoEvento::Cumpleanos => "🎂",
+                        TipoEvento::Pago => "💰",
+                        _ => "📅",
+                    };
+                    let detalle_futuro = if matches!(e.tipo, TipoEvento::Cumpleanos) {
+                        let anios = proxima.year() - e.fecha.year();
+                        format!("Cumple {} años{}", anios, concepto_txt)
+                    } else {
+                        let base = if e.descripcion.is_empty() {
+                            format!("{}{}", hora_str, concepto_txt)
+                        } else {
+                            format!("{} | {}{}", hora_str, e.descripcion, concepto_txt)
+                        };
+                        format!("{}{}", base, recur_txt)
+                    };
+                    hallazgos.push(Hallazgo {
+                        icono: icono_tipo,
+                        modulo: "Evento".to_string(),
+                        titulo: format!("{}{}", e.titulo, recur_txt),
+                        detalle: detalle_futuro,
+                        fecha: proxima,
+                        hora: Some(e.hora_inicio),
+                        estado: format!("{}", e.tipo),
+                        id: e.id.clone(),
+                        palabras: Vec::new(),
+                        enlaces_info: enlaces_info.clone(),
+                    });
+                } else if let Some(&pasada) = ocurrencias_anio.last() {
+                    // Ya pasó este año, mostrar la ocurrencia que ya fue
+                    let icono_tipo = match e.tipo {
+                        TipoEvento::Cumpleanos => "🎂",
+                        TipoEvento::Pago => "💰",
+                        _ => "📅",
+                    };
+                    let detalle_pasado = if matches!(e.tipo, TipoEvento::Cumpleanos) {
+                        let anios = pasada.year() - e.fecha.year();
+                        format!("Cumplió {} años{}", anios, concepto_txt)
+                    } else {
+                        format!("{}{}{}", hora_str, concepto_txt, recur_txt)
+                    };
+                    hallazgos.push(Hallazgo {
+                        icono: icono_tipo,
+                        modulo: "Evento".to_string(),
+                        titulo: format!("{}{}", e.titulo, recur_txt),
+                        detalle: detalle_pasado,
+                        fecha: pasada,
+                        hora: Some(e.hora_inicio),
+                        estado: format!("{}", e.tipo),
+                        id: e.id.clone(),
+                        palabras: Vec::new(),
+                        enlaces_info: enlaces_info.clone(),
+                    });
+                }
+
+                // Registro original compacto (solo si es de otro año)
+                if e.fecha.year() < anio_actual {
+                    let dias_desde = (hoy_fecha - e.fecha).num_days();
+                    let anios = dias_desde / 365;
+                    let meses = (dias_desde % 365) / 30;
+                    let resumen = if meses > 0 {
+                        format!("Origen: {} (hace ~{} año(s) y {} mes(es))", e.fecha.format("%d/%m/%Y"), anios, meses)
+                    } else {
+                        format!("Origen: {} (hace ~{} año(s))", e.fecha.format("%d/%m/%Y"), anios)
+                    };
+                    hallazgos.push(Hallazgo {
+                        icono: "🗓️ ",
+                        modulo: "Registro original".to_string(),
+                        titulo: format!("{} — fecha base", e.titulo),
+                        detalle: resumen,
+                        fecha: e.fecha,
+                        hora: Some(e.hora_inicio),
+                        estado: format!("{}{}", e.tipo, recur_txt),
+                        id: e.id.clone(),
+                        palabras: Vec::new(),
+                        enlaces_info: Vec::new(),
+                    });
+                }
+            } else {
+                // Evento único: una sola entrada
+                hallazgos.push(Hallazgo {
+                    icono: "📅",
+                    modulo: "Evento".to_string(),
+                    titulo: e.titulo.clone(),
+                    detalle: if e.descripcion.is_empty() {
+                        format!("{}{}", hora_str, concepto_txt)
+                    } else {
+                        format!("{} | {}{}", hora_str, e.descripcion, concepto_txt)
+                    },
+                    fecha: e.fecha,
+                    hora: Some(e.hora_inicio),
+                    estado: format!("{}", e.tipo),
+                    id: e.id.clone(),
+                    palabras: Vec::new(),
+                    enlaces_info,
+                });
+            }
         }
     }
 
