@@ -10,6 +10,13 @@ use omniplanner::memoria::Recuerdo;
 use omniplanner::storage::AppState;
 use omniplanner::tasks::{Prioridad, Task, TaskStatus};
 use omniplanner::sync;
+use omniplanner::ml::{
+    Activacion, Dataset, ModeloML, Perdida, Rng, TipoModelo,
+    ANN, CNN, DNN, RNN, SVM, SVMMulticlase, TipoRNN,
+    ArbolDecision, BosqueAleatorio,
+    QTable, GridWorld, MultiBandit,
+    dataset_iris_sintetico, dataset_xor, dataset_circulos, dataset_secuencia_temporal,
+};
 
 // ══════════════════════════════════════════════════════════════
 //  Helpers de UI
@@ -671,8 +678,12 @@ fn editar_tarea(state: &mut AppState) {
                         3 => TaskStatus::Cancelada,
                         _ => continue,
                     };
+                    let es_completada = nuevo == TaskStatus::Completada;
                     state.tasks.tareas[idx].cambiar_estado(nuevo);
                     println!("  {} Estado actualizado", "✓".green().bold());
+                    if es_completada {
+                        finalizar_tarea(state, idx);
+                    }
                 }
             }
             Some(1) => {
@@ -794,6 +805,146 @@ fn eliminar_tarea(state: &mut AppState) {
         println!("  {} Tarea eliminada", "✓".green());
     }
     pausa();
+}
+
+/// Flujo de finalización inteligente: al completar una tarea, ofrece conectarla
+/// con palabras clave al diccionario neuronal y crear memoria automática.
+fn finalizar_tarea(state: &mut AppState, idx: usize) {
+    let tarea = &state.tasks.tareas[idx];
+    let titulo = tarea.titulo.clone();
+    let tarea_id = tarea.id.clone();
+    let etiquetas_existentes = tarea.etiquetas.clone();
+
+    println!();
+    println!("  {} {}", "🎉 ¡Tarea completada!".green().bold(), titulo.bold());
+    println!();
+
+    // Mostrar sugerencias del diccionario basadas en etiquetas existentes
+    if !etiquetas_existentes.is_empty() {
+        let sugerencias = state.memoria.diccionario.sugerir(&etiquetas_existentes);
+        if !sugerencias.is_empty() {
+            println!("  {} Ideas relacionadas en tu diccionario:", "💡".to_string());
+            for (idea, fuerza) in sugerencias.iter().take(5) {
+                let barra = "█".repeat(*fuerza as usize).cyan();
+                println!("    {} {} (fuerza: {})", barra, idea.yellow(), fuerza);
+            }
+            println!();
+        }
+    }
+
+    // Preguntar si quiere conectar con palabras clave
+    let conectar = Confirm::new()
+        .with_prompt("  ¿Deseas conectar esta tarea con palabras clave en tu diccionario de ideas?")
+        .default(true)
+        .interact()
+        .unwrap_or(false);
+
+    if conectar {
+        // Mostrar palabras clave existentes del diccionario
+        let ideas_existentes = state.memoria.diccionario.todas_las_ideas();
+        if !ideas_existentes.is_empty() {
+            let mut sorted: Vec<&String> = ideas_existentes;
+            sorted.sort();
+            println!();
+            println!("  {} Tu diccionario tiene: {}", "📚".to_string(),
+                sorted.iter().map(|s| s.cyan().to_string()).collect::<Vec<_>>().join(", "));
+            println!();
+        }
+
+        let input = match pedir_texto("Palabras clave (separadas por coma)") {
+            Some(t) => t,
+            None => {
+                // Aún sin palabras, registrar la tarea con sus etiquetas
+                if !etiquetas_existentes.is_empty() {
+                    state.memoria.diccionario.registrar(
+                        "tarea", &tarea_id, &titulo, &etiquetas_existentes, "completada",
+                    );
+                }
+                return;
+            }
+        };
+
+        let mut palabras: Vec<String> = input
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // Incluir etiquetas existentes para reforzar conexiones
+        for et in &etiquetas_existentes {
+            if !palabras.iter().any(|p| p.to_lowercase() == et.to_lowercase()) {
+                palabras.push(et.clone());
+            }
+        }
+
+        // Pedir nota de contexto opcional
+        let nota = pedir_texto_opcional("Nota rápida sobre lo aprendido o logrado (opcional)");
+
+        // Registrar en diccionario neuronal
+        state.memoria.diccionario.registrar(
+            "tarea", &tarea_id, &titulo, &palabras, &nota,
+        );
+
+        // Agregar etiquetas a la tarea
+        for p in &palabras {
+            state.tasks.tareas[idx].agregar_etiqueta(p.clone());
+        }
+
+        // Crear recuerdo automático en memoria
+        let contenido_recuerdo = if nota.is_empty() {
+            format!("✅ Tarea completada: {}", titulo)
+        } else {
+            format!("✅ Tarea completada: {} — {}", titulo, nota)
+        };
+        let recuerdo = Recuerdo::new(contenido_recuerdo, palabras.clone())
+            .con_origen("tarea", &tarea_id);
+        state.memoria.agregar_recuerdo(recuerdo);
+
+        // Mostrar conexiones resultantes
+        println!();
+        println!("  {} Guardado en diccionario neuronal:", "🧠".to_string().green().bold());
+        println!("    🏷️  {}", palabras.iter().map(|p| p.cyan().to_string()).collect::<Vec<_>>().join(", "));
+
+        let sugerencias = state.memoria.diccionario.sugerir(&palabras);
+        if !sugerencias.is_empty() {
+            println!();
+            println!("  {} Posibles conexiones para explorar:", "🔮".to_string());
+            for (idea, fuerza) in sugerencias.iter().take(5) {
+                println!("    → {} (fuerza: {})", idea.yellow(), fuerza);
+            }
+        }
+
+        // Ofrecer enlazar con otro elemento
+        let enlazar = Confirm::new()
+            .with_prompt("  ¿Enlazar esta tarea con otro elemento (evento, diagrama, canvas)?")
+            .default(false)
+            .interact()
+            .unwrap_or(false);
+
+        if enlazar {
+            let modulos = &["📅 Evento", "📊 Diagrama", "✏️  Canvas"];
+            if let Some(mi) = menu("¿Con qué módulo?", modulos) {
+                let mi_real = mi + 1; // offset porque 0=Tarea en seleccionar_item_de_modulo
+                let (mod_dest, id_dest) = seleccionar_item_de_modulo(state, mi_real);
+                if !id_dest.is_empty() {
+                    let relacion = pedir_texto_opcional("Relación (ej: 'derivó en', 'necesita', 'inspiró')");
+                    let rel = if relacion.is_empty() { "completada → conectada".to_string() } else { relacion };
+                    state.memoria.enlazar("tarea", &tarea_id, &mod_dest, &id_dest, &rel);
+                    println!("  {} Enlace creado", "🔗".to_string().green());
+                }
+            }
+        }
+    } else {
+        // No quiere conectar, pero si tiene etiquetas, registrar silenciosamente
+        if !etiquetas_existentes.is_empty() {
+            state.memoria.diccionario.registrar(
+                "tarea", &tarea_id, &titulo, &etiquetas_existentes, "completada",
+            );
+        }
+    }
+
+    println!();
+    println!("  {} Tarea finalizada y memorizada exitosamente", "✅".to_string().green().bold());
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2239,6 +2390,11 @@ fn menu_memoria(state: &mut AppState) {
             if !state.memoria.enlaces.is_empty() {
                 println!("  {} {}", "🔗 Enlaces:".bold(), state.memoria.enlaces.len());
             }
+            let n_ideas = state.memoria.diccionario.todas_las_ideas().len();
+            let n_conexiones = state.memoria.diccionario.conexiones.len();
+            if n_ideas > 0 {
+                println!("  {} {} ideas, {} conexiones neuronales", "🧬 Diccionario:".bold(), n_ideas, n_conexiones);
+            }
         } else {
             println!("  {}", "(vacío — crea tu primer recuerdo o apunte)".dimmed());
             println!();
@@ -2250,6 +2406,7 @@ fn menu_memoria(state: &mut AppState) {
             "📝 Nuevo apunte / recuerdo",
             "🔍 Buscar por palabra clave",
             "📋 Ver todos los recuerdos",
+            "🧬 Diccionario neuronal de ideas",
             "✏️  Editar un recuerdo",
             "🏷️  Gestionar palabras clave",
             "🔗 Enlazar dos elementos",
@@ -2261,13 +2418,170 @@ fn menu_memoria(state: &mut AppState) {
             Some(0) => crear_recuerdo(state),
             Some(1) => buscar_memoria(state),
             Some(2) => ver_recuerdos(state),
-            Some(3) => editar_recuerdo(state),
-            Some(4) => gestionar_palabras_clave(state),
-            Some(5) => enlazar_elementos(state),
-            Some(6) => eliminar_recuerdo(state),
+            Some(3) => ver_diccionario(state),
+            Some(4) => editar_recuerdo(state),
+            Some(5) => gestionar_palabras_clave(state),
+            Some(6) => enlazar_elementos(state),
+            Some(7) => eliminar_recuerdo(state),
             _ => return,
         }
     }
+}
+
+fn ver_diccionario(state: &mut AppState) {
+    if state.memoria.diccionario.conexiones.is_empty() && state.memoria.diccionario.historial.is_empty() {
+        println!("  {}", "El diccionario neuronal está vacío.".dimmed());
+        println!("  {}", "Se llenará automáticamente al completar tareas con palabras clave.".dimmed());
+        pausa();
+        return;
+    }
+
+    loop {
+        limpiar();
+        separador("🧬 DICCIONARIO NEURONAL DE IDEAS");
+
+        let mut ideas: Vec<String> = state.memoria.diccionario.todas_las_ideas().into_iter().cloned().collect();
+        ideas.sort();
+        println!("  {} {} ideas | {} conexiones | {} entradas",
+            "📊".to_string(),
+            ideas.len(),
+            state.memoria.diccionario.conexiones.len(),
+            state.memoria.diccionario.historial.len());
+        println!();
+
+        // Mostrar las conexiones más fuertes
+        {
+            let mut conexiones_ord: Vec<(String, String, u32, String)> = state.memoria.diccionario.conexiones.iter()
+                .map(|c| (c.palabra_a.clone(), c.palabra_b.clone(), c.fuerza, c.contexto.last().cloned().unwrap_or_default()))
+                .collect();
+            conexiones_ord.sort_by(|a, b| b.2.cmp(&a.2));
+
+            if !conexiones_ord.is_empty() {
+                println!("  {} Conexiones más fuertes:", "🔥".to_string());
+                for (pa, pb, fuerza, ctx) in conexiones_ord.iter().take(10) {
+                    let barra = "█".repeat(*fuerza as usize).cyan();
+                    let ctx_str = if ctx.is_empty() { String::new() }
+                        else { format!(" ({})", ctx.dimmed()) };
+                    println!("    {} {} ↔ {} [{}]{}",
+                        barra,
+                        pa.yellow(),
+                        pb.yellow(),
+                        fuerza,
+                        ctx_str);
+                }
+                println!();
+            }
+        }
+
+        let opciones = &[
+            "🔍 Explorar una idea",
+            "📋 Ver historial completo",
+            "🗺️  Mapa de todas las ideas",
+            "← Volver",
+        ];
+
+        match menu("¿Qué deseas hacer?", opciones) {
+            Some(0) => explorar_idea(state),
+            Some(1) => {
+                separador("📋 Historial del diccionario");
+                for (i, e) in state.memoria.diccionario.historial.iter().enumerate().rev() {
+                    println!("  {} [{}] {} — \"{}\"",
+                        format!("{}.", i + 1).dimmed(),
+                        e.modulo.cyan(),
+                        e.item_titulo.bold(),
+                        if e.nota.is_empty() { "-".to_string() } else { e.nota.clone() });
+                    println!("    🏷️  {} | {}",
+                        e.palabras.join(", ").yellow(),
+                        e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed());
+                }
+                pausa();
+            }
+            Some(2) => {
+                separador("🗺️  Mapa de ideas");
+                for idea in &ideas {
+                    let relacionadas = state.memoria.diccionario.ideas_relacionadas(idea);
+                    if !relacionadas.is_empty() {
+                        let rels: Vec<String> = relacionadas.iter()
+                            .map(|(r, f)| format!("{}({})", r, f))
+                            .collect();
+                        println!("  {} → {}", idea.yellow().bold(), rels.join(", ").cyan());
+                    }
+                }
+                pausa();
+            }
+            _ => return,
+        }
+    }
+}
+
+fn explorar_idea(state: &mut AppState) {
+    let dic = &state.memoria.diccionario;
+    let mut ideas: Vec<String> = dic.todas_las_ideas().into_iter().cloned().collect();
+    ideas.sort();
+
+    if ideas.is_empty() {
+        println!("  {}", "No hay ideas en el diccionario.".yellow());
+        pausa();
+        return;
+    }
+
+    let refs: Vec<&str> = ideas.iter().map(|s| s.as_str()).collect();
+    let idx = match menu("Selecciona una idea para explorar", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+    let idea = &ideas[idx];
+
+    println!();
+    println!("  {} Explorando: {}", "🧬".to_string(), idea.yellow().bold());
+    println!();
+
+    // Ideas relacionadas
+    let relacionadas = dic.ideas_relacionadas(idea);
+    if !relacionadas.is_empty() {
+        println!("  {} Conexiones:", "🔗".to_string());
+        for (rel, fuerza) in &relacionadas {
+            let barra = "█".repeat(*fuerza as usize).cyan();
+            println!("    {} {} (fuerza: {})", barra, rel.yellow(), fuerza);
+        }
+        println!();
+    }
+
+    // Recuerdos con esta palabra
+    let recuerdos = state.memoria.recuerdos_con_palabra(idea);
+    if !recuerdos.is_empty() {
+        println!("  {} Recuerdos asociados:", "🧠".to_string());
+        for r in &recuerdos {
+            println!("    • [{}] {}", r.id.dimmed(), r.contenido);
+        }
+        println!();
+    }
+
+    // Historial de esta palabra
+    let historial: Vec<_> = dic.historial.iter()
+        .filter(|e| e.palabras.iter().any(|p| p.to_lowercase() == idea.to_lowercase()))
+        .collect();
+    if !historial.is_empty() {
+        println!("  {} Historial:", "📋".to_string());
+        for e in &historial {
+            println!("    • [{}] {} — {} ({})",
+                e.modulo.cyan(), e.item_titulo.bold(),
+                if e.nota.is_empty() { "-" } else { &e.nota },
+                e.creado.format("%d/%m/%Y").to_string().dimmed());
+        }
+        println!();
+    }
+
+    // Sugerir ideas basadas en esta
+    let sugerencias = dic.sugerir(&[idea.clone()]);
+    if !sugerencias.is_empty() {
+        println!("  {} Sugerencias para explorar:", "🔮".to_string());
+        for (sug, score) in sugerencias.iter().take(5) {
+            println!("    → {} (relevancia: {})", sug.yellow(), score);
+        }
+    }
+
+    pausa();
 }
 
 fn buscar_memoria(state: &AppState) {
@@ -4612,6 +4926,809 @@ fn generar_reporte_semanal(state: &AppState, lunes: NaiveDate) -> String {
 //  MAIN — Menú principal interactivo
 // ══════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════
+//  Módulo ML — Inteligencia Artificial
+// ══════════════════════════════════════════════════════════════
+
+fn menu_ml(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("🤖 INTELIGENCIA ARTIFICIAL");
+
+        // Resumen
+        println!("  {} modelos entrenados — {} datasets cargados",
+            state.ml.modelos.len().to_string().green(),
+            state.ml.datasets.len().to_string().green());
+        println!();
+
+        let opciones = &[
+            "🧪  Datasets (crear / cargar / ver)",
+            "🧠  Red Neuronal Artificial (ANN)",
+            "📐  Máquina de Vectores de Soporte (SVM)",
+            "🌳  Árbol de Decisión",
+            "🌲  Bosque Aleatorio (Random Forest)",
+            "🔬  Red Neuronal Profunda (DNN)",
+            "🖼️   Red Convolucional (CNN)",
+            "🔁  Red Recurrente (RNN / LSTM)",
+            "🎮  Aprendizaje por Refuerzo (Q-Learning)",
+            "📊  Ver modelos entrenados",
+            "🔙  Volver",
+        ];
+
+        match menu("Selecciona un algoritmo:", opciones) {
+            Some(0) => menu_ml_datasets(state),
+            Some(1) => menu_ml_ann(state),
+            Some(2) => menu_ml_svm(state),
+            Some(3) => menu_ml_arbol(state),
+            Some(4) => menu_ml_bosque(state),
+            Some(5) => menu_ml_dnn(state),
+            Some(6) => menu_ml_cnn(state),
+            Some(7) => menu_ml_rnn(state),
+            Some(8) => menu_ml_rl(state),
+            Some(9) => menu_ml_ver_modelos(state),
+            _ => return,
+        }
+    }
+}
+
+fn ml_elegir_dataset(state: &AppState) -> Option<usize> {
+    if state.ml.datasets.is_empty() {
+        println!("  {} No hay datasets. Crea uno primero.", "✗".red());
+        pausa();
+        return None;
+    }
+    let nombres: Vec<String> = state.ml.datasets.iter()
+        .map(|d| format!("{} ({} muestras, {} features, {} clases)",
+            d.nombre, d.num_muestras(), d.num_features(), d.num_clases()))
+        .collect();
+    let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+    menu("Selecciona un dataset:", &refs)
+}
+
+fn pedir_f64(prompt: &str, default: f64) -> f64 {
+    let s: String = Input::new()
+        .with_prompt(format!("  {} (default: {})", prompt, default))
+        .default(default.to_string())
+        .interact_text()
+        .unwrap_or_else(|_| default.to_string());
+    s.parse().unwrap_or(default)
+}
+
+fn pedir_usize(prompt: &str, default: usize) -> usize {
+    let s: String = Input::new()
+        .with_prompt(format!("  {} (default: {})", prompt, default))
+        .default(default.to_string())
+        .interact_text()
+        .unwrap_or_else(|_| default.to_string());
+    s.parse().unwrap_or(default)
+}
+
+// ── Datasets ──
+
+fn menu_ml_datasets(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("🧪 DATASETS");
+
+        let opciones = &[
+            "📦  Generar dataset Iris sintético",
+            "📦  Generar dataset XOR",
+            "📦  Generar dataset Círculos",
+            "✏️   Crear dataset manual",
+            "📋  Ver datasets cargados",
+            "🗑️   Eliminar dataset",
+            "🔙  Volver",
+        ];
+
+        match menu("Datasets:", opciones) {
+            Some(0) => {
+                let ds = dataset_iris_sintetico(42);
+                ds.resumen();
+                state.ml.datasets.push(ds);
+                println!("  {} Dataset Iris sintético creado", "✓".green());
+                pausa();
+            }
+            Some(1) => {
+                let ds = dataset_xor(42);
+                ds.resumen();
+                state.ml.datasets.push(ds);
+                println!("  {} Dataset XOR creado", "✓".green());
+                pausa();
+            }
+            Some(2) => {
+                let ds = dataset_circulos(42);
+                ds.resumen();
+                state.ml.datasets.push(ds);
+                println!("  {} Dataset Círculos creado", "✓".green());
+                pausa();
+            }
+            Some(3) => {
+                if let Some(nombre) = pedir_texto("Nombre del dataset") {
+                    let num_features = pedir_usize("Número de features", 2);
+                    let num_clases = pedir_usize("Número de clases", 2);
+                    let num_muestras = pedir_usize("Número de muestras", 50);
+
+                    let mut ds = Dataset::nuevo(&nombre);
+                    ds.nombres_clases = (0..num_clases).map(|i| format!("Clase {}", i)).collect();
+                    ds.nombres_features = (0..num_features).map(|i| format!("F{}", i)).collect();
+
+                    let mut rng = Rng::new(42);
+                    for _ in 0..num_muestras {
+                        let clase = rng.usize_rango(num_clases);
+                        let features: Vec<f64> = (0..num_features)
+                            .map(|_| rng.normal() + clase as f64 * 2.0)
+                            .collect();
+                        ds.agregar_muestra(features, clase);
+                    }
+
+                    ds.resumen();
+                    state.ml.datasets.push(ds);
+                    println!("  {} Dataset creado con datos aleatorios por clase", "✓".green());
+                }
+                pausa();
+            }
+            Some(4) => {
+                if state.ml.datasets.is_empty() {
+                    println!("  No hay datasets cargados.");
+                } else {
+                    for (i, ds) in state.ml.datasets.iter().enumerate() {
+                        println!("  {}.", (i + 1).to_string().cyan());
+                        ds.resumen();
+                        println!();
+                    }
+                }
+                pausa();
+            }
+            Some(5) => {
+                if let Some(idx) = ml_elegir_dataset(state) {
+                    let nombre = state.ml.datasets[idx].nombre.clone();
+                    state.ml.datasets.remove(idx);
+                    println!("  {} Dataset '{}' eliminado", "✓".green(), nombre);
+                    pausa();
+                }
+            }
+            _ => return,
+        }
+    }
+}
+
+// ── ANN ──
+
+fn menu_ml_ann(state: &mut AppState) {
+    limpiar();
+    separador("🧠 RED NEURONAL ARTIFICIAL (ANN)");
+
+    println!("  Perceptrón multicapa con backpropagation.");
+    println!();
+
+    let Some(ds_idx) = ml_elegir_dataset(state) else { return };
+
+    let mut ds = state.ml.datasets[ds_idx].clone();
+    ds.normalizar();
+    let (train, test) = ds.dividir(0.8, 42);
+
+    let n_features = train.num_features();
+    let n_clases = train.num_clases();
+
+    println!();
+    println!("  {} Train: {} muestras — Test: {} muestras", "📊".to_string(),
+        train.num_muestras(), test.num_muestras());
+
+    let hidden = pedir_usize("Neuronas capa oculta", 16);
+    let epocas = pedir_usize("Épocas", 100);
+    let lr = pedir_f64("Tasa de aprendizaje", 0.01);
+    let batch = pedir_usize("Batch size", 16);
+
+    let capas = vec![
+        (hidden, Activacion::ReLU),
+        (hidden / 2, Activacion::ReLU),
+        (n_clases, Activacion::Softmax),
+    ];
+
+    println!();
+    separador("Entrenando ANN...");
+
+    let mut ann = ANN::nueva(n_features, &capas, lr, Perdida::CrossEntropy, 42);
+    ann.resumen();
+    println!();
+
+    let x_train = train.a_matriz();
+    let y_train = train.etiquetas_one_hot();
+    ann.entrenar(&x_train, &y_train, epocas, batch);
+
+    let x_test = test.a_matriz();
+    let prec_train = ann.precision(&x_train, &train.etiquetas);
+    let prec_test = ann.precision(&x_test, &test.etiquetas);
+
+    println!();
+    println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+    println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("ANN — {}", ds.nombre),
+        tipo: TipoModelo::ANN(ann),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: Some(prec_train),
+        precision_test: Some(prec_test),
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── SVM ──
+
+fn menu_ml_svm(state: &mut AppState) {
+    limpiar();
+    separador("📐 MÁQUINA DE VECTORES DE SOPORTE (SVM)");
+
+    let Some(ds_idx) = ml_elegir_dataset(state) else { return };
+
+    let mut ds = state.ml.datasets[ds_idx].clone();
+    ds.normalizar();
+    let (train, test) = ds.dividir(0.8, 42);
+
+    let n_features = train.num_features();
+    let n_clases = train.num_clases();
+
+    let c_param = pedir_f64("Parámetro C (regularización)", 1.0);
+    let lr = pedir_f64("Tasa de aprendizaje", 0.001);
+    let epocas = pedir_usize("Épocas", 200);
+
+    println!();
+    separador("Entrenando SVM...");
+
+    if n_clases <= 2 {
+        let y_train: Vec<f64> = train.etiquetas.iter().map(|&e| if e == 1 { 1.0 } else { -1.0 }).collect();
+        let y_test: Vec<f64> = test.etiquetas.iter().map(|&e| if e == 1 { 1.0 } else { -1.0 }).collect();
+
+        let mut svm = SVM::nuevo(n_features, c_param, lr);
+        svm.entrenar(&train.features, &y_train, epocas);
+
+        let prec_train = svm.precision(&train.features, &y_train);
+        let prec_test = svm.precision(&test.features, &y_test);
+
+        println!();
+        svm.resumen();
+        println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+        println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+        let modelo = ModeloML {
+            id: uuid::Uuid::new_v4().to_string(),
+            nombre: format!("SVM — {}", ds.nombre),
+            tipo: TipoModelo::SVM(svm),
+            creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+            precision_train: Some(prec_train),
+            precision_test: Some(prec_test),
+        };
+        state.ml.agregar_modelo(modelo);
+    } else {
+        let mut svm = SVMMulticlase::nuevo(n_features, n_clases, c_param, lr);
+        svm.entrenar(&train.features, &train.etiquetas, epocas);
+
+        let prec_train = svm.precision(&train.features, &train.etiquetas);
+        let prec_test = svm.precision(&test.features, &test.etiquetas);
+
+        println!();
+        println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+        println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+        let modelo = ModeloML {
+            id: uuid::Uuid::new_v4().to_string(),
+            nombre: format!("SVM Multi — {}", ds.nombre),
+            tipo: TipoModelo::SVMMulti(svm),
+            creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+            precision_train: Some(prec_train),
+            precision_test: Some(prec_test),
+        };
+        state.ml.agregar_modelo(modelo);
+    }
+
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── Árbol de Decisión ──
+
+fn menu_ml_arbol(state: &mut AppState) {
+    limpiar();
+    separador("🌳 ÁRBOL DE DECISIÓN");
+
+    let Some(ds_idx) = ml_elegir_dataset(state) else { return };
+
+    let mut ds = state.ml.datasets[ds_idx].clone();
+    ds.normalizar();
+    let (train, test) = ds.dividir(0.8, 42);
+
+    let max_prof = pedir_usize("Profundidad máxima", 10);
+    let min_split = pedir_usize("Min muestras para split", 2);
+
+    println!();
+    separador("Entrenando Árbol de Decisión...");
+
+    let mut arbol = ArbolDecision::nuevo(max_prof, min_split, train.num_clases());
+    arbol.entrenar(&train.features, &train.etiquetas);
+
+    let prec_train = arbol.precision(&train.features, &train.etiquetas);
+    let prec_test = arbol.precision(&test.features, &test.etiquetas);
+
+    arbol.resumen();
+    println!();
+    println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+    println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+    // Importancia de features
+    let imp = arbol.importancia_features();
+    if !imp.is_empty() {
+        println!();
+        println!("  Importancia de features (num. splits):");
+        for (feat, cnt) in &imp {
+            let nombre = ds.nombres_features.get(*feat).map(|s| s.as_str()).unwrap_or("?");
+            println!("    F{} ({}): {} splits", feat, nombre, cnt);
+        }
+    }
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("Árbol — {}", ds.nombre),
+        tipo: TipoModelo::ArbolDecision(arbol),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: Some(prec_train),
+        precision_test: Some(prec_test),
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── Bosque Aleatorio ──
+
+fn menu_ml_bosque(state: &mut AppState) {
+    limpiar();
+    separador("🌲 BOSQUE ALEATORIO (RANDOM FOREST)");
+
+    let Some(ds_idx) = ml_elegir_dataset(state) else { return };
+
+    let mut ds = state.ml.datasets[ds_idx].clone();
+    ds.normalizar();
+    let (train, test) = ds.dividir(0.8, 42);
+
+    let n_features = train.num_features();
+    let num_arboles = pedir_usize("Número de árboles", 50);
+    let max_prof = pedir_usize("Profundidad máxima", 10);
+    let max_feat = pedir_usize(&format!("Max features por split (sqrt ~ {})", (n_features as f64).sqrt() as usize), (n_features as f64).sqrt().ceil() as usize);
+
+    println!();
+    separador("Entrenando Bosque Aleatorio...");
+
+    let mut bosque = BosqueAleatorio::nuevo(num_arboles, max_prof, max_feat, train.num_clases());
+    bosque.entrenar(&train.features, &train.etiquetas, 42);
+
+    let prec_train = bosque.precision(&train.features, &train.etiquetas);
+    let prec_test = bosque.precision(&test.features, &test.etiquetas);
+
+    bosque.resumen();
+    println!();
+    println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+    println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+    let imp = bosque.importancia_features();
+    if !imp.is_empty() {
+        println!();
+        println!("  Top features (aggregated splits):");
+        for (feat, cnt) in imp.iter().take(10) {
+            let nombre = ds.nombres_features.get(*feat).map(|s| s.as_str()).unwrap_or("?");
+            println!("    F{} ({}): {} splits", feat, nombre, cnt);
+        }
+    }
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("Bosque — {}", ds.nombre),
+        tipo: TipoModelo::BosqueAleatorio(bosque),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: Some(prec_train),
+        precision_test: Some(prec_test),
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── DNN ──
+
+fn menu_ml_dnn(state: &mut AppState) {
+    limpiar();
+    separador("🔬 RED NEURONAL PROFUNDA (DNN)");
+
+    println!("  Con dropout, momentum y múltiples capas ocultas.");
+    println!();
+
+    let Some(ds_idx) = ml_elegir_dataset(state) else { return };
+
+    let mut ds = state.ml.datasets[ds_idx].clone();
+    ds.normalizar();
+    let (train, test) = ds.dividir(0.8, 42);
+
+    let n_features = train.num_features();
+    let n_clases = train.num_clases();
+
+    let h1 = pedir_usize("Neuronas capa 1", 64);
+    let h2 = pedir_usize("Neuronas capa 2", 32);
+    let h3 = pedir_usize("Neuronas capa 3", 16);
+    let dropout = pedir_f64("Dropout (0.0 - 0.5)", 0.2);
+    let momentum = pedir_f64("Momentum", 0.9);
+    let lr = pedir_f64("Tasa de aprendizaje", 0.005);
+    let epocas = pedir_usize("Épocas", 200);
+    let batch = pedir_usize("Batch size", 32);
+
+    let capas = vec![
+        (h1, Activacion::ReLU, dropout),
+        (h2, Activacion::ReLU, dropout),
+        (h3, Activacion::ReLU, dropout * 0.5),
+        (n_clases, Activacion::Softmax, 0.0),
+    ];
+
+    println!();
+    separador("Entrenando DNN...");
+
+    let mut dnn = DNN::nueva(n_features, &capas, lr, momentum, Perdida::CrossEntropy, 42);
+    dnn.resumen();
+    println!();
+
+    let x_train = train.a_matriz();
+    let y_train = train.etiquetas_one_hot();
+    let x_test = test.a_matriz();
+
+    dnn.entrenar(&x_train, &y_train, epocas, batch);
+
+    let prec_train = dnn.precision(&x_train, &train.etiquetas);
+    let prec_test = dnn.precision(&x_test, &test.etiquetas);
+
+    println!();
+    println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+    println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("DNN — {}", ds.nombre),
+        tipo: TipoModelo::DNN(dnn),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: Some(prec_train),
+        precision_test: Some(prec_test),
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── CNN ──
+
+fn menu_ml_cnn(state: &mut AppState) {
+    limpiar();
+    separador("🖼️ RED NEURONAL CONVOLUCIONAL (CNN)");
+
+    println!("  CNN 1D: Conv → MaxPool → Dense.");
+    println!();
+
+    let Some(ds_idx) = ml_elegir_dataset(state) else { return };
+
+    let mut ds = state.ml.datasets[ds_idx].clone();
+    ds.normalizar();
+    let (train, test) = ds.dividir(0.8, 42);
+
+    let n_features = train.num_features();
+    let n_clases = train.num_clases();
+
+    if n_features < 4 {
+        println!("  {} La CNN necesita al menos 4 features para la convolución.", "⚠".yellow());
+        println!("    Dataset actual tiene {} features.", n_features);
+        pausa();
+        return;
+    }
+
+    let num_filtros = pedir_usize("Número de filtros", 8);
+    let kernel = pedir_usize("Tamaño del kernel", 3);
+    let pool = pedir_usize("Tamaño del pool", 2);
+    let hidden = pedir_usize("Neuronas capa densa", 16);
+    let lr = pedir_f64("Tasa de aprendizaje", 0.01);
+    let epocas = pedir_usize("Épocas", 50);
+
+    let capas_densas = vec![(hidden, Activacion::ReLU)];
+
+    println!();
+    separador("Entrenando CNN...");
+
+    let mut cnn = CNN::nueva_1d(n_features, num_filtros, kernel, pool, &capas_densas, lr, n_clases, 42);
+    cnn.resumen();
+    println!();
+
+    cnn.entrenar(&train.features, &train.etiquetas, epocas);
+
+    let prec_train = cnn.precision(&train.features, &train.etiquetas);
+    let prec_test = cnn.precision(&test.features, &test.etiquetas);
+
+    println!();
+    println!("  {} Precisión train: {:.2}%", "✓".green(), prec_train * 100.0);
+    println!("  {} Precisión test:  {:.2}%", "✓".green(), prec_test * 100.0);
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("CNN — {}", ds.nombre),
+        tipo: TipoModelo::CNN(cnn),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: Some(prec_train),
+        precision_test: Some(prec_test),
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── RNN / LSTM ──
+
+fn menu_ml_rnn(state: &mut AppState) {
+    limpiar();
+    separador("🔁 RED NEURONAL RECURRENTE (RNN / LSTM)");
+
+    println!("  Procesa secuencias temporales.");
+    println!();
+
+    let tipo_opciones = &["RNN Simple (Elman)", "LSTM"];
+    let tipo_idx = menu("Tipo de RNN:", tipo_opciones).unwrap_or(0);
+    let tipo = if tipo_idx == 1 { TipoRNN::LSTM } else { TipoRNN::Simple };
+
+    let hidden = pedir_usize("Tamaño capa oculta", 16);
+    let lr = pedir_f64("Tasa de aprendizaje", 0.005);
+    let epocas = pedir_usize("Épocas", 100);
+
+    println!();
+    println!("  Generando dataset de secuencias temporales...");
+    let (secuencias, objetivos) = dataset_secuencia_temporal(42);
+
+    let n_train = (secuencias.len() as f64 * 0.8) as usize;
+    let seq_train = &secuencias[..n_train];
+    let obj_train = &objetivos[..n_train];
+    let seq_test = &secuencias[n_train..];
+    let obj_test = &objetivos[n_train..];
+
+    println!("  Train: {} secuencias — Test: {} secuencias", seq_train.len(), seq_test.len());
+    println!();
+    separador("Entrenando RNN...");
+
+    let mut rnn = RNN::nueva(tipo, 1, hidden, 1, lr, 42);
+    rnn.resumen();
+    println!();
+
+    rnn.entrenar(seq_train, obj_train, epocas);
+
+    // Evaluar
+    let mut error_test = 0.0;
+    for (seq, obj) in seq_test.iter().zip(obj_test) {
+        let pred = rnn.predecir(seq);
+        let err: f64 = pred.iter().zip(obj).map(|(p, t)| (p - t).powi(2)).sum::<f64>();
+        error_test += err;
+    }
+    let mse_test = error_test / seq_test.len() as f64;
+
+    println!();
+    println!("  {} MSE test: {:.6}", "✓".green(), mse_test);
+
+    // Mostrar algunas predicciones
+    println!();
+    println!("  Ejemplo de predicciones:");
+    for i in 0..5.min(seq_test.len()) {
+        let pred = rnn.predecir(&seq_test[i]);
+        println!("    Objetivo: {:.3} → Predicción: {:.3}",
+            obj_test[i][0], pred[0]);
+    }
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("RNN — secuencias temporales"),
+        tipo: TipoModelo::RNN(rnn),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: None,
+        precision_test: None,
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+// ── Aprendizaje por Refuerzo ──
+
+fn menu_ml_rl(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("🎮 APRENDIZAJE POR REFUERZO");
+
+        let opciones = &[
+            "🗺️   Q-Learning en GridWorld",
+            "🎰  Multi-Armed Bandit",
+            "🔙  Volver",
+        ];
+
+        match menu("Selecciona entorno:", opciones) {
+            Some(0) => menu_ml_rl_gridworld(state),
+            Some(1) => menu_ml_rl_bandit(state),
+            _ => return,
+        }
+    }
+}
+
+fn menu_ml_rl_gridworld(state: &mut AppState) {
+    limpiar();
+    separador("🗺️ Q-LEARNING — GRIDWORLD");
+
+    let filas = pedir_usize("Filas del grid", 5);
+    let cols = pedir_usize("Columnas del grid", 5);
+    let meta = (filas - 1, cols - 1);
+
+    println!("  Meta: ({}, {})", meta.0, meta.1);
+    let num_obs = pedir_usize("Número de obstáculos aleatorios", 3);
+
+    let mut rng = Rng::new(42);
+    let mut obstaculos = Vec::new();
+    for _ in 0..num_obs {
+        loop {
+            let pos = (rng.usize_rango(filas), rng.usize_rango(cols));
+            if pos != (0, 0) && pos != meta && !obstaculos.contains(&pos) {
+                obstaculos.push(pos);
+                break;
+            }
+        }
+    }
+    println!("  Obstáculos: {:?}", obstaculos);
+
+    let alpha = pedir_f64("Alpha (aprendizaje)", 0.1);
+    let gamma = pedir_f64("Gamma (descuento)", 0.99);
+    let epsilon = pedir_f64("Epsilon inicial", 1.0);
+    let episodios = pedir_usize("Episodios", 5000);
+
+    let mut grid = GridWorld::nuevo(filas, cols, meta).con_obstaculos(obstaculos);
+    let mut q = QTable::nueva(4, alpha, gamma, epsilon); // 4 acciones: ↑↓←→
+
+    println!();
+    separador("Entrenando agente Q-Learning...");
+
+    grid.entrenar_agente(&mut q, episodios, filas * cols * 2);
+
+    q.resumen();
+    println!();
+    println!("  Política aprendida:");
+    grid.mostrar_politica(&q);
+
+    let modelo = ModeloML {
+        id: uuid::Uuid::new_v4().to_string(),
+        nombre: format!("Q-Learning — Grid {}x{}", filas, cols),
+        tipo: TipoModelo::QLearning(q),
+        creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        precision_train: None,
+        precision_test: None,
+    };
+    state.ml.agregar_modelo(modelo);
+    println!("  {} Modelo guardado", "✓".green());
+    pausa();
+}
+
+fn menu_ml_rl_bandit(_state: &mut AppState) {
+    limpiar();
+    separador("🎰 MULTI-ARMED BANDIT");
+
+    let n_brazos = pedir_usize("Número de brazos", 5);
+    let episodios = pedir_usize("Episodios", 10000);
+    let epsilon = pedir_f64("Epsilon (exploración)", 0.1);
+
+    let mut rng = Rng::new(42);
+    let probs: Vec<f64> = (0..n_brazos).map(|_| rng.rango(0.1, 0.9)).collect();
+    println!();
+    println!("  Probabilidades reales (ocultas): {:?}", probs.iter().map(|p| format!("{:.2}", p)).collect::<Vec<_>>());
+
+    let mut bandit = MultiBandit::nuevo(probs.clone());
+
+    println!();
+    separador("Entrenando ε-greedy...");
+
+    let historial = bandit.entrenar_epsilon_greedy(episodios, epsilon);
+
+    println!();
+    println!("  Resultados tras {} episodios:", episodios);
+    for i in 0..n_brazos {
+        let ratio = if bandit.conteos[i] > 0 {
+            bandit.recompensas_acumuladas[i] / bandit.conteos[i] as f64
+        } else { 0.0 };
+        println!("    Brazo {}: prob real={:.2}, tiradas={}, ratio ganancia={:.3}",
+            i, probs[i], bandit.conteos[i], ratio);
+    }
+
+    let mejor_real = bandit.mejor_brazo();
+    let mas_tirado = bandit.conteos.iter().enumerate().max_by_key(|(_, &c)| c).map(|(i, _)| i).unwrap_or(0);
+
+    println!();
+    println!("  {} Mejor brazo real: {} — Más explotado: {}",
+        if mejor_real == mas_tirado { "✓".green() } else { "⚠".yellow() },
+        mejor_real, mas_tirado);
+
+    if let Some(ultimo) = historial.last() {
+        println!("  Recompensa promedio final: {:.4}", ultimo);
+    }
+
+    pausa();
+}
+
+// ── Ver modelos ──
+
+fn menu_ml_ver_modelos(state: &mut AppState) {
+    limpiar();
+    separador("📊 MODELOS ENTRENADOS");
+
+    if state.ml.modelos.is_empty() {
+        println!("  No hay modelos entrenados aún.");
+        pausa();
+        return;
+    }
+
+    for (i, m) in state.ml.modelos.iter().enumerate() {
+        let tipo_str = match &m.tipo {
+            TipoModelo::ANN(_) => "ANN",
+            TipoModelo::SVM(_) => "SVM",
+            TipoModelo::SVMMulti(_) => "SVM Multi",
+            TipoModelo::ArbolDecision(_) => "Árbol de Decisión",
+            TipoModelo::BosqueAleatorio(_) => "Bosque Aleatorio",
+            TipoModelo::DNN(_) => "DNN",
+            TipoModelo::CNN(_) => "CNN",
+            TipoModelo::RNN(_) => "RNN",
+            TipoModelo::QLearning(_) => "Q-Learning",
+        };
+
+        println!("  {}. {} [{}]", (i + 1).to_string().cyan(), m.nombre, tipo_str.yellow());
+        println!("     Creado: {}", m.creado);
+        if let Some(pt) = m.precision_train {
+            println!("     Precisión train: {:.2}%", pt * 100.0);
+        }
+        if let Some(pe) = m.precision_test {
+            println!("     Precisión test:  {:.2}%", pe * 100.0);
+        }
+        println!();
+    }
+
+    let opciones = &["🔍  Ver detalles de un modelo", "🗑️   Eliminar un modelo", "🔙  Volver"];
+    match menu("Acciones:", opciones) {
+        Some(0) => {
+            let nombres: Vec<String> = state.ml.modelos.iter().map(|m| m.nombre.clone()).collect();
+            let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+            if let Some(idx) = menu("Selecciona modelo:", &refs) {
+                println!();
+                match &state.ml.modelos[idx].tipo {
+                    TipoModelo::ANN(m) => m.resumen(),
+                    TipoModelo::SVM(m) => m.resumen(),
+                    TipoModelo::SVMMulti(_) => println!("  SVM Multiclase"),
+                    TipoModelo::ArbolDecision(m) => m.resumen(),
+                    TipoModelo::BosqueAleatorio(m) => m.resumen(),
+                    TipoModelo::DNN(m) => m.resumen(),
+                    TipoModelo::CNN(m) => m.resumen(),
+                    TipoModelo::RNN(m) => m.resumen(),
+                    TipoModelo::QLearning(m) => m.resumen(),
+                }
+                pausa();
+            }
+        }
+        Some(1) => {
+            let nombres: Vec<String> = state.ml.modelos.iter().map(|m| m.nombre.clone()).collect();
+            let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+            if let Some(idx) = menu("Eliminar modelo:", &refs) {
+                let nombre = state.ml.modelos[idx].nombre.clone();
+                state.ml.modelos.remove(idx);
+                println!("  {} Modelo '{}' eliminado", "✓".green(), nombre);
+                pausa();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn main() {
     let mut state = match AppState::cargar() {
         Ok(s) => s,
@@ -4633,6 +5750,7 @@ fn main() {
             "🧠  Memoria (Buscar y conectar todo)",
             "🔗  Sincronización (Calendario y Email)",
             "📄  Reportes (Diario / Semanal)",
+            "🤖  Inteligencia Artificial (ML)",
             "❌  Salir",
         ];
 
@@ -4646,6 +5764,7 @@ fn main() {
             Some(6) => menu_memoria(&mut state),
             Some(7) => menu_sync(&mut state),
             Some(8) => menu_reportes(&mut state),
+            Some(9) => menu_ml(&mut state),
             _ => {
                 // Guardar antes de salir
                 if let Err(e) = state.guardar() {

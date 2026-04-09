@@ -1,6 +1,7 @@
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Un enlace entre cualquier elemento del sistema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +50,9 @@ pub struct Memoria {
     pub enlaces: Vec<Enlace>,
     /// Mapa de palabras clave → IDs de recuerdos para búsqueda rápida
     pub indice: HashMap<String, Vec<String>>,
+    /// Diccionario neuronal de ideas interconectadas
+    #[serde(default)]
+    pub diccionario: Diccionario,
 }
 
 impl Memoria {
@@ -57,6 +61,7 @@ impl Memoria {
             recuerdos: Vec::new(),
             enlaces: Vec::new(),
             indice: HashMap::new(),
+            diccionario: Diccionario::new(),
         }
     }
 
@@ -192,5 +197,145 @@ impl Memoria {
             .iter()
             .filter(|r| r.palabras_clave.contains(&p))
             .collect()
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Diccionario Neuronal de Ideas
+// ══════════════════════════════════════════════════════════════
+
+/// Una conexión neuronal entre dos ideas/palabras clave
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConexionIdea {
+    pub palabra_a: String,
+    pub palabra_b: String,
+    pub fuerza: u32,        // se incrementa cada vez que co-ocurren
+    pub contexto: Vec<String>, // breves notas de por qué se conectaron
+}
+
+/// Diccionario neuronal: mapa de ideas interconectadas que crece con el uso
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Diccionario {
+    /// Todas las conexiones entre pares de palabras
+    pub conexiones: Vec<ConexionIdea>,
+    /// Mapa rápido: palabra → índices de conexiones donde aparece
+    pub grafo: HashMap<String, Vec<usize>>,
+    /// Historial: qué tareas/items generaron qué ideas
+    pub historial: Vec<EntradaDiccionario>,
+}
+
+/// Registro de cuándo y por qué se agregó una idea
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntradaDiccionario {
+    pub palabras: Vec<String>,
+    pub modulo: String,       // "tarea", "evento", etc.
+    pub item_id: String,
+    pub item_titulo: String,
+    pub nota: String,         // contexto libre del usuario
+    pub creado: NaiveDateTime,
+}
+
+impl Diccionario {
+    pub fn new() -> Self {
+        Diccionario {
+            conexiones: Vec::new(),
+            grafo: HashMap::new(),
+            historial: Vec::new(),
+        }
+    }
+
+    /// Registrar un conjunto de palabras como conectadas entre sí (grafo completo entre ellas)
+    pub fn conectar_palabras(&mut self, palabras: &[String], contexto: &str) {
+        let palabras_lc: Vec<String> = palabras.iter().map(|p| p.to_lowercase()).collect();
+        for i in 0..palabras_lc.len() {
+            for j in (i + 1)..palabras_lc.len() {
+                let a = &palabras_lc[i];
+                let b = &palabras_lc[j];
+                self.reforzar_o_crear(a, b, contexto);
+            }
+        }
+    }
+
+    /// Reforzar conexión existente o crear nueva, con contexto
+    fn reforzar_o_crear(&mut self, a: &str, b: &str, contexto: &str) {
+        let idx = self.reforzar_o_crear_idx(a, b);
+        if !contexto.is_empty() && !self.conexiones[idx].contexto.contains(&contexto.to_string()) {
+            self.conexiones[idx].contexto.push(contexto.to_string());
+        }
+    }
+
+    fn reforzar_o_crear_idx(&mut self, a: &str, b: &str) -> usize {
+        if let Some(idx) = self.conexiones.iter().position(|c| {
+            (c.palabra_a == a && c.palabra_b == b) || (c.palabra_a == b && c.palabra_b == a)
+        }) {
+            self.conexiones[idx].fuerza += 1;
+            idx
+        } else {
+            let idx = self.conexiones.len();
+            self.conexiones.push(ConexionIdea {
+                palabra_a: a.to_string(),
+                palabra_b: b.to_string(),
+                fuerza: 1,
+                contexto: Vec::new(),
+            });
+            self.grafo.entry(a.to_string()).or_default().push(idx);
+            self.grafo.entry(b.to_string()).or_default().push(idx);
+            idx
+        }
+    }
+
+    /// Registrar una entrada de historial
+    pub fn registrar(&mut self, modulo: &str, item_id: &str, titulo: &str, palabras: &[String], nota: &str) {
+        self.historial.push(EntradaDiccionario {
+            palabras: palabras.to_vec(),
+            modulo: modulo.to_string(),
+            item_id: item_id.to_string(),
+            item_titulo: titulo.to_string(),
+            nota: nota.to_string(),
+            creado: chrono::Local::now().naive_local(),
+        });
+        // Conectar todas las palabras entre sí
+        self.conectar_palabras(palabras, nota);
+    }
+
+    /// Obtener ideas relacionadas a una palabra (vecinos en el grafo)
+    pub fn ideas_relacionadas(&self, palabra: &str) -> Vec<(&str, u32)> {
+        let p = palabra.to_lowercase();
+        let mut resultado: Vec<(&str, u32)> = Vec::new();
+        if let Some(indices) = self.grafo.get(&p) {
+            for &idx in indices {
+                let c = &self.conexiones[idx];
+                let otra = if c.palabra_a == p { &c.palabra_b } else { &c.palabra_a };
+                resultado.push((otra.as_str(), c.fuerza));
+            }
+        }
+        resultado.sort_by(|a, b| b.1.cmp(&a.1)); // más fuertes primero
+        resultado
+    }
+
+    /// Sugerir conexiones: dado un set de palabras, buscar qué otras ideas se relacionan
+    pub fn sugerir(&self, palabras: &[String]) -> Vec<(String, u32)> {
+        let input_set: HashSet<String> = palabras.iter().map(|p| p.to_lowercase()).collect();
+        let mut scores: HashMap<String, u32> = HashMap::new();
+        for p in &input_set {
+            for (rel, fuerza) in self.ideas_relacionadas(p) {
+                if !input_set.contains(rel) {
+                    *scores.entry(rel.to_string()).or_default() += fuerza;
+                }
+            }
+        }
+        let mut resultado: Vec<(String, u32)> = scores.into_iter().collect();
+        resultado.sort_by(|a, b| b.1.cmp(&a.1));
+        resultado
+    }
+
+    /// Todas las palabras únicas en el diccionario
+    pub fn todas_las_ideas(&self) -> Vec<&String> {
+        self.grafo.keys().collect()
+    }
+
+    /// Historial de un módulo específico
+    pub fn historial_modulo(&self, modulo: &str) -> Vec<&EntradaDiccionario> {
+        self.historial.iter().filter(|e| e.modulo == modulo).collect()
     }
 }

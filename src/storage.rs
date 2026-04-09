@@ -10,6 +10,7 @@ use crate::vcs::DataVcs;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
 use crate::sync::SyncConfig;
+use crate::ml::AlmacenML;
 
 /// Estado completo de la aplicación (persistible)
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,6 +25,8 @@ pub struct AppState {
     pub memoria: Memoria,
     #[serde(default)]
     pub sync: SyncConfig,
+    #[serde(default)]
+    pub ml: AlmacenML,
 }
 
 impl AppState {
@@ -37,6 +40,7 @@ impl AppState {
             mapper: Mapper::new(),
             memoria: Memoria::new(),
             sync: SyncConfig::default(),
+            ml: AlmacenML::default(),
         }
     }
 
