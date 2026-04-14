@@ -1,3 +1,8 @@
+//! Álgebra lineal minimal — matrices, activaciones, funciones de pérdida y RNG.
+//!
+//! Provee [`Matriz`] con operaciones básicas (mul, hadamard, transpuesta),
+//! 6 funciones de [`Activacion`] y 2 funciones de [`Perdida`].
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -14,7 +19,11 @@ pub struct Matriz {
 
 impl Matriz {
     pub fn nueva(filas: usize, cols: usize) -> Self {
-        Self { filas, cols, datos: vec![0.0; filas * cols] }
+        Self {
+            filas,
+            cols,
+            datos: vec![0.0; filas * cols],
+        }
     }
 
     pub fn desde_vec(filas: usize, cols: usize, datos: Vec<f64>) -> Self {
@@ -31,7 +40,9 @@ impl Matriz {
 
     pub fn identidad(n: usize) -> Self {
         let mut m = Self::nueva(n, n);
-        for i in 0..n { m.set(i, i, 1.0); }
+        for i in 0..n {
+            m.set(i, i, 1.0);
+        }
         m
     }
 
@@ -64,7 +75,10 @@ impl Matriz {
     }
 
     pub fn mul(&self, otra: &Matriz) -> Self {
-        assert_eq!(self.cols, otra.filas, "Dimensiones incompatibles para multiplicación");
+        assert_eq!(
+            self.cols, otra.filas,
+            "Dimensiones incompatibles para multiplicación"
+        );
         let mut res = Self::nueva(self.filas, otra.cols);
         for i in 0..self.filas {
             for j in 0..otra.cols {
@@ -88,32 +102,67 @@ impl Matriz {
     pub fn sumar(&self, otra: &Matriz) -> Self {
         assert_eq!(self.filas, otra.filas);
         assert_eq!(self.cols, otra.cols);
-        let datos: Vec<f64> = self.datos.iter().zip(&otra.datos).map(|(a, b)| a + b).collect();
-        Self { filas: self.filas, cols: self.cols, datos }
+        let datos: Vec<f64> = self
+            .datos
+            .iter()
+            .zip(&otra.datos)
+            .map(|(a, b)| a + b)
+            .collect();
+        Self {
+            filas: self.filas,
+            cols: self.cols,
+            datos,
+        }
     }
 
     pub fn restar(&self, otra: &Matriz) -> Self {
         assert_eq!(self.filas, otra.filas);
         assert_eq!(self.cols, otra.cols);
-        let datos: Vec<f64> = self.datos.iter().zip(&otra.datos).map(|(a, b)| a - b).collect();
-        Self { filas: self.filas, cols: self.cols, datos }
+        let datos: Vec<f64> = self
+            .datos
+            .iter()
+            .zip(&otra.datos)
+            .map(|(a, b)| a - b)
+            .collect();
+        Self {
+            filas: self.filas,
+            cols: self.cols,
+            datos,
+        }
     }
 
     pub fn escalar(&self, k: f64) -> Self {
         let datos: Vec<f64> = self.datos.iter().map(|x| x * k).collect();
-        Self { filas: self.filas, cols: self.cols, datos }
+        Self {
+            filas: self.filas,
+            cols: self.cols,
+            datos,
+        }
     }
 
     pub fn hadamard(&self, otra: &Matriz) -> Self {
         assert_eq!(self.filas, otra.filas);
         assert_eq!(self.cols, otra.cols);
-        let datos: Vec<f64> = self.datos.iter().zip(&otra.datos).map(|(a, b)| a * b).collect();
-        Self { filas: self.filas, cols: self.cols, datos }
+        let datos: Vec<f64> = self
+            .datos
+            .iter()
+            .zip(&otra.datos)
+            .map(|(a, b)| a * b)
+            .collect();
+        Self {
+            filas: self.filas,
+            cols: self.cols,
+            datos,
+        }
     }
 
     pub fn aplicar<F: Fn(f64) -> f64>(&self, f: F) -> Self {
         let datos: Vec<f64> = self.datos.iter().map(|&x| f(x)).collect();
-        Self { filas: self.filas, cols: self.cols, datos }
+        Self {
+            filas: self.filas,
+            cols: self.cols,
+            datos,
+        }
     }
 
     pub fn sumar_fila(&self, fila_vec: &[f64]) -> Self {
@@ -156,7 +205,9 @@ impl Matriz {
         for f in f_ini..f_fin {
             for c in c_ini..c_fin {
                 let v = self.get(f, c);
-                if v > mx { mx = v; }
+                if v > mx {
+                    mx = v;
+                }
             }
         }
         mx
@@ -166,7 +217,9 @@ impl Matriz {
 impl fmt::Display for Matriz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for i in 0..self.filas {
-            let vals: Vec<String> = (0..self.cols).map(|j| format!("{:8.4}", self.get(i, j))).collect();
+            let vals: Vec<String> = (0..self.cols)
+                .map(|j| format!("{:8.4}", self.get(i, j)))
+                .collect();
             writeln!(f, "│ {} │", vals.join(" "))?;
         }
         Ok(())
@@ -210,7 +263,9 @@ impl Activacion {
             Activacion::LeakyReLU => m.aplicar(|x| if x > 0.0 { 1.0 } else { 0.01 }),
             Activacion::Lineal => Matriz::desde_vec(m.filas, m.cols, vec![1.0; m.filas * m.cols]),
             Activacion::Softmax => {
-                Matriz::desde_vec(m.filas, m.cols, vec![1.0; m.filas * m.cols])
+                // Diagonal del Jacobiano: s_i * (1 - s_i)
+                let s = softmax_matriz(m);
+                s.hadamard(&s.aplicar(|x| 1.0 - x))
             }
         }
     }
@@ -278,9 +333,9 @@ impl Perdida {
 
     pub fn gradiente(&self, prediccion: &Matriz, objetivo: &Matriz) -> Matriz {
         match self {
-            Perdida::MSE => {
-                prediccion.restar(objetivo).escalar(2.0 / prediccion.filas as f64)
-            }
+            Perdida::MSE => prediccion
+                .restar(objetivo)
+                .escalar(2.0 / prediccion.filas as f64),
             Perdida::CrossEntropy => {
                 let eps = 1e-12;
                 let n = prediccion.filas as f64;
@@ -290,7 +345,11 @@ impl Perdida {
                     .zip(&objetivo.datos)
                     .map(|(&p, &y)| (p - y) / ((p + eps) * (1.0 - p + eps) * n))
                     .collect();
-                Matriz { filas: prediccion.filas, cols: prediccion.cols, datos }
+                Matriz {
+                    filas: prediccion.filas,
+                    cols: prediccion.cols,
+                    datos,
+                }
             }
         }
     }
@@ -300,6 +359,11 @@ impl Perdida {
 //  RNG simple (xoshiro256**)  — sin dependencias externas
 // ══════════════════════════════════════════════════════════════
 
+/// Generador pseudoaleatorio xoshiro256** para ML.
+///
+/// **NOTA DE SEGURIDAD:** Este RNG NO es criptográficamente seguro.
+/// Solo debe usarse para inicialización de pesos, shuffle de datasets
+/// y operaciones de entrenamiento. Para criptografía usar `rand::rngs::OsRng`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Rng {
     s: [u64; 4],
@@ -307,12 +371,19 @@ pub struct Rng {
 
 impl Rng {
     pub fn new(seed: u64) -> Self {
-        let mut s = [seed, seed.wrapping_mul(6364136223846793005).wrapping_add(1),
-                     seed.wrapping_mul(1442695040888963407).wrapping_add(3),
-                     seed.wrapping_mul(3935559000370003845).wrapping_add(7)];
-        if s.iter().all(|&x| x == 0) { s[0] = 1; }
+        let mut s = [
+            seed,
+            seed.wrapping_mul(6364136223846793005).wrapping_add(1),
+            seed.wrapping_mul(1442695040888963407).wrapping_add(3),
+            seed.wrapping_mul(3935559000370003845).wrapping_add(7),
+        ];
+        if s.iter().all(|&x| x == 0) {
+            s[0] = 1;
+        }
         let mut rng = Self { s };
-        for _ in 0..20 { rng.next_u64(); }
+        for _ in 0..20 {
+            rng.next_u64();
+        }
         rng
     }
 
@@ -381,7 +452,9 @@ pub fn norma(v: &[f64]) -> f64 {
 
 pub fn one_hot(clase: usize, total: usize) -> Vec<f64> {
     let mut v = vec![0.0; total];
-    if clase < total { v[clase] = 1.0; }
+    if clase < total {
+        v[clase] = 1.0;
+    }
     v
 }
 

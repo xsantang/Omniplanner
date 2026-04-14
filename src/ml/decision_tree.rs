@@ -1,6 +1,6 @@
+use super::linalg::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use super::linalg::Rng;
 
 // ══════════════════════════════════════════════════════════════
 //  Árbol de Decisión — clasificación (CART con Gini)
@@ -60,24 +60,39 @@ impl ArbolDecision {
         self.raiz = Some(self.construir(x, y, 0, rng));
     }
 
-    fn construir(&self, x: &[Vec<f64>], y: &[usize], profundidad: usize, rng: &mut Rng) -> NodoArbol {
+    fn construir(
+        &self,
+        x: &[Vec<f64>],
+        y: &[usize],
+        profundidad: usize,
+        rng: &mut Rng,
+    ) -> NodoArbol {
         let n = y.len();
 
         // Distribución de clases
         let mut conteo = vec![0usize; self.num_clases];
-        for &yi in y { conteo[yi] += 1; }
+        for &yi in y {
+            conteo[yi] += 1;
+        }
         let total = n as f64;
         let distribucion: Vec<f64> = conteo.iter().map(|&c| c as f64 / total).collect();
 
         // Condiciones hoja
-        let clase_mayoritaria = conteo.iter().enumerate()
-            .max_by_key(|(_, &c)| c).map(|(i, _)| i).unwrap_or(0);
+        let clase_mayoritaria = conteo
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &c)| c)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
 
         if profundidad >= self.max_profundidad
             || n < self.min_muestras_split
             || conteo.iter().filter(|&&c| c > 0).count() <= 1
         {
-            return NodoArbol::Hoja { clase: clase_mayoritaria, distribucion };
+            return NodoArbol::Hoja {
+                clase: clase_mayoritaria,
+                distribucion,
+            };
         }
 
         // Seleccionar features candidatos
@@ -103,7 +118,8 @@ impl ArbolDecision {
             for i in 0..valores.len().saturating_sub(1) {
                 let umbral = (valores[i] + valores[i + 1]) / 2.0;
 
-                let (mut izq_conteo, mut der_conteo) = (vec![0usize; self.num_clases], vec![0usize; self.num_clases]);
+                let (mut izq_conteo, mut der_conteo) =
+                    (vec![0usize; self.num_clases], vec![0usize; self.num_clases]);
                 let (mut n_izq, mut n_der) = (0usize, 0usize);
 
                 for (j, xi) in x.iter().enumerate() {
@@ -116,7 +132,9 @@ impl ArbolDecision {
                     }
                 }
 
-                if n_izq == 0 || n_der == 0 { continue; }
+                if n_izq == 0 || n_der == 0 {
+                    continue;
+                }
 
                 let gini_izq = gini_impureza(&izq_conteo, n_izq);
                 let gini_der = gini_impureza(&der_conteo, n_der);
@@ -132,7 +150,10 @@ impl ArbolDecision {
 
         // Si no mejoró, crear hoja
         if mejor_gini >= gini_impureza(&conteo, n) - 1e-10 {
-            return NodoArbol::Hoja { clase: clase_mayoritaria, distribucion };
+            return NodoArbol::Hoja {
+                clase: clase_mayoritaria,
+                distribucion,
+            };
         }
 
         // Particionar
@@ -174,7 +195,11 @@ impl ArbolDecision {
     }
 
     pub fn precision(&self, x: &[Vec<f64>], y: &[usize]) -> f64 {
-        let correctas = x.iter().zip(y).filter(|(xi, &yi)| self.predecir(xi) == yi).count();
+        let correctas = x
+            .iter()
+            .zip(y)
+            .filter(|(xi, &yi)| self.predecir(xi) == yi)
+            .count();
         correctas as f64 / y.len() as f64
     }
 
@@ -213,7 +238,12 @@ impl ArbolDecision {
 fn predecir_nodo(nodo: &NodoArbol, x: &[f64]) -> usize {
     match nodo {
         NodoArbol::Hoja { clase, .. } => *clase,
-        NodoArbol::Interno { feature, umbral, izquierda, derecha } => {
+        NodoArbol::Interno {
+            feature,
+            umbral,
+            izquierda,
+            derecha,
+        } => {
             if x[*feature] <= *umbral {
                 predecir_nodo(izquierda, x)
             } else {
@@ -226,7 +256,12 @@ fn predecir_nodo(nodo: &NodoArbol, x: &[f64]) -> usize {
 fn probabilidad_nodo(nodo: &NodoArbol, x: &[f64]) -> Vec<f64> {
     match nodo {
         NodoArbol::Hoja { distribucion, .. } => distribucion.clone(),
-        NodoArbol::Interno { feature, umbral, izquierda, derecha } => {
+        NodoArbol::Interno {
+            feature,
+            umbral,
+            izquierda,
+            derecha,
+        } => {
             if x[*feature] <= *umbral {
                 probabilidad_nodo(izquierda, x)
             } else {
@@ -239,23 +274,29 @@ fn probabilidad_nodo(nodo: &NodoArbol, x: &[f64]) -> Vec<f64> {
 fn profundidad_nodo(nodo: &NodoArbol) -> usize {
     match nodo {
         NodoArbol::Hoja { .. } => 1,
-        NodoArbol::Interno { izquierda, derecha, .. } => {
-            1 + profundidad_nodo(izquierda).max(profundidad_nodo(derecha))
-        }
+        NodoArbol::Interno {
+            izquierda, derecha, ..
+        } => 1 + profundidad_nodo(izquierda).max(profundidad_nodo(derecha)),
     }
 }
 
 fn contar_hojas(nodo: &NodoArbol) -> usize {
     match nodo {
         NodoArbol::Hoja { .. } => 1,
-        NodoArbol::Interno { izquierda, derecha, .. } => {
-            contar_hojas(izquierda) + contar_hojas(derecha)
-        }
+        NodoArbol::Interno {
+            izquierda, derecha, ..
+        } => contar_hojas(izquierda) + contar_hojas(derecha),
     }
 }
 
 fn contar_features(nodo: &NodoArbol, conteo: &mut HashMap<usize, usize>) {
-    if let NodoArbol::Interno { feature, izquierda, derecha, .. } = nodo {
+    if let NodoArbol::Interno {
+        feature,
+        izquierda,
+        derecha,
+        ..
+    } = nodo
+    {
         *conteo.entry(*feature).or_insert(0) += 1;
         contar_features(izquierda, conteo);
         contar_features(derecha, conteo);
@@ -263,7 +304,15 @@ fn contar_features(nodo: &NodoArbol, conteo: &mut HashMap<usize, usize>) {
 }
 
 fn gini_impureza(conteo: &[usize], total: usize) -> f64 {
-    if total == 0 { return 0.0; }
+    if total == 0 {
+        return 0.0;
+    }
     let t = total as f64;
-    1.0 - conteo.iter().map(|&c| { let p = c as f64 / t; p * p }).sum::<f64>()
+    1.0 - conteo
+        .iter()
+        .map(|&c| {
+            let p = c as f64 / t;
+            p * p
+        })
+        .sum::<f64>()
 }

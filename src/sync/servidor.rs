@@ -3,10 +3,10 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 
-use chrono::{Datelike, Local, Duration};
+use chrono::{Datelike, Duration, Local};
 
-use crate::tasks::{TaskStatus, Prioridad};
 use crate::storage::AppState;
+use crate::tasks::{Prioridad, TaskStatus};
 
 /// Datos serializados para el dashboard (snapshot del estado)
 pub struct DashboardData {
@@ -25,7 +25,9 @@ pub fn generar_dashboard_html(state: &AppState) -> String {
     let pendientes = state.tasks.listar_pendientes();
     let eventos_hoy = state.agenda.eventos_del_dia(hoy);
     let horarios = state.agenda.horarios_del_dia(hoy.weekday());
-    let follow_ups: Vec<_> = state.tasks.listar_follow_ups()
+    let follow_ups: Vec<_> = state
+        .tasks
+        .listar_follow_ups()
         .into_iter()
         .filter(|t| t.follow_up.map(|f| f.date() == hoy).unwrap_or(false))
         .collect();
@@ -276,7 +278,10 @@ body {{
         html.push_str(r#"<div class="empty">Sin eventos para hoy</div>"#);
     } else {
         for e in &eventos_hoy {
-            let fin = e.hora_fin.map(|h| format!(" - {}", h.format("%H:%M"))).unwrap_or_default();
+            let fin = e
+                .hora_fin
+                .map(|h| format!(" - {}", h.format("%H:%M")))
+                .unwrap_or_default();
             html.push_str(&format!(
                 r#"<div class="item">
                     <span class="time">{hora}{fin}</span>
@@ -339,7 +344,10 @@ body {{
 
         html.push_str(&format!(
             r#"<div class="week-day"><h3>{nombre} {d} de {mes}{marker}</h3>"#,
-            nombre = nombre, d = dia_sem.day(), mes = mes_d, marker = marker
+            nombre = nombre,
+            d = dia_sem.day(),
+            mes = mes_d,
+            marker = marker
         ));
 
         let tareas_dia = state.tasks.listar_por_fecha(dia_sem);
@@ -363,14 +371,18 @@ body {{
                     <span class="title">{titulo} [{prio}]</span>
                 </div>"#,
                 hora = t.hora.format("%H:%M"),
-                bc = badge_class, bt = badge_text,
+                bc = badge_class,
+                bt = badge_text,
                 titulo = html_escape(&t.titulo),
                 prio = t.prioridad,
             ));
         }
 
         for e in &eventos_dia {
-            let fin = e.hora_fin.map(|h| format!("-{}", h.format("%H:%M"))).unwrap_or_default();
+            let fin = e
+                .hora_fin
+                .map(|h| format!("-{}", h.format("%H:%M")))
+                .unwrap_or_default();
             html.push_str(&format!(
                 r#"<div class="item">
                     <span class="time">{hora}{fin}</span>
@@ -406,7 +418,8 @@ body {{
                 Prioridad::Media => "badge-media",
                 Prioridad::Baja => "badge-baja",
             };
-            let fu = t.follow_up
+            let fu = t
+                .follow_up
                 .map(|f| format!(" 🔔 {}", f.format("%d/%m %H:%M")))
                 .unwrap_or_default();
             html.push_str(&format!(
@@ -420,8 +433,10 @@ body {{
                 hora = t.hora.format("%H:%M"),
                 titulo = html_escape(&t.titulo),
                 fu = fu,
-                bc = badge_class, bt = badge_text,
-                pc = prio_class, prio = t.prioridad,
+                bc = badge_class,
+                bt = badge_text,
+                pc = prio_class,
+                prio = t.prioridad,
             ));
         }
     }
@@ -434,7 +449,10 @@ body {{
         html.push_str(r#"<div class="empty">Sin eventos registrados</div>"#);
     } else {
         for e in &state.agenda.eventos {
-            let fin = e.hora_fin.map(|h| format!(" - {}", h.format("%H:%M"))).unwrap_or_default();
+            let fin = e
+                .hora_fin
+                .map(|h| format!(" - {}", h.format("%H:%M")))
+                .unwrap_or_default();
             html.push_str(&format!(
                 r#"<div class="item">
                     <span class="time">{fecha} {hora}{fin}</span>
@@ -452,7 +470,8 @@ body {{
     html.push_str("</div></div>");
 
     // JavaScript para tabs
-    html.push_str(r#"
+    html.push_str(
+        r#"
 <div class="footer">
   OmniPlanner — Auto-refresca cada 30 segundos<br>
   Abre esta URL desde cualquier dispositivo en la misma red WiFi
@@ -466,7 +485,8 @@ function showView(id) {
   event.target.classList.add('active');
 }
 </script>
-</body></html>"#);
+</body></html>"#,
+    );
 
     html
 }
@@ -507,10 +527,7 @@ pub fn iniciar_servidor(state: &AppState, puerto: u16) -> Result<String, String>
                             return;
                         }
 
-                        let path = request_line
-                            .split_whitespace()
-                            .nth(1)
-                            .unwrap_or("/");
+                        let path = request_line.split_whitespace().nth(1).unwrap_or("/");
 
                         // Leer el resto de los headers (para que no se quede colgado)
                         loop {
@@ -524,9 +541,7 @@ pub fn iniciar_servidor(state: &AppState, puerto: u16) -> Result<String, String>
                             "/api/state" | "/api/state.json" => {
                                 ("application/json; charset=utf-8", json.as_str().to_string())
                             }
-                            _ => {
-                                ("text/html; charset=utf-8", html.as_str().to_string())
-                            }
+                            _ => ("text/html; charset=utf-8", html.as_str().to_string()),
                         };
 
                         let response = format!(
@@ -556,9 +571,9 @@ fn detectar_ip_local() -> Option<String> {
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn nombre_dia(wd: chrono::Weekday) -> &'static str {
@@ -575,9 +590,18 @@ fn nombre_dia(wd: chrono::Weekday) -> &'static str {
 
 fn nombre_mes(m: u32) -> &'static str {
     match m {
-        1 => "Enero", 2 => "Febrero", 3 => "Marzo", 4 => "Abril",
-        5 => "Mayo", 6 => "Junio", 7 => "Julio", 8 => "Agosto",
-        9 => "Septiembre", 10 => "Octubre", 11 => "Noviembre", 12 => "Diciembre",
+        1 => "Enero",
+        2 => "Febrero",
+        3 => "Marzo",
+        4 => "Abril",
+        5 => "Mayo",
+        6 => "Junio",
+        7 => "Julio",
+        8 => "Agosto",
+        9 => "Septiembre",
+        10 => "Octubre",
+        11 => "Noviembre",
+        12 => "Diciembre",
         _ => "",
     }
 }

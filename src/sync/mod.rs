@@ -1,3 +1,8 @@
+//! Sincronización con servicios externos.
+//!
+//! Submódulos: Google Calendar, Google Drive, GitHub Gist, Email SMTP
+//! y servidor web local para dashboard.
+
 pub mod calendario;
 pub mod correo;
 pub mod drive;

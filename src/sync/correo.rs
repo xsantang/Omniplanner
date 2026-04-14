@@ -25,10 +25,7 @@ pub fn enviar_correo(config: &SyncConfig, asunto: &str, cuerpo: &str) -> Result<
         .body(cuerpo.to_string())
         .map_err(|e| format!("Error construyendo email: {}", e))?;
 
-    let creds = Credentials::new(
-        config.smtp_usuario.clone(),
-        config.smtp_password.clone(),
-    );
+    let creds = Credentials::new(config.smtp_usuario.clone(), config.smtp_password.clone());
 
     let mailer = SmtpTransport::relay(&config.smtp_server)
         .map_err(|e| format!("Error conectando SMTP: {}", e))?
@@ -187,18 +184,12 @@ pub fn enviar_resumen_diario(
         cuerpo.push_str("\n  Día libre — sin compromisos pendientes\n");
     }
 
-    cuerpo.push_str(
-        "\n───────────────────────────────────────\nEnviado por OmniPlanner\n",
-    );
+    cuerpo.push_str("\n───────────────────────────────────────\nEnviado por OmniPlanner\n");
 
     enviar_correo(config, &asunto, &cuerpo)
 }
 
-pub fn enviar_follow_up(
-    config: &SyncConfig,
-    tarea: &Task,
-    mensaje: &str,
-) -> Result<(), String> {
+pub fn enviar_follow_up(config: &SyncConfig, tarea: &Task, mensaje: &str) -> Result<(), String> {
     let asunto = format!("Follow-up: {}", tarea.titulo);
     let cuerpo = format!(
         "\

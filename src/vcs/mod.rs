@@ -1,3 +1,8 @@
+//! Control de versiones tipo Git — commits, ramas e historial.
+//!
+//! Cada [`Snapshot`] almacena el estado serializado con hash SHA-256.
+//! [`DataVcs`] gestiona ramas y permite checkout entre ellas.
+
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -189,5 +194,71 @@ impl DataVcs {
 impl Default for DataVcs {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vcs_commit_y_log() {
+        let mut vcs = DataVcs::new();
+        assert_eq!(vcs.rama_actual, "main");
+        assert!(vcs.ultimo_snapshot_id().is_none());
+
+        let id1 = vcs.commit("{\"v\":1}".into(), "inicial".into(), "test".into());
+        assert_eq!(vcs.log().len(), 1);
+        assert!(vcs.obtener(&id1).is_some());
+        assert_eq!(vcs.obtener(&id1).unwrap().mensaje, "inicial");
+
+        let id2 = vcs.commit("{\"v\":2}".into(), "segundo".into(), "test".into());
+        assert_eq!(vcs.log().len(), 2);
+        assert_eq!(vcs.obtener(&id2).unwrap().padre_id, Some(id1));
+    }
+
+    #[test]
+    fn test_vcs_ramas() {
+        let mut vcs = DataVcs::new();
+        vcs.commit("data1".into(), "c1".into(), "a".into());
+
+        assert!(vcs.crear_rama("feature".into()));
+        assert_eq!(vcs.rama_actual, "feature");
+        assert!(!vcs.crear_rama("feature".into())); // duplicada
+
+        vcs.commit("data2".into(), "c2 en feature".into(), "a".into());
+        assert_eq!(vcs.log().len(), 2); // hereda c1 + c2
+
+        assert!(vcs.cambiar_rama("main"));
+        assert_eq!(vcs.log().len(), 1); // solo c1
+        assert!(!vcs.cambiar_rama("noexiste"));
+    }
+
+    #[test]
+    fn test_vcs_hash_consistente() {
+        let s1 = Snapshot::new("mismos datos".into(), "m1".into(), "a".into(), None);
+        let s2 = Snapshot::new("mismos datos".into(), "m2".into(), "b".into(), None);
+        assert_eq!(s1.hash, s2.hash); // mismo dato = mismo hash
+
+        let s3 = Snapshot::new("otros datos".into(), "m3".into(), "a".into(), None);
+        assert_ne!(s1.hash, s3.hash); // distinto dato = distinto hash
+    }
+
+    #[test]
+    fn test_vcs_diff() {
+        let mut vcs = DataVcs::new();
+        let id1 = vcs.commit("linea1\nlinea2".into(), "v1".into(), "a".into());
+        let id2 = vcs.commit("linea1\nmodificada".into(), "v2".into(), "a".into());
+
+        let diff = vcs.diff(&id1, &id2).unwrap();
+        assert!(diff.contains("linea2"));
+        assert!(diff.contains("modificada"));
+
+        // diff consigo mismo
+        let same = vcs.diff(&id1, &id1).unwrap();
+        assert_eq!(same, "Sin cambios");
+
+        // diff con ID inexistente
+        assert!(vcs.diff(&id1, "noexiste").is_none());
     }
 }

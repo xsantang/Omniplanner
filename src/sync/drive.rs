@@ -30,10 +30,7 @@ pub fn drive_pull(config: &SyncConfig) -> Result<String, String> {
         return Err("No hay archivo de Drive configurado. Haz push primero.".to_string());
     }
 
-    let url = format!(
-        "{}/{}?alt=media",
-        DRIVE_API_URL, config.drive_file_id
-    );
+    let url = format!("{}/{}?alt=media", DRIVE_API_URL, config.drive_file_id);
 
     let resp = ureq::get(&url)
         .set("Authorization", &format!("Bearer {}", token))
@@ -135,10 +132,7 @@ fn drive_actualizar(token: &str, file_id: &str, json: &str) -> Result<String, St
         content = json
     );
 
-    let url = format!(
-        "{}/{}?uploadType=multipart",
-        DRIVE_UPLOAD_URL, file_id
-    );
+    let url = format!("{}/{}?uploadType=multipart", DRIVE_UPLOAD_URL, file_id);
 
     let resp = ureq::request("PATCH", &url)
         .set("Authorization", &format!("Bearer {}", token))

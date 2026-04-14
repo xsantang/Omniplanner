@@ -1,3 +1,8 @@
+//! Diagramas de flujo con exportación a Mermaid.js y pseudocódigo.
+//!
+//! Soporta nodos de varios tipos (inicio, fin, decisión, proceso),
+//! conexiones condicionales y validación de estructura.
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
@@ -65,7 +70,11 @@ impl Nodo {
 
 impl fmt::Display for Nodo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} [{}] ({:.0},{:.0})", self.tipo, self.etiqueta, self.x, self.y)
+        write!(
+            f,
+            "{} [{}] ({:.0},{:.0})",
+            self.tipo, self.etiqueta, self.x, self.y
+        )
     }
 }
 
@@ -137,7 +146,13 @@ impl Diagrama {
         id
     }
 
-    pub fn conectar(&mut self, origen_id: &str, destino_id: &str, tipo: TipoConexion, etiqueta: Option<String>) {
+    pub fn conectar(
+        &mut self,
+        origen_id: &str,
+        destino_id: &str,
+        tipo: TipoConexion,
+        etiqueta: Option<String>,
+    ) {
         self.conexiones.push(Conexion {
             origen_id: origen_id.to_string(),
             destino_id: destino_id.to_string(),
@@ -148,7 +163,8 @@ impl Diagrama {
 
     pub fn eliminar_nodo(&mut self, id: &str) {
         self.nodos.retain(|n| n.id != id);
-        self.conexiones.retain(|c| c.origen_id != id && c.destino_id != id);
+        self.conexiones
+            .retain(|c| c.origen_id != id && c.destino_id != id);
     }
 
     pub fn buscar_nodo(&self, id: &str) -> Option<&Nodo> {
@@ -171,9 +187,10 @@ impl Diagrama {
 
         // Verificar nodos huérfanos (sin conexiones)
         for nodo in &self.nodos {
-            let conectado = self.conexiones.iter().any(|c| {
-                c.origen_id == nodo.id || c.destino_id == nodo.id
-            });
+            let conectado = self
+                .conexiones
+                .iter()
+                .any(|c| c.origen_id == nodo.id || c.destino_id == nodo.id);
             if !conectado && self.nodos.len() > 1 {
                 errores.push(format!("Nodo huérfano: {} [{}]", nodo.etiqueta, nodo.id));
             }
@@ -188,7 +205,9 @@ impl Diagrama {
 
         for nodo in &self.nodos {
             let forma = match nodo.tipo {
-                TipoNodo::Inicio | TipoNodo::Fin => format!("    {}(({}))\n", nodo.id, nodo.etiqueta),
+                TipoNodo::Inicio | TipoNodo::Fin => {
+                    format!("    {}(({}))\n", nodo.id, nodo.etiqueta)
+                }
                 TipoNodo::Decision => format!("    {}{{{{{}}}}}\n", nodo.id, nodo.etiqueta),
                 TipoNodo::EntradaSalida => format!("    {}[/{}\\]\n", nodo.id, nodo.etiqueta),
                 TipoNodo::Subproceso => format!("    {}[[{}]]\n", nodo.id, nodo.etiqueta),
@@ -202,7 +221,10 @@ impl Diagrama {
             if label.is_empty() {
                 out.push_str(&format!("    {} --> {}\n", conn.origen_id, conn.destino_id));
             } else {
-                out.push_str(&format!("    {} -->|{}| {}\n", conn.origen_id, label, conn.destino_id));
+                out.push_str(&format!(
+                    "    {} -->|{}| {}\n",
+                    conn.origen_id, label, conn.destino_id
+                ));
             }
         }
 
@@ -234,7 +256,10 @@ impl Diagrama {
                     for conn in &self.conexiones {
                         if conn.origen_id == nodo.id {
                             if let Some(ref label) = conn.etiqueta {
-                                pseudo.push_str(&format!("    {}: ir a {}\n", label, conn.destino_id));
+                                pseudo.push_str(&format!(
+                                    "    {}: ir a {}\n",
+                                    label, conn.destino_id
+                                ));
                             }
                         }
                     }
@@ -249,5 +274,90 @@ impl Diagrama {
         }
 
         pseudo
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_diagrama_crud() {
+        let mut d = Diagrama::new("Test Flow".into(), TipoDiagrama::Flujo);
+        let inicio = Nodo::new(TipoNodo::Inicio, "Start".into(), 0.0, 0.0);
+        let fin = Nodo::new(TipoNodo::Fin, "End".into(), 0.0, 100.0);
+        let id_inicio = d.agregar_nodo(inicio);
+        let id_fin = d.agregar_nodo(fin);
+
+        assert_eq!(d.nodos.len(), 2);
+        assert!(d.buscar_nodo(&id_inicio).is_some());
+
+        d.conectar(&id_inicio, &id_fin, TipoConexion::Flecha, None);
+        assert_eq!(d.conexiones.len(), 1);
+
+        d.eliminar_nodo(&id_inicio);
+        assert_eq!(d.nodos.len(), 1);
+        assert_eq!(d.conexiones.len(), 0); // conexión eliminada en cascada
+    }
+
+    #[test]
+    fn test_diagrama_validar_flujo() {
+        let mut d = Diagrama::new("Incompleto".into(), TipoDiagrama::Flujo);
+        let errores = d.validar_flujo();
+        assert!(errores.iter().any(|e| e.contains("Inicio")));
+        assert!(errores.iter().any(|e| e.contains("Fin")));
+
+        let inicio = Nodo::new(TipoNodo::Inicio, "I".into(), 0.0, 0.0);
+        let fin = Nodo::new(TipoNodo::Fin, "F".into(), 0.0, 100.0);
+        let id_i = d.agregar_nodo(inicio);
+        let id_f = d.agregar_nodo(fin);
+        d.conectar(&id_i, &id_f, TipoConexion::Flecha, None);
+
+        let errores = d.validar_flujo();
+        assert!(errores.is_empty(), "Errores: {:?}", errores);
+    }
+
+    #[test]
+    fn test_diagrama_nodo_huerfano() {
+        let mut d = Diagrama::new("Huérfano".into(), TipoDiagrama::Algoritmo);
+        let inicio = Nodo::new(TipoNodo::Inicio, "I".into(), 0.0, 0.0);
+        let fin = Nodo::new(TipoNodo::Fin, "F".into(), 0.0, 100.0);
+        let proc = Nodo::new(TipoNodo::Proceso, "Suelto".into(), 50.0, 50.0);
+        let id_i = d.agregar_nodo(inicio);
+        let id_f = d.agregar_nodo(fin);
+        d.agregar_nodo(proc);
+        d.conectar(&id_i, &id_f, TipoConexion::Flecha, None);
+
+        let errores = d.validar_flujo();
+        assert!(errores.iter().any(|e| e.contains("huérfano")));
+    }
+
+    #[test]
+    fn test_diagrama_mermaid() {
+        let mut d = Diagrama::new("Mermaid".into(), TipoDiagrama::Flujo);
+        let id_i = d.agregar_nodo(Nodo::new(TipoNodo::Inicio, "Start".into(), 0.0, 0.0));
+        let id_p = d.agregar_nodo(Nodo::new(TipoNodo::Proceso, "Work".into(), 0.0, 50.0));
+        let id_f = d.agregar_nodo(Nodo::new(TipoNodo::Fin, "End".into(), 0.0, 100.0));
+        d.conectar(&id_i, &id_p, TipoConexion::Flecha, None);
+        d.conectar(&id_p, &id_f, TipoConexion::Flecha, Some("done".into()));
+
+        let mmd = d.exportar_mermaid();
+        assert!(mmd.starts_with("flowchart TD"));
+        assert!(mmd.contains("Start"));
+        assert!(mmd.contains("|done|"));
+    }
+
+    #[test]
+    fn test_diagrama_pseudocodigo() {
+        let mut d = Diagrama::new("Algo".into(), TipoDiagrama::Algoritmo);
+        d.agregar_nodo(Nodo::new(TipoNodo::Inicio, "Begin".into(), 0.0, 0.0));
+        d.agregar_nodo(Nodo::new(TipoNodo::Proceso, "Calc".into(), 0.0, 50.0));
+        d.agregar_nodo(Nodo::new(TipoNodo::Fin, "Done".into(), 0.0, 100.0));
+
+        let pseudo = d.exportar_pseudocodigo();
+        assert!(pseudo.contains("ALGORITMO: Algo"));
+        assert!(pseudo.contains("INICIO: Begin"));
+        assert!(pseudo.contains("HACER: Calc"));
+        assert!(pseudo.contains("FIN: Done"));
     }
 }

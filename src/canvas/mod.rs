@@ -1,3 +1,8 @@
+//! Board visual de ideas — notas, imágenes, listas y secciones.
+//!
+//! [`Canvas`] actúa como un tablero donde se agregan [`Elemento`]s
+//! de distintos tipos, con exportación a HTML.
+
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -34,10 +39,10 @@ pub struct TextoReconocido {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TipoElemento {
-    Nota,           // Texto libre / idea
-    Imagen,         // Referencia a archivo de imagen
-    Lista,          // Lista de items
-    Seccion,        // Separador visual
+    Nota,    // Texto libre / idea
+    Imagen,  // Referencia a archivo de imagen
+    Lista,   // Lista de items
+    Seccion, // Separador visual
 }
 
 impl fmt::Display for TipoElemento {
@@ -174,7 +179,9 @@ impl Canvas {
         html.push_str(&format!("<title>Canvas: {}</title>\n", self.nombre));
         html.push_str("<style>\n");
         html.push_str("  body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }\n");
-        html.push_str("  h1 { color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px; }\n");
+        html.push_str(
+            "  h1 { color: #00d4ff; border-bottom: 2px solid #00d4ff; padding-bottom: 10px; }\n",
+        );
         html.push_str("  .board { display: flex; flex-wrap: wrap; gap: 16px; }\n");
         html.push_str("  .card { background: #16213e; border-radius: 12px; padding: 16px; min-width: 250px; max-width: 400px; box-shadow: 0 4px 12px #0003; }\n");
         html.push_str("  .card.nota { border-left: 4px solid #00d4ff; }\n");
@@ -206,7 +213,9 @@ impl Canvas {
                     ));
                 }
                 TipoElemento::Lista => {
-                    let items: String = elem.contenido.lines()
+                    let items: String = elem
+                        .contenido
+                        .lines()
                         .map(|l| format!("<li>{}</li>", l))
                         .collect();
                     html.push_str(&format!(
@@ -226,5 +235,63 @@ impl Canvas {
 
         html.push_str("</div>\n</body>\n</html>");
         html
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_canvas_crud() {
+        let mut c = Canvas::new("Ideas".to_string(), 800, 600);
+        assert_eq!(c.total_elementos(), 0);
+
+        let nota = Elemento::nota("Hola mundo".into(), "#ff0".into());
+        let id = nota.id.clone();
+        c.agregar_elemento(nota);
+        assert_eq!(c.total_elementos(), 1);
+
+        assert!(c.eliminar_elemento(&id));
+        assert_eq!(c.total_elementos(), 0);
+        assert!(!c.eliminar_elemento("noexiste"));
+    }
+
+    #[test]
+    fn test_canvas_tipos_elemento() {
+        let nota = Elemento::nota("texto".into(), "red".into());
+        assert!(matches!(nota.tipo, TipoElemento::Nota));
+
+        let img = Elemento::imagen("/path/img.png".into());
+        assert!(matches!(img.tipo, TipoElemento::Imagen));
+
+        let lista = Elemento::lista("item1\nitem2\nitem3".into(), "blue".into());
+        assert!(matches!(lista.tipo, TipoElemento::Lista));
+        let display = format!("{}", lista);
+        assert!(display.contains("3 items"));
+
+        let sec = Elemento::seccion("Sección A".into());
+        assert!(matches!(sec.tipo, TipoElemento::Seccion));
+    }
+
+    #[test]
+    fn test_canvas_limpiar() {
+        let mut c = Canvas::new("Test".into(), 100, 100);
+        c.agregar_elemento(Elemento::nota("a".into(), "#fff".into()));
+        c.agregar_elemento(Elemento::nota("b".into(), "#fff".into()));
+        assert_eq!(c.total_elementos(), 2);
+        c.limpiar();
+        assert_eq!(c.total_elementos(), 0);
+    }
+
+    #[test]
+    fn test_canvas_exportar_html() {
+        let mut c = Canvas::new("Export".into(), 800, 600);
+        c.agregar_elemento(Elemento::nota("Nota test".into(), "#0ff".into()));
+        c.agregar_elemento(Elemento::seccion("Sec".into()));
+        let html = c.exportar_html();
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("Nota test"));
+        assert!(html.contains("Sec"));
     }
 }

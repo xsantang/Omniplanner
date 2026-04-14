@@ -1,7 +1,12 @@
-use chrono::{Datelike, NaiveDate, NaiveTime, NaiveDateTime};
+//! Calendario y agenda de eventos con soporte de recurrencia.
+//!
+//! Incluye [`Evento`], [`Agenda`], frecuencias de repetición
+//! y horarios de escritura/marcado de días.
+
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use std::fmt;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TipoEvento {
@@ -59,7 +64,12 @@ impl Default for Frecuencia {
 
 impl Frecuencia {
     /// Dado una fecha base, genera las próximas N ocurrencias futuras
-    pub fn proximas_ocurrencias(&self, fecha_base: NaiveDate, desde: NaiveDate, hasta: NaiveDate) -> Vec<NaiveDate> {
+    pub fn proximas_ocurrencias(
+        &self,
+        fecha_base: NaiveDate,
+        desde: NaiveDate,
+        hasta: NaiveDate,
+    ) -> Vec<NaiveDate> {
         if *self == Frecuencia::UnaVez {
             if fecha_base >= desde && fecha_base <= hasta {
                 return vec![fecha_base];
@@ -113,7 +123,13 @@ fn dias_en_mes_util(anio: i32, mes: u32) -> u32 {
     match mes {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if (anio % 4 == 0 && anio % 100 != 0) || anio % 400 == 0 { 29 } else { 28 },
+        2 => {
+            if (anio % 4 == 0 && anio % 100 != 0) || anio % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
         _ => 30,
     }
 }
@@ -174,7 +190,8 @@ impl Evento {
 
     /// Genera las ocurrencias de este evento en un rango de fechas
     pub fn ocurrencias_en_rango(&self, desde: NaiveDate, hasta: NaiveDate) -> Vec<NaiveDate> {
-        self.frecuencia.proximas_ocurrencias(self.fecha, desde, hasta)
+        self.frecuencia
+            .proximas_ocurrencias(self.fecha, desde, hasta)
     }
 
     /// ¿Este evento ocurre en esta fecha? (considerando recurrencia)
@@ -195,9 +212,8 @@ impl Evento {
     }
 
     pub fn duracion_minutos(&self) -> Option<i64> {
-        self.hora_fin.map(|fin| {
-            (fin - self.hora_inicio).num_minutes()
-        })
+        self.hora_fin
+            .map(|fin| (fin - self.hora_inicio).num_minutes())
     }
 
     pub fn etiqueta_recurrencia(&self) -> String {
@@ -210,7 +226,8 @@ impl Evento {
 
 impl fmt::Display for Evento {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fin = self.hora_fin
+        let fin = self
+            .hora_fin
             .map(|h| format!(" - {}", h))
             .unwrap_or_default();
         let recur = self.etiqueta_recurrencia();
@@ -236,14 +253,28 @@ pub struct HorarioEscritura {
 }
 
 impl HorarioEscritura {
-    pub fn new(dia: chrono::Weekday, hora_inicio: NaiveTime, hora_fin: NaiveTime, descripcion: String) -> Self {
-        HorarioEscritura { dia, hora_inicio, hora_fin, descripcion }
+    pub fn new(
+        dia: chrono::Weekday,
+        hora_inicio: NaiveTime,
+        hora_fin: NaiveTime,
+        descripcion: String,
+    ) -> Self {
+        HorarioEscritura {
+            dia,
+            hora_inicio,
+            hora_fin,
+            descripcion,
+        }
     }
 }
 
 impl fmt::Display for HorarioEscritura {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}: {} - {} | {}", self.dia, self.hora_inicio, self.hora_fin, self.descripcion)
+        write!(
+            f,
+            "{:?}: {} - {} | {}",
+            self.dia, self.hora_inicio, self.hora_fin, self.descripcion
+        )
     }
 }
 
@@ -299,10 +330,19 @@ impl Agenda {
     }
 
     pub fn marcas_del_dia(&self, fecha: NaiveDate) -> Vec<&DiaMarcado> {
-        self.dias_marcados.iter().filter(|d| d.fecha == fecha).collect()
+        self.dias_marcados
+            .iter()
+            .filter(|d| d.fecha == fecha)
+            .collect()
     }
 
-    pub fn marcar_rango(&mut self, desde: NaiveDate, hasta: NaiveDate, tipo: TipoDiaMarcado, nota: String) {
+    pub fn marcar_rango(
+        &mut self,
+        desde: NaiveDate,
+        hasta: NaiveDate,
+        tipo: TipoDiaMarcado,
+        nota: String,
+    ) {
         let mut fecha = desde;
         while fecha <= hasta {
             self.dias_marcados.push(DiaMarcado {
@@ -339,17 +379,26 @@ impl Agenda {
     pub fn eventos_por_tipo(&self, tipo: &str) -> Vec<&Evento> {
         self.eventos
             .iter()
-            .filter(|e| format!("{}", e.tipo).to_lowercase().contains(&tipo.to_lowercase()))
+            .filter(|e| {
+                format!("{}", e.tipo)
+                    .to_lowercase()
+                    .contains(&tipo.to_lowercase())
+            })
             .collect()
     }
 
     pub fn horarios_del_dia(&self, dia: chrono::Weekday) -> Vec<&HorarioEscritura> {
-        self.horarios_escritura.iter().filter(|h| h.dia == dia).collect()
+        self.horarios_escritura
+            .iter()
+            .filter(|h| h.dia == dia)
+            .collect()
     }
 
     pub fn ordenar_eventos(&mut self) {
         self.eventos.sort_by(|a, b| {
-            a.fecha.cmp(&b.fecha).then(a.hora_inicio.cmp(&b.hora_inicio))
+            a.fecha
+                .cmp(&b.fecha)
+                .then(a.hora_inicio.cmp(&b.hora_inicio))
         });
     }
 }

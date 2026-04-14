@@ -1,3 +1,8 @@
+//! Sistema de memoria neuronal — recuerdos, enlaces y diccionario.
+//!
+//! Permite crear [`Recuerdo`]s con palabras clave, enlazar elementos
+//! entre módulos y buscar de forma unificada.
+
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,11 +11,11 @@ use std::collections::HashSet;
 /// Un enlace entre cualquier elemento del sistema
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Enlace {
-    pub origen_modulo: String,    // "tarea", "evento", "diagrama", "canvas", "nota"
+    pub origen_modulo: String, // "tarea", "evento", "diagrama", "canvas", "nota"
     pub origen_id: String,
     pub destino_modulo: String,
     pub destino_id: String,
-    pub relacion: String,         // descripción libre
+    pub relacion: String, // descripción libre
 }
 
 /// Una nota/recuerdo con palabras clave
@@ -29,7 +34,10 @@ impl Recuerdo {
         Recuerdo {
             id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
             contenido,
-            palabras_clave: palabras_clave.into_iter().map(|p| p.to_lowercase()).collect(),
+            palabras_clave: palabras_clave
+                .into_iter()
+                .map(|p| p.to_lowercase())
+                .collect(),
             modulo_origen: None,
             item_id: None,
             creado: chrono::Local::now().naive_local(),
@@ -76,7 +84,14 @@ impl Memoria {
         self.recuerdos.push(recuerdo);
     }
 
-    pub fn enlazar(&mut self, origen_modulo: &str, origen_id: &str, destino_modulo: &str, destino_id: &str, relacion: &str) {
+    pub fn enlazar(
+        &mut self,
+        origen_modulo: &str,
+        origen_id: &str,
+        destino_modulo: &str,
+        destino_id: &str,
+        relacion: &str,
+    ) {
         self.enlaces.push(Enlace {
             origen_modulo: origen_modulo.to_string(),
             origen_id: origen_id.to_string(),
@@ -174,7 +189,10 @@ impl Memoria {
         if let Some(r) = self.recuerdos.iter_mut().find(|r| r.id == recuerdo_id) {
             if !r.palabras_clave.contains(&p) {
                 r.palabras_clave.push(p.clone());
-                self.indice.entry(p).or_default().push(recuerdo_id.to_string());
+                self.indice
+                    .entry(p)
+                    .or_default()
+                    .push(recuerdo_id.to_string());
                 return true;
             }
         }
@@ -209,7 +227,7 @@ impl Memoria {
 pub struct ConexionIdea {
     pub palabra_a: String,
     pub palabra_b: String,
-    pub fuerza: u32,        // se incrementa cada vez que co-ocurren
+    pub fuerza: u32,           // se incrementa cada vez que co-ocurren
     pub contexto: Vec<String>, // breves notas de por qué se conectaron
 }
 
@@ -228,10 +246,10 @@ pub struct Diccionario {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntradaDiccionario {
     pub palabras: Vec<String>,
-    pub modulo: String,       // "tarea", "evento", etc.
+    pub modulo: String, // "tarea", "evento", etc.
     pub item_id: String,
     pub item_titulo: String,
-    pub nota: String,         // contexto libre del usuario
+    pub nota: String, // contexto libre del usuario
     pub creado: NaiveDateTime,
 }
 
@@ -259,7 +277,11 @@ impl Diccionario {
     /// Reforzar conexión existente o crear nueva, con contexto
     fn reforzar_o_crear(&mut self, a: &str, b: &str, contexto: &str) {
         let idx = self.reforzar_o_crear_idx(a, b);
-        if !contexto.is_empty() && !self.conexiones[idx].contexto.contains(&contexto.to_string()) {
+        if !contexto.is_empty()
+            && !self.conexiones[idx]
+                .contexto
+                .contains(&contexto.to_string())
+        {
             self.conexiones[idx].contexto.push(contexto.to_string());
         }
     }
@@ -285,7 +307,14 @@ impl Diccionario {
     }
 
     /// Registrar una entrada de historial
-    pub fn registrar(&mut self, modulo: &str, item_id: &str, titulo: &str, palabras: &[String], nota: &str) {
+    pub fn registrar(
+        &mut self,
+        modulo: &str,
+        item_id: &str,
+        titulo: &str,
+        palabras: &[String],
+        nota: &str,
+    ) {
         self.historial.push(EntradaDiccionario {
             palabras: palabras.to_vec(),
             modulo: modulo.to_string(),
@@ -305,7 +334,11 @@ impl Diccionario {
         if let Some(indices) = self.grafo.get(&p) {
             for &idx in indices {
                 let c = &self.conexiones[idx];
-                let otra = if c.palabra_a == p { &c.palabra_b } else { &c.palabra_a };
+                let otra = if c.palabra_a == p {
+                    &c.palabra_b
+                } else {
+                    &c.palabra_a
+                };
                 resultado.push((otra.as_str(), c.fuerza));
             }
         }
@@ -336,6 +369,9 @@ impl Diccionario {
 
     /// Historial de un módulo específico
     pub fn historial_modulo(&self, modulo: &str) -> Vec<&EntradaDiccionario> {
-        self.historial.iter().filter(|e| e.modulo == modulo).collect()
+        self.historial
+            .iter()
+            .filter(|e| e.modulo == modulo)
+            .collect()
     }
 }

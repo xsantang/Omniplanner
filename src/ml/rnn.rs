@@ -1,5 +1,5 @@
+use super::linalg::{sigmoid, Matriz, Rng};
 use serde::{Deserialize, Serialize};
-use super::linalg::{Matriz, Rng, sigmoid};
 
 // ══════════════════════════════════════════════════════════════
 //  Red Neuronal Recurrente (RNN) — con variante LSTM
@@ -20,6 +20,8 @@ pub struct RNN {
     pub output_size: usize,
     pub tasa_aprendizaje: f64,
     pub historial_perdida: Vec<f64>,
+    pub bptt_truncado: usize, // pasos máximos de BPTT (0 = sin truncar)
+    pub grad_clip: f64,       // clipping de gradientes
 
     // Pesos RNN simple
     pub w_xh: Matriz, // input → hidden
@@ -96,6 +98,8 @@ impl RNN {
             output_size,
             tasa_aprendizaje,
             historial_perdida: Vec::new(),
+            bptt_truncado: 0, // 0 = BPTT completo
+            grad_clip: 1.0,
             w_xh,
             w_hh,
             b_h,
@@ -103,6 +107,18 @@ impl RNN {
             b_y,
             lstm,
         }
+    }
+
+    /// Configura pasos máximos de BPTT (0 = sin truncar)
+    pub fn con_bptt(mut self, pasos: usize) -> Self {
+        self.bptt_truncado = pasos;
+        self
+    }
+
+    /// Configura el valor de gradient clipping
+    pub fn con_grad_clip(mut self, clip: f64) -> Self {
+        self.grad_clip = clip;
+        self
     }
 
     /// Forward pass para una secuencia completa.
@@ -147,18 +163,40 @@ impl RNN {
         pre.aplicar(|v| v.tanh()).fila(0)
     }
 
-    fn lstm_step(&self, x: &[f64], h_prev: &[f64], c_prev: &[f64], lstm: &LSTMPesos) -> (Vec<f64>, Vec<f64>) {
+    fn lstm_step(
+        &self,
+        x: &[f64],
+        h_prev: &[f64],
+        c_prev: &[f64],
+        lstm: &LSTMPesos,
+    ) -> (Vec<f64>, Vec<f64>) {
         let x_mat = Matriz::desde_vec(1, self.input_size, x.to_vec());
         let h_mat = Matriz::desde_vec(1, self.hidden_size, h_prev.to_vec());
 
         // Forget gate: f_t = σ(W_f * x_t + U_f * h_{t-1} + b_f)
-        let f_t = x_mat.mul(&lstm.w_f).sumar(&h_mat.mul(&lstm.u_f)).sumar_fila(&lstm.b_f).aplicar(sigmoid);
+        let f_t = x_mat
+            .mul(&lstm.w_f)
+            .sumar(&h_mat.mul(&lstm.u_f))
+            .sumar_fila(&lstm.b_f)
+            .aplicar(sigmoid);
         // Input gate: i_t = σ(W_i * x_t + U_i * h_{t-1} + b_i)
-        let i_t = x_mat.mul(&lstm.w_i).sumar(&h_mat.mul(&lstm.u_i)).sumar_fila(&lstm.b_i).aplicar(sigmoid);
+        let i_t = x_mat
+            .mul(&lstm.w_i)
+            .sumar(&h_mat.mul(&lstm.u_i))
+            .sumar_fila(&lstm.b_i)
+            .aplicar(sigmoid);
         // Cell candidate: c̃_t = tanh(W_c * x_t + U_c * h_{t-1} + b_c)
-        let c_cand = x_mat.mul(&lstm.w_c).sumar(&h_mat.mul(&lstm.u_c)).sumar_fila(&lstm.b_c).aplicar(|v| v.tanh());
+        let c_cand = x_mat
+            .mul(&lstm.w_c)
+            .sumar(&h_mat.mul(&lstm.u_c))
+            .sumar_fila(&lstm.b_c)
+            .aplicar(|v| v.tanh());
         // Output gate: o_t = σ(W_o * x_t + U_o * h_{t-1} + b_o)
-        let o_t = x_mat.mul(&lstm.w_o).sumar(&h_mat.mul(&lstm.u_o)).sumar_fila(&lstm.b_o).aplicar(sigmoid);
+        let o_t = x_mat
+            .mul(&lstm.w_o)
+            .sumar(&h_mat.mul(&lstm.u_o))
+            .sumar_fila(&lstm.b_o)
+            .aplicar(sigmoid);
 
         // Cell state: c_t = f_t ⊙ c_{t-1} + i_t ⊙ c̃_t
         let c_prev_mat = Matriz::desde_vec(1, self.hidden_size, c_prev.to_vec());
@@ -194,13 +232,18 @@ impl RNN {
                 let pred = salidas.last().unwrap();
 
                 // MSE loss
-                let loss: f64 = pred.iter().zip(target)
+                let loss: f64 = pred
+                    .iter()
+                    .zip(target)
                     .map(|(p, t)| (p - t).powi(2))
-                    .sum::<f64>() / pred.len() as f64;
+                    .sum::<f64>()
+                    / pred.len() as f64;
                 perdida_total += loss;
 
                 // Gradiente de salida
-                let grad_y: Vec<f64> = pred.iter().zip(target)
+                let grad_y: Vec<f64> = pred
+                    .iter()
+                    .zip(target)
                     .map(|(p, t)| 2.0 * (p - t) / pred.len() as f64)
                     .collect();
 
@@ -217,44 +260,55 @@ impl RNN {
                     self.b_y[j] -= self.tasa_aprendizaje * grad_y[j];
                 }
 
-                // BPTT truncado (últimos 5 pasos máximo)
+                // BPTT truncado (configurable, 0 = completo)
                 let grad_h_mat = Matriz::desde_vec(1, self.output_size, grad_y);
                 let mut grad_h = grad_h_mat.mul(&self.w_hy.transpuesta()).fila(0);
 
-                let max_bptt = seq.len().min(5);
+                let max_bptt = if self.bptt_truncado > 0 {
+                    seq.len().min(self.bptt_truncado)
+                } else {
+                    seq.len()
+                };
                 let t_start = seq.len().saturating_sub(max_bptt);
+                let clip = self.grad_clip;
 
                 for t in (t_start..seq.len()).rev() {
                     let h_t = &estados[t];
                     let x_t = &seq[t];
 
                     // dtanh = (1 - h_t^2) * grad_h (para RNN simple)
-                    let dtanh: Vec<f64> = h_t.iter().zip(&grad_h)
+                    let dtanh: Vec<f64> = h_t
+                        .iter()
+                        .zip(&grad_h)
                         .map(|(h, g)| (1.0 - h * h) * g)
                         .collect();
 
                     // Actualizar W_xh
                     for i in 0..self.input_size {
                         for j in 0..self.hidden_size {
-                            let g = dtanh[j] * x_t[i];
+                            let g = (dtanh[j] * x_t[i]).clamp(-clip, clip);
                             let w = self.w_xh.get(i, j);
-                            self.w_xh.set(i, j, w - self.tasa_aprendizaje * g.clamp(-1.0, 1.0));
+                            self.w_xh.set(i, j, w - self.tasa_aprendizaje * g);
                         }
                     }
 
                     // Actualizar W_hh
-                    let h_prev = if t > 0 { &estados[t - 1] } else { &vec![0.0; self.hidden_size] };
+                    let h_prev = if t > 0 {
+                        &estados[t - 1]
+                    } else {
+                        &vec![0.0; self.hidden_size]
+                    };
                     for i in 0..self.hidden_size {
                         for j in 0..self.hidden_size {
-                            let g = dtanh[j] * h_prev[i];
+                            let g = (dtanh[j] * h_prev[i]).clamp(-clip, clip);
                             let w = self.w_hh.get(i, j);
-                            self.w_hh.set(i, j, w - self.tasa_aprendizaje * g.clamp(-1.0, 1.0));
+                            self.w_hh.set(i, j, w - self.tasa_aprendizaje * g);
                         }
                     }
 
                     // Actualizar b_h
                     for j in 0..self.hidden_size {
-                        self.b_h[j] -= self.tasa_aprendizaje * dtanh[j].clamp(-1.0, 1.0);
+                        self.b_h[j] -= self.tasa_aprendizaje * dtanh[j].clamp(-clip, clip);
                     }
 
                     // Propagar hacia atrás en el tiempo
@@ -267,7 +321,12 @@ impl RNN {
             self.historial_perdida.push(avg_loss);
 
             if (epoca + 1) % (epocas / 10).max(1) == 0 || epoca == 0 {
-                println!("    Época {}/{} — Pérdida: {:.6}", epoca + 1, epocas, avg_loss);
+                println!(
+                    "    Época {}/{} — Pérdida: {:.6}",
+                    epoca + 1,
+                    epocas,
+                    avg_loss
+                );
             }
         }
     }
@@ -285,8 +344,11 @@ impl RNN {
 
         let params = match &self.lstm {
             Some(_) => {
-                4 * (self.input_size * self.hidden_size + self.hidden_size * self.hidden_size + self.hidden_size)
-                    + self.hidden_size * self.output_size + self.output_size
+                4 * (self.input_size * self.hidden_size
+                    + self.hidden_size * self.hidden_size
+                    + self.hidden_size)
+                    + self.hidden_size * self.output_size
+                    + self.output_size
             }
             None => {
                 self.input_size * self.hidden_size

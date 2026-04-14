@@ -1,9 +1,9 @@
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use std::collections::HashMap;
 
+use super::SyncConfig;
 use crate::agenda::{Evento, TipoEvento};
 use crate::tasks::{Prioridad, Task, TaskStatus};
-use super::SyncConfig;
 
 // ══════════════════════════════════════════════════════════════
 //  iCalendar (.ics) — Exportar / Importar
@@ -55,13 +55,13 @@ pub fn exportar_ical(eventos: &[&Evento], tareas: &[&Task]) -> String {
                 escapar_ical(&tarea.descripcion)
             ));
         }
-        ical.push_str(&format!("PRIORITY:{}\r\n", prioridad_ical(&tarea.prioridad)));
+        ical.push_str(&format!(
+            "PRIORITY:{}\r\n",
+            prioridad_ical(&tarea.prioridad)
+        ));
         ical.push_str(&format!("STATUS:{}\r\n", estado_ical(&tarea.estado)));
         if !tarea.etiquetas.is_empty() {
-            ical.push_str(&format!(
-                "CATEGORIES:{}\r\n",
-                tarea.etiquetas.join(",")
-            ));
+            ical.push_str(&format!("CATEGORIES:{}\r\n", tarea.etiquetas.join(",")));
         }
         if let Some(fu) = tarea.follow_up {
             ical.push_str("BEGIN:VALARM\r\n");
@@ -254,17 +254,15 @@ pub fn escuchar_codigo_oauth() -> Result<String, String> {
         .split_whitespace()
         .nth(1) // el path "/?code=..."
         .and_then(|path| {
-            path.split('?')
-                .nth(1)
-                .and_then(|query| {
-                    query.split('&').find_map(|param| {
-                        let mut kv = param.splitn(2, '=');
-                        match (kv.next(), kv.next()) {
-                            (Some("code"), Some(v)) => Some(v.to_string()),
-                            _ => None,
-                        }
-                    })
+            path.split('?').nth(1).and_then(|query| {
+                query.split('&').find_map(|param| {
+                    let mut kv = param.splitn(2, '=');
+                    match (kv.next(), kv.next()) {
+                        (Some("code"), Some(v)) => Some(v.to_string()),
+                        _ => None,
+                    }
                 })
+            })
         })
         .ok_or("No se encontró el código de autorización en la respuesta")?;
 
@@ -283,10 +281,7 @@ pub fn escuchar_codigo_oauth() -> Result<String, String> {
     Ok(codigo)
 }
 
-pub fn google_intercambiar_codigo(
-    config: &mut SyncConfig,
-    codigo: &str,
-) -> Result<(), String> {
+pub fn google_intercambiar_codigo(config: &mut SyncConfig, codigo: &str) -> Result<(), String> {
     let resp = ureq::post("https://oauth2.googleapis.com/token")
         .send_form(&[
             ("code", codigo.trim()),
@@ -459,10 +454,7 @@ pub fn google_listar_eventos(
     let mut eventos = Vec::new();
     if let Some(items) = body["items"].as_array() {
         for item in items {
-            let titulo = item["summary"]
-                .as_str()
-                .unwrap_or("Sin título")
-                .to_string();
+            let titulo = item["summary"].as_str().unwrap_or("Sin título").to_string();
             let descripcion = item["description"].as_str().unwrap_or("").to_string();
             let uid = item["id"].as_str().unwrap_or("").to_string();
 
@@ -511,11 +503,7 @@ pub fn google_eliminar_evento(config: &SyncConfig, google_event_id: &str) -> Res
 }
 
 fn formato_google_dt(fecha: NaiveDate, hora: NaiveTime) -> String {
-    format!(
-        "{}T{}",
-        fecha.format("%Y-%m-%d"),
-        hora.format("%H:%M:%S")
-    )
+    format!("{}T{}", fecha.format("%Y-%m-%d"), hora.format("%H:%M:%S"))
 }
 
 fn parsear_google_dt(s: &str) -> Option<(NaiveDate, NaiveTime)> {

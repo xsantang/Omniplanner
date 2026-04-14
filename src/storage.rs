@@ -1,16 +1,22 @@
+//! Persistencia del estado de la aplicación a disco (JSON).
+//!
+//! [`AppState`] contiene todos los módulos y se serializa/deserializa
+//! automáticamente desde `~/.omniplanner/data.json`.
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::tasks::TaskManager;
 use crate::agenda::Agenda;
 use crate::canvas::Canvas;
 use crate::diagrams::Diagrama;
-use crate::vcs::DataVcs;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
+use crate::ml::{AlmacenAsesor, AlmacenML, AlmacenPresupuesto};
+use crate::nlp::AlmacenNLP;
 use crate::sync::SyncConfig;
-use crate::ml::AlmacenML;
+use crate::tasks::TaskManager;
+use crate::vcs::DataVcs;
 
 /// Estado completo de la aplicación (persistible)
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,6 +33,12 @@ pub struct AppState {
     pub sync: SyncConfig,
     #[serde(default)]
     pub ml: AlmacenML,
+    #[serde(default)]
+    pub nlp: AlmacenNLP,
+    #[serde(default)]
+    pub asesor: AlmacenAsesor,
+    #[serde(default)]
+    pub presupuesto: AlmacenPresupuesto,
 }
 
 impl AppState {
@@ -41,6 +53,9 @@ impl AppState {
             memoria: Memoria::new(),
             sync: SyncConfig::default(),
             ml: AlmacenML::default(),
+            nlp: AlmacenNLP::default(),
+            asesor: AlmacenAsesor::default(),
+            presupuesto: AlmacenPresupuesto::default(),
         }
     }
 
@@ -54,8 +69,8 @@ impl AppState {
 
     pub fn guardar(&self) -> Result<(), String> {
         let ruta = Self::ruta_datos();
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Error serializando: {}", e))?;
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| format!("Error serializando: {}", e))?;
         fs::write(&ruta, json)
             .map_err(|e| format!("Error escribiendo {}: {}", ruta.display(), e))?;
         Ok(())
@@ -68,8 +83,7 @@ impl AppState {
         }
         let contenido = fs::read_to_string(&ruta)
             .map_err(|e| format!("Error leyendo {}: {}", ruta.display(), e))?;
-        serde_json::from_str(&contenido)
-            .map_err(|e| format!("Error deserializando: {}", e))
+        serde_json::from_str(&contenido).map_err(|e| format!("Error deserializando: {}", e))
     }
 }
 
@@ -88,9 +102,13 @@ mod tests {
         // Verifica que los datos del formato anterior (sin campo memoria) se cargan bien
         match AppState::cargar() {
             Ok(s) => {
-                println!("Datos cargados: {} tareas, {} eventos, {} diagramas, {} recuerdos",
-                    s.tasks.tareas.len(), s.agenda.eventos.len(),
-                    s.diagramas.len(), s.memoria.recuerdos.len());
+                println!(
+                    "Datos cargados: {} tareas, {} eventos, {} diagramas, {} recuerdos",
+                    s.tasks.tareas.len(),
+                    s.agenda.eventos.len(),
+                    s.diagramas.len(),
+                    s.memoria.recuerdos.len()
+                );
             }
             Err(e) => panic!("Error cargando datos: {}", e),
         }

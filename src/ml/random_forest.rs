@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use super::decision_tree::ArbolDecision;
 use super::linalg::Rng;
+use serde::{Deserialize, Serialize};
 
 // ══════════════════════════════════════════════════════════════
 //  Bosque Aleatorio (Random Forest) — ensemble de árboles
@@ -49,11 +49,7 @@ impl BosqueAleatorio {
                 y_boot.push(y[idx]);
             }
 
-            let mut arbol = ArbolDecision::nuevo(
-                self.max_profundidad,
-                2,
-                self.num_clases,
-            );
+            let mut arbol = ArbolDecision::nuevo(self.max_profundidad, 2, self.num_clases);
             arbol.max_features = self.max_features;
             arbol.entrenar_con_rng(&x_boot, &y_boot, &mut rng);
 
@@ -73,7 +69,9 @@ impl BosqueAleatorio {
             let pred = arbol.predecir(x);
             votos[pred] += 1;
         }
-        votos.iter().enumerate()
+        votos
+            .iter()
+            .enumerate()
             .max_by_key(|(_, &v)| v)
             .map(|(i, _)| i)
             .unwrap_or(0)
@@ -97,7 +95,11 @@ impl BosqueAleatorio {
     }
 
     pub fn precision(&self, x: &[Vec<f64>], y: &[usize]) -> f64 {
-        let correctas = x.iter().zip(y).filter(|(xi, &yi)| self.predecir(xi) == yi).count();
+        let correctas = x
+            .iter()
+            .zip(y)
+            .filter(|(xi, &yi)| self.predecir(xi) == yi)
+            .count();
         correctas as f64 / y.len() as f64
     }
 
@@ -121,7 +123,11 @@ impl BosqueAleatorio {
         println!("    Max features por split: {}", self.max_features);
         println!("    Clases: {}", self.num_clases);
         if self.entrenado {
-            let prof_prom: f64 = self.arboles.iter().map(|a| a.profundidad() as f64).sum::<f64>()
+            let prof_prom: f64 = self
+                .arboles
+                .iter()
+                .map(|a| a.profundidad() as f64)
+                .sum::<f64>()
                 / self.arboles.len() as f64;
             println!("    Profundidad promedio: {:.1}", prof_prom);
         }

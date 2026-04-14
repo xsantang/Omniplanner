@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::linalg::{dot, vec_escalar, vec_restar, Rng};
+use serde::{Deserialize, Serialize};
 
 // ══════════════════════════════════════════════════════════════
 //  Máquina de Vectores de Soporte (SVM) — clasificación binaria
@@ -47,11 +47,9 @@ impl SVM {
 
                 if margen < 1.0 {
                     // Mal clasificado o dentro del margen
-                    let grad_w = vec_restar(
-                        &self.pesos,
-                        &vec_escalar(&x[i], self.c * yi),
-                    );
-                    self.pesos = vec_restar(&self.pesos, &vec_escalar(&grad_w, self.tasa_aprendizaje));
+                    let grad_w = vec_restar(&self.pesos, &vec_escalar(&x[i], self.c * yi));
+                    self.pesos =
+                        vec_restar(&self.pesos, &vec_escalar(&grad_w, self.tasa_aprendizaje));
                     self.sesgo += self.tasa_aprendizaje * self.c * yi;
                     perdida_total += 1.0 - margen;
                 } else {
@@ -80,7 +78,11 @@ impl SVM {
     }
 
     pub fn predecir(&self, x: &[f64]) -> i32 {
-        if self.predecir_valor(x) >= 0.0 { 1 } else { -1 }
+        if self.predecir_valor(x) >= 0.0 {
+            1
+        } else {
+            -1
+        }
     }
 
     pub fn predecir_lote(&self, x: &[Vec<f64>]) -> Vec<i32> {
@@ -88,9 +90,11 @@ impl SVM {
     }
 
     pub fn precision(&self, x: &[Vec<f64>], y: &[f64]) -> f64 {
-        let correctas = x.iter().zip(y).filter(|(xi, &yi)| {
-            self.predecir(xi) as f64 == yi
-        }).count();
+        let correctas = x
+            .iter()
+            .zip(y)
+            .filter(|(xi, &yi)| self.predecir(xi) as f64 == yi)
+            .count();
         correctas as f64 / y.len() as f64
     }
 
@@ -100,7 +104,10 @@ impl SVM {
         println!("    Dimensiones: {}", self.pesos.len());
         println!("    Parámetro C: {}", self.c);
         println!("    Sesgo: {:.6}", self.sesgo);
-        println!("    Entrenado: {}", if self.entrenado { "Sí" } else { "No" });
+        println!(
+            "    Entrenado: {}",
+            if self.entrenado { "Sí" } else { "No" }
+        );
     }
 }
 
@@ -116,14 +123,22 @@ pub struct SVMMulticlase {
 
 impl SVMMulticlase {
     pub fn nuevo(dimensiones: usize, num_clases: usize, c: f64, lr: f64) -> Self {
-        let modelos = (0..num_clases).map(|_| SVM::nuevo(dimensiones, c, lr)).collect();
-        Self { modelos, num_clases }
+        let modelos = (0..num_clases)
+            .map(|_| SVM::nuevo(dimensiones, c, lr))
+            .collect();
+        Self {
+            modelos,
+            num_clases,
+        }
     }
 
     pub fn entrenar(&mut self, x: &[Vec<f64>], y: &[usize], epocas: usize) {
         for clase in 0..self.num_clases {
             println!("  Entrenando clasificador para clase {} ...", clase);
-            let etiquetas: Vec<f64> = y.iter().map(|&yi| if yi == clase { 1.0 } else { -1.0 }).collect();
+            let etiquetas: Vec<f64> = y
+                .iter()
+                .map(|&yi| if yi == clase { 1.0 } else { -1.0 })
+                .collect();
             self.modelos[clase].entrenar(x, &etiquetas, epocas);
         }
     }
@@ -139,7 +154,11 @@ impl SVMMulticlase {
     }
 
     pub fn precision(&self, x: &[Vec<f64>], y: &[usize]) -> f64 {
-        let correctas = x.iter().zip(y).filter(|(xi, &yi)| self.predecir(xi) == yi).count();
+        let correctas = x
+            .iter()
+            .zip(y)
+            .filter(|(xi, &yi)| self.predecir(xi) == yi)
+            .count();
         correctas as f64 / y.len() as f64
     }
 }

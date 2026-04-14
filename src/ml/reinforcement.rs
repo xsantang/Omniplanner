@@ -1,6 +1,6 @@
+use super::linalg::{argmax, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use super::linalg::{argmax, Rng};
 
 // ══════════════════════════════════════════════════════════════
 //  Aprendizaje por Refuerzo — Q-Learning tabular
@@ -14,9 +14,9 @@ pub type Estado = String;
 pub struct QTable {
     pub tabla: HashMap<String, Vec<f64>>, // estado → Q-values por acción
     pub num_acciones: usize,
-    pub alpha: f64,       // tasa de aprendizaje
-    pub gamma: f64,       // factor de descuento
-    pub epsilon: f64,     // exploración ε-greedy
+    pub alpha: f64,   // tasa de aprendizaje
+    pub gamma: f64,   // factor de descuento
+    pub epsilon: f64, // exploración ε-greedy
     pub epsilon_min: f64,
     pub epsilon_decay: f64,
     pub episodios_entrenados: usize,
@@ -47,7 +47,8 @@ impl QTable {
 
     fn asegurar_estado(&mut self, estado: &str) {
         if !self.tabla.contains_key(estado) {
-            self.tabla.insert(estado.to_string(), vec![0.0; self.num_acciones]);
+            self.tabla
+                .insert(estado.to_string(), vec![0.0; self.num_acciones]);
         }
     }
 
@@ -81,7 +82,8 @@ impl QTable {
             qs.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
         };
 
-        let q_nuevo = q_actual + self.alpha * (recompensa + self.gamma * q_max_siguiente - q_actual);
+        let q_nuevo =
+            q_actual + self.alpha * (recompensa + self.gamma * q_max_siguiente - q_actual);
 
         self.tabla.get_mut(estado).unwrap()[accion] = q_nuevo;
     }
@@ -185,7 +187,9 @@ impl GridWorld {
                 q.actualizar(&estado, accion, recompensa, &sig_estado, terminal);
                 recompensa_total += recompensa;
                 estado = sig_estado;
-                if terminal { break; }
+                if terminal {
+                    break;
+                }
             }
 
             q.decay_epsilon();
@@ -200,7 +204,10 @@ impl GridWorld {
                     / q.historial_recompensas.len().min(100) as f64;
                 println!(
                     "    Episodio {}/{} — Recompensa promedio(100): {:.2} — ε: {:.4}",
-                    ep + 1, episodios, avg, q.epsilon
+                    ep + 1,
+                    episodios,
+                    avg,
+                    q.epsilon
                 );
             }
         }
@@ -250,7 +257,11 @@ impl MultiBandit {
     }
 
     pub fn pull(&mut self, brazo: usize, rng: &mut Rng) -> f64 {
-        let recompensa = if rng.f64() < self.probabilidades[brazo] { 1.0 } else { 0.0 };
+        let recompensa = if rng.f64() < self.probabilidades[brazo] {
+            1.0
+        } else {
+            0.0
+        };
         self.conteos[brazo] += 1;
         self.recompensas_acumuladas[brazo] += recompensa;
         recompensa

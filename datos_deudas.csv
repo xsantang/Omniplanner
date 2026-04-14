@@ -1,0 +1,529 @@
+﻿cuenta,mes,saldo,pago,nuevos_cargos
+ATT,Septiembre 2019,188.00,0.00,0.00
+ATT,Octubre 2019,188.00,0.00,0.00
+ATT,Noviembre 2019,187.04,187.04,0.00
+ATT,Diciembre 2019,187.04,187.04,187.04
+ATT,Enero 2020,187.04,187.04,187.04
+ATT,Febrero 2020,187.04,0.00,187.04
+ATT,Marzo 2020,187.04,0.00,0.00
+ATT,Abril 2020,187.04,0.00,0.00
+ATT,Mayo 2020,187.04,0.00,0.00
+ATT,Junio 2020,187.04,0.00,0.00
+ATT,Julio 2020,250.77,0.00,63.73
+ATT,Agosto 2020,186.93,186.93,0.00
+ATT,Septiembre 2020,186.93,186.93,186.93
+ATT,Octubre 2020,186.93,186.93,186.93
+ATT,Noviembre 2020,186.93,186.93,186.93
+ATT,Diciembre 2020,186.93,186.93,186.93
+ATT,Enero 2021,186.93,186.93,186.93
+ATT,Febrero 2021,186.93,186.93,186.93
+ATT,Marzo 2021,186.93,186.93,186.93
+ATT,Abril 2021,186.93,186.93,186.93
+ATT,Mayo 2021,186.93,186.93,186.93
+ATT,Junio 2021,186.93,96.00,186.93
+ATT,Julio 2021,186.93,96.00,96.00
+ATT,Agosto 2021,186.93,96.00,96.00
+ATT,Septiembre 2021,186.93,96.00,96.00
+ATT,Octubre 2021,186.93,96.00,96.00
+ATT,Noviembre 2021,186.93,96.00,96.00
+ATT,Diciembre 2021,96.00,73.57,5.07
+ATT,Enero 2022,210.53,114.53,188.10
+ATT,Febrero 2022,186.93,96.00,90.93
+ATT,Marzo 2022,159.05,63.05,68.12
+ATT,Abril 2022,159.05,63.05,63.05
+ATT,Mayo 2022,159.05,63.05,63.05
+ATT,Junio 2022,159.05,63.05,63.05
+ATT,Julio 2022,159.05,63.05,63.05
+ATT,Agosto 2022,159.05,63.05,63.05
+ATT,Septiembre 2022,159.05,63.05,63.05
+ATT,Octubre 2022,159.05,63.05,63.05
+ATT,Noviembre 2022,159.05,63.05,63.05
+ATT,Diciembre 2022,264.42,168.42,168.42
+Amazon,Julio 2019,260.52,260.52,0.00
+Amazon,Agosto 2019,63.97,63.97,63.97
+Amazon,Octubre 2019,64.36,64.36,64.36
+Amazon,Noviembre 2019,32.09,32.09,32.09
+Amazon,Diciembre 2019,295.03,50.00,295.03
+Amazon,Enero 2020,235.05,50.00,0.00
+Amazon,Febrero 2020,172.48,50.00,0.00
+Amazon,Marzo 2020,70.00,28.93,0.00
+Amazon,Abril 2020,134.64,134.64,93.57
+Amazon,Mayo 2020,213.21,150.00,213.21
+Amazon,Junio 2020,63.21,63.21,0.00
+Amazon,Julio 2020,117.86,117.86,117.86
+Amazon,Agosto 2020,88.17,88.17,88.17
+Amazon,Septiembre 2020,393.21,250.00,393.21
+Amazon,Octubre 2020,159.29,0.00,16.08
+Amazon,Noviembre 2020,239.37,239.37,80.08
+Amazon,Diciembre 2020,308.75,50.00,308.75
+Amazon,Enero 2021,57.66,57.66,0.00
+Amazon,Febrero 2021,193.18,193.18,193.18
+Amazon,Marzo 2021,292.87,292.87,292.87
+Amazon,Abril 2021,433.70,200.00,433.70
+Amazon,Mayo 2021,209.65,100.00,0.00
+Amazon,Junio 2021,912.40,100.00,802.75
+Amazon,Julio 2021,1266.49,200.00,454.09
+Amazon,Agosto 2021,1028.92,200.00,0.00
+Amazon,Septiembre 2021,852.01,200.00,23.09
+Amazon,Octubre 2021,950.18,100.00,298.17
+Amazon,Noviembre 2021,1032.31,400.00,182.13
+Amazon,Diciembre 2021,584.63,584.63,0.00
+Amazon,Enero 2022,128.38,533.95,128.38
+Amazon,Febrero 2022,500.00,0.00,905.57
+Amazon,Marzo 2022,137.46,137.46,0.00
+Amazon,Abril 2022,131.88,131.88,131.88
+Amazon,Mayo 2022,139.54,139.54,139.54
+Amazon,Junio 2022,57.17,57.17,57.17
+Amazon,Julio 2022,407.84,137.46,407.84
+Amazon,Agosto 2022,289.00,289.00,18.62
+Amazon,Septiembre 2022,51.04,51.04,51.04
+Amazon,Octubre 2022,0.00,0.00,0.00
+Amazon,Noviembre 2022,0.00,0.00,0.00
+Amazon,Diciembre 2022,189.24,173.39,189.24
+Amex Jennifer,Febrero 2019,1160.84,200.00,0.00
+Amex Jennifer,Marzo 2019,1934.00,300.00,973.16
+Amex Jennifer,Abril 2019,2133.71,0.00,499.71
+Amex Jennifer,Mayo 2019,1933.71,250.00,0.00
+Amex Jennifer,Junio 2019,1589.83,200.00,0.00
+Amex Jennifer,Julio 2019,1259.83,200.00,0.00
+Amex Jennifer,Agosto 2019,1059.83,200.00,0.00
+Amex Jennifer,Septiembre 2019,859.83,0.00,0.00
+Amex Jennifer,Octubre 2019,559.83,100.00,0.00
+Amex Jennifer,Noviembre 2019,479.69,479.69,19.86
+Amex Jennifer,Diciembre 2019,0.00,0.00,0.00
+Amex Jennifer,Enero 2020,0.00,0.00,0.00
+Amex Jennifer,Febrero 2020,0.00,0.00,0.00
+Amex Jennifer,Octubre 2020,76.39,76.39,76.39
+Amex Jennifer,Noviembre 2020,0.00,0.00,0.00
+Amex Jennifer,Diciembre 2020,0.00,0.00,0.00
+Amex Jennifer,Enero 2021,0.00,0.00,0.00
+Amex Jennifer,Febrero 2021,0.00,0.00,0.00
+Amex Jennifer,Marzo 2021,0.00,0.00,0.00
+Amex Jennifer,Abril 2021,0.00,0.00,0.00
+Amex Jennifer,Mayo 2021,0.00,0.00,0.00
+Amex Jennifer,Junio 2021,0.00,0.00,0.00
+Amex Jennifer,Julio 2021,0.00,0.00,0.00
+Amex Jennifer,Agosto 2021,0.00,0.00,0.00
+Amex Jennifer,Septiembre 2021,0.00,0.00,0.00
+Amex Jennifer,Octubre 2021,123.00,100.00,123.00
+Amex Jennifer,Noviembre 2021,0.00,0.00,0.00
+Amex Jennifer,Diciembre 2021,0.00,0.00,0.00
+Amex Jennifer,Enero 2022,0.00,0.00,0.00
+Amex Jennifer,Febrero 2022,0.00,0.00,0.00
+Amex Jennifer,Marzo 2022,0.00,0.00,0.00
+Amex Jennifer,Abril 2022,0.00,0.00,0.00
+Amex Jennifer,Mayo 2022,0.00,0.00,0.00
+Amex Jennifer,Junio 2022,0.00,0.00,0.00
+Amex Jennifer,Julio 2022,759.00,300.00,759.00
+Amex Jennifer,Agosto 2022,459.00,459.00,0.00
+Amex Jennifer,Septiembre 2022,0.00,0.00,0.00
+Amex Jennifer,Octubre 2022,0.00,0.00,0.00
+Amex Jennifer,Noviembre 2022,0.00,0.00,0.00
+Amex Jennifer,Diciembre 2022,0.00,0.00,0.00
+Amex Xavier,Febrero 2019,2982.24,70.00,0.00
+Amex Xavier,Marzo 2019,3477.00,500.00,564.76
+Amex Xavier,Abril 2019,3495.82,400.00,518.82
+Amex Xavier,Mayo 2019,3127.39,300.00,31.57
+Amex Xavier,Junio 2019,3296.44,300.00,469.05
+Amex Xavier,Julio 2019,3228.33,300.00,231.89
+Amex Xavier,Agosto 2019,3159.80,300.00,231.47
+Amex Xavier,Septiembre 2019,2859.80,0.00,0.00
+Amex Xavier,Octubre 2019,2868.43,300.00,8.63
+Amex Xavier,Noviembre 2019,2868.43,200.00,300.00
+Amex Xavier,Diciembre 2019,2488.75,200.00,0.00
+Amex Xavier,Enero 2020,2342.01,200.00,53.26
+Amex Xavier,Febrero 2020,2312.55,200.00,170.54
+Amex Xavier,Marzo 2020,3597.66,200.00,1485.11
+Amex Xavier,Abril 2020,3379.37,200.00,0.00
+Amex Xavier,Mayo 2020,3265.65,200.00,86.28
+Amex Xavier,Junio 2020,3340.12,200.00,274.47
+Amex Xavier,Julio 2020,3810.76,250.00,670.64
+Amex Xavier,Agosto 2020,3673.20,513.00,112.44
+Amex Xavier,Septiembre 2020,3480.55,200.00,320.35
+Amex Xavier,Octubre 2020,3570.41,200.00,289.86
+Amex Xavier,Noviembre 2020,3479.65,300.00,109.24
+Amex Xavier,Diciembre 2020,3225.84,200.00,46.19
+Amex Xavier,Enero 2021,3219.90,400.00,194.06
+Amex Xavier,Febrero 2021,2884.16,300.00,64.26
+Amex Xavier,Marzo 2021,3578.00,1800.00,993.84
+Amex Xavier,Abril 2021,1885.01,300.00,107.01
+Amex Xavier,Mayo 2021,1961.76,300.00,376.75
+Amex Xavier,Junio 2021,1762.67,300.00,100.91
+Amex Xavier,Julio 2021,1695.44,300.00,232.77
+Amex Xavier,Agosto 2021,1511.09,600.00,115.65
+Amex Xavier,Septiembre 2021,918.59,600.00,7.50
+Amex Xavier,Octubre 2021,582.00,300.00,263.41
+Amex Xavier,Noviembre 2021,621.98,250.00,339.98
+Amex Xavier,Diciembre 2021,460.00,460.00,88.02
+Amex Xavier,Enero 2022,200.00,200.00,200.00
+Amex Xavier,Febrero 2022,200.00,0.00,200.00
+Amex Xavier,Marzo 2022,167.95,167.95,0.00
+Amex Xavier,Abril 2022,90.00,90.00,90.00
+Amex Xavier,Mayo 2022,247.94,247.94,247.94
+Amex Xavier,Junio 2022,90.00,0.00,90.00
+Amex Xavier,Julio 2022,100.44,100.44,10.44
+Amex Xavier,Agosto 2022,30.00,30.00,30.00
+Amex Xavier,Septiembre 2022,30.00,30.00,30.00
+Amex Xavier,Octubre 2022,30.00,30.00,30.00
+Amex Xavier,Noviembre 2022,30.00,30.00,30.00
+Amex Xavier,Diciembre 2022,30.00,30.00,30.00
+BOFA Jennifer,Febrero 2019,142.64,60.00,0.00
+BOFA Jennifer,Marzo 2019,235.54,270.00,152.90
+BOFA Jennifer,Junio 2019,491.82,200.00,526.28
+BOFA Jennifer,Julio 2019,116.00,130.00,0.00
+BOFA Jennifer,Agosto 2019,220.00,220.00,234.00
+BOFA Jennifer,Septiembre 2019,100.00,100.00,100.00
+BOFA Jennifer,Octubre 2019,312.87,150.00,312.87
+BOFA Jennifer,Noviembre 2019,380.84,385.00,217.97
+BOFA Jennifer,Diciembre 2019,174.00,50.00,178.16
+BOFA Jennifer,Enero 2020,312.72,50.00,188.72
+BOFA Jennifer,Febrero 2020,586.33,50.00,323.61
+BOFA Jennifer,Marzo 2020,513.93,100.00,0.00
+BOFA Jennifer,Abril 2020,382.49,125.00,0.00
+BOFA Jennifer,Mayo 2020,309.84,125.00,52.35
+BOFA Jennifer,Junio 2020,140.00,140.00,0.00
+BOFA Jennifer,Julio 2020,94.34,100.00,94.34
+BOFA Jennifer,Agosto 2020,765.14,100.00,770.80
+BOFA Jennifer,Septiembre 2020,291.29,150.00,0.00
+BOFA Jennifer,Octubre 2020,122.00,0.00,0.00
+BOFA Jennifer,Noviembre 2020,280.00,280.00,158.00
+BOFA Jennifer,Diciembre 2020,118.73,150.00,118.73
+BOFA Jennifer,Enero 2021,485.00,250.00,516.27
+BOFA Jennifer,Febrero 2021,90.54,90.54,0.00
+BOFA Jennifer,Marzo 2021,0.00,0.00,0.00
+BOFA Jennifer,Abril 2021,538.14,200.00,538.14
+BOFA Jennifer,Mayo 2021,558.33,200.00,220.19
+BOFA Jennifer,Junio 2021,783.85,200.00,425.52
+BOFA Jennifer,Julio 2021,1046.89,200.00,463.04
+BOFA Jennifer,Agosto 2021,722.44,200.00,0.00
+BOFA Jennifer,Septiembre 2021,684.78,250.00,162.34
+BOFA Jennifer,Octubre 2021,877.67,250.00,442.89
+BOFA Jennifer,Noviembre 2021,738.65,0.00,110.98
+BOFA Jennifer,Diciembre 2021,1195.60,200.00,456.95
+BOFA Jennifer,Enero 2022,845.23,250.00,0.00
+BOFA Jennifer,Febrero 2022,995.60,0.00,400.37
+BOFA Jennifer,Marzo 2022,760.95,200.00,0.00
+BOFA Jennifer,Abril 2022,407.97,200.00,0.00
+BOFA Jennifer,Mayo 2022,600.00,600.00,392.03
+BOFA Jennifer,Junio 2022,456.00,300.00,456.00
+BOFA Jennifer,Julio 2022,495.25,200.00,339.25
+BOFA Jennifer,Agosto 2022,200.00,200.00,0.00
+BOFA Jennifer,Septiembre 2022,1113.31,300.00,1113.31
+BOFA Jennifer,Octubre 2022,813.31,283.14,0.00
+BOFA Jennifer,Noviembre 2022,0.00,0.00,0.00
+BOFA Jennifer,Diciembre 2022,673.26,673.26,673.26
+BOFA Xavier,Noviembre 2019,5214.88,200.00,0.00
+BOFA Xavier,Diciembre 2019,0.00,0.00,0.00
+BOFA Xavier,Enero 2020,0.00,0.00,0.00
+BOFA Xavier,Febrero 2020,0.00,0.00,0.00
+BOFA Xavier,Marzo 2020,0.00,0.00,0.00
+BOFA Xavier,Abril 2020,6357.65,1200.00,6357.65
+BOFA Xavier,Mayo 2020,5786.17,250.00,628.52
+BOFA Xavier,Junio 2020,5813.40,250.00,277.23
+BOFA Xavier,Julio 2020,5563.40,0.00,0.00
+BOFA Xavier,Agosto 2020,6812.10,300.00,1248.70
+BOFA Xavier,Septiembre 2020,6232.90,300.00,0.00
+BOFA Xavier,Octubre 2020,6445.87,300.00,512.97
+BOFA Xavier,Noviembre 2020,6232.90,300.00,87.03
+BOFA Xavier,Diciembre 2020,6160.83,300.00,227.93
+BOFA Xavier,Enero 2021,5960.85,300.00,100.02
+BOFA Xavier,Febrero 2021,5188.45,200.00,0.00
+BOFA Xavier,Marzo 2021,6000.87,250.00,1012.42
+BOFA Xavier,Abril 2021,7100.20,200.00,1349.33
+BOFA Xavier,Mayo 2021,8768.53,250.00,1868.33
+BOFA Xavier,Junio 2021,8823.19,250.00,304.66
+BOFA Xavier,Julio 2021,9360.93,250.00,787.74
+BOFA Xavier,Agosto 2021,9993.61,250.00,882.68
+BOFA Xavier,Septiembre 2021,9993.61,250.00,250.00
+BOFA Xavier,Octubre 2021,10838.85,250.00,1095.24
+BOFA Xavier,Noviembre 2021,10917.06,250.00,328.21
+BOFA Xavier,Diciembre 2021,10538.85,0.00,0.00
+BOFA Xavier,Enero 2022,11642.57,300.00,1103.72
+BOFA Xavier,Febrero 2022,10538.85,0.00,0.00
+BOFA Xavier,Marzo 2022,13139.23,300.00,2600.38
+BOFA Xavier,Abril 2022,14037.78,300.00,1198.55
+BOFA Xavier,Mayo 2022,14349.05,2000.00,611.27
+BOFA Xavier,Junio 2022,13471.32,350.00,1122.27
+BOFA Xavier,Julio 2022,14223.42,300.00,1102.10
+BOFA Xavier,Agosto 2022,15093.00,300.00,1169.58
+BOFA Xavier,Septiembre 2022,15310.98,300.00,517.98
+BOFA Xavier,Octubre 2022,15310.98,300.00,300.00
+BOFA Xavier,Noviembre 2022,13121.32,0.00,0.00
+BOFA Xavier,Diciembre 2022,13121.32,0.00,0.00
+Best Buy,Febrero 2019,1248.72,60.00,0.00
+Best Buy,Marzo 2019,1244.52,245.00,55.80
+Best Buy,Abril 2019,1024.60,400.00,25.08
+Best Buy,Mayo 2019,643.64,300.00,19.04
+Best Buy,Junio 2019,343.64,343.64,0.00
+Carro Emma,Agosto 2019,50.00,50.00,0.00
+Carro Emma,Septiembre 2019,50.00,50.00,50.00
+Carro Emma,Octubre 2019,50.00,0.00,50.00
+Carro Patty,Mayo 2019,50.00,100.00,0.00
+Carro Patty,Junio 2019,50.00,100.00,100.00
+Carro Patty,Julio 2019,50.00,100.00,100.00
+Casa,Noviembre 2019,1603.00,0.00,0.00
+Casa,Diciembre 2019,1603.00,0.00,0.00
+Casa,Enero 2020,1603.00,0.00,0.00
+Casa,Febrero 2020,1603.00,0.00,0.00
+Casa,Marzo 2020,1603.00,0.00,0.00
+Casa,Abril 2020,1603.00,0.00,0.00
+Casa,Diciembre 2022,1512.62,0.00,0.00
+Coma I,Diciembre 2021,2399.00,224.00,0.00
+Coma I,Enero 2022,2175.00,224.00,0.00
+Coma I,Febrero 2022,2399.00,224.00,448.00
+Coma I,Marzo 2022,1725.00,225.00,0.00
+Coma I,Abril 2022,1500.00,225.00,0.00
+Coma I,Mayo 2022,1275.00,1275.00,0.00
+Coma I,Agosto 2022,0.00,0.00,0.00
+Dell,Febrero 2019,1679.89,60.00,0.00
+Dell,Marzo 2019,1134.46,135.00,0.00
+Dell,Abril 2019,999.46,300.00,0.00
+Dell,Mayo 2019,1113.46,300.00,414.00
+Dell,Junio 2019,713.46,713.46,0.00
+Dell,Julio 2021,674.99,100.00,674.99
+Dell,Agosto 2021,604.44,100.00,29.45
+Dell,Septiembre 2021,504.44,100.00,0.00
+Dell,Octubre 2021,404.44,100.00,0.00
+Dell,Noviembre 2021,304.44,102.00,0.00
+Dell,Diciembre 2021,202.44,102.00,0.00
+Dell,Enero 2022,100.44,100.44,0.00
+Dell,Febrero 2022,0.00,0.00,0.00
+Dell,Marzo 2022,4000.00,200.00,4000.00
+Dell,Abril 2022,3800.00,600.00,0.00
+Dell,Mayo 2022,3200.00,750.00,0.00
+Dell,Junio 2022,2450.00,650.00,0.00
+Dell,Julio 2022,1800.00,650.00,0.00
+Dell,Agosto 2022,1150.00,650.00,0.00
+Dell,Septiembre 2022,500.00,500.00,0.00
+Dell,Octubre 2022,0.00,0.00,0.00
+Dell,Noviembre 2022,0.00,0.00,0.00
+Discover,Febrero 2019,4740.00,100.00,0.00
+Discover,Marzo 2019,6018.00,1000.00,1378.00
+Discover,Abril 2019,5171.46,1000.00,153.46
+Discover,Mayo 2019,5151.22,1100.00,979.76
+Discover,Junio 2019,4314.94,1000.00,263.72
+Discover,Julio 2019,3633.43,1000.00,318.49
+Discover,Agosto 2019,2900.74,500.00,267.31
+Discover,Septiembre 2019,2414.84,500.00,14.10
+Discover,Octubre 2019,1861.66,300.00,0.00
+Discover,Noviembre 2019,1861.66,500.00,300.00
+Discover,Diciembre 2019,1728.04,500.00,366.38
+Discover,Enero 2020,2106.62,600.00,878.58
+Discover,Febrero 2020,3046.81,600.00,1540.19
+Discover,Marzo 2020,2962.65,600.00,515.84
+Discover,Abril 2020,2999.94,800.00,637.29
+Discover,Mayo 2020,2567.06,600.00,367.12
+Discover,Junio 2020,2566.27,600.00,599.21
+Discover,Julio 2020,2586.69,600.00,620.42
+Discover,Agosto 2020,2936.03,600.00,949.34
+Discover,Septiembre 2020,2924.60,500.00,588.57
+Discover,Octubre 2020,2462.75,500.00,38.15
+Discover,Noviembre 2020,2889.84,500.00,927.09
+Discover,Diciembre 2020,3657.91,500.00,1268.07
+Discover,Enero 2021,3908.91,500.00,751.00
+Discover,Febrero 2021,3956.11,500.00,547.20
+Discover,Marzo 2021,3875.71,600.00,419.60
+Discover,Abril 2021,4596.03,600.00,1320.32
+Discover,Mayo 2021,4753.57,500.00,757.54
+Discover,Junio 2021,4646.32,0.00,392.75
+Discover,Julio 2021,4999.52,600.00,353.20
+Discover,Agosto 2021,5697.04,300.00,1297.52
+Discover,Septiembre 2021,7071.95,300.00,1674.91
+Discover,Octubre 2021,8054.39,300.00,1282.44
+Discover,Noviembre 2021,8655.62,300.00,901.23
+Discover,Diciembre 2021,9759.20,300.00,1403.58
+Discover,Enero 2022,11040.85,600.00,1581.65
+Discover,Febrero 2022,9739.20,500.00,0.00
+Discover,Marzo 2022,10626.92,500.00,1387.72
+Discover,Abril 2022,10563.31,10563.31,436.39
+Discover,Mayo 2022,353.00,353.00,353.00
+Discover,Junio 2022,351.00,351.00,351.00
+Discover,Julio 2022,313.41,313.41,313.41
+Discover,Agosto 2022,313.41,313.41,313.41
+Discover,Septiembre 2022,313.41,313.41,313.41
+Discover,Octubre 2022,313.41,313.41,313.41
+Discover,Noviembre 2022,0.00,0.00,0.00
+Discover,Diciembre 2022,14317.00,239.00,14317.00
+Firestone,Febrero 2019,481.66,60.00,0.00
+Firestone,Marzo 2019,295.14,295.14,0.00
+GCI,Marzo 2020,175.00,0.00,0.00
+GCI,Abril 2020,175.00,0.00,0.00
+GCI,Mayo 2020,175.00,0.00,0.00
+GCI,Junio 2020,175.00,0.00,0.00
+GCI,Julio 2020,175.00,0.00,0.00
+GCI,Agosto 2020,175.00,0.00,0.00
+GCI,Septiembre 2020,175.00,175.00,0.00
+GCI,Octubre 2020,175.00,0.00,175.00
+GCI,Noviembre 2020,175.00,0.00,0.00
+GCI,Diciembre 2020,175.00,0.00,0.00
+GCI,Enero 2021,175.00,0.00,0.00
+GCI,Febrero 2021,175.00,0.00,0.00
+GCI,Marzo 2021,175.00,0.00,0.00
+GCI,Abril 2021,175.00,0.00,0.00
+GCI,Mayo 2021,175.00,0.00,0.00
+GCI,Junio 2021,175.00,0.00,0.00
+GCI,Julio 2021,175.00,0.00,0.00
+GCI,Agosto 2021,175.00,0.00,0.00
+GCI,Septiembre 2021,175.00,0.00,0.00
+GCI,Octubre 2021,175.00,0.00,0.00
+GCI,Noviembre 2021,175.00,0.00,0.00
+GCI,Diciembre 2021,175.00,0.00,0.00
+GCI,Enero 2022,180.00,0.00,5.00
+GCI,Febrero 2022,180.00,0.00,0.00
+GCI,Marzo 2022,180.00,0.00,0.00
+GCI,Abril 2022,180.00,0.00,0.00
+GCI,Mayo 2022,180.00,0.00,0.00
+GCI,Junio 2022,180.00,0.00,0.00
+GCI,Julio 2022,180.00,0.00,0.00
+GCI,Agosto 2022,180.00,0.00,0.00
+GCI,Septiembre 2022,180.00,0.00,0.00
+GCI,Octubre 2022,0.00,0.00,0.00
+GCI,Noviembre 2022,0.00,0.00,0.00
+GCI,Diciembre 2022,0.00,0.00,0.00
+GEICO,Septiembre 2019,155.00,0.00,0.00
+GEICO,Octubre 2019,166.00,166.00,11.00
+Hyundai,Febrero 2019,0.00,566.00,0.00
+Hyundai,Marzo 2019,0.00,566.00,566.00
+Hyundai,Abril 2019,23981.44,566.00,24547.44
+Hyundai,Mayo 2019,23415.44,566.00,0.00
+Hyundai,Junio 2019,22968.43,566.00,118.99
+Hyundai,Julio 2019,22457.18,566.00,54.75
+Hyundai,Agosto 2019,21950.25,566.00,59.07
+Hyundai,Septiembre 2019,21440.18,0.00,55.93
+Hyundai,Octubre 2019,21440.18,0.00,0.00
+Hyundai,Noviembre 2019,53383.25,750.00,31943.07
+Hyundai,Diciembre 2019,52633.25,750.00,0.00
+Hyundai,Enero 2020,52633.25,750.00,750.00
+Hyundai,Febrero 2020,51133.25,750.00,0.00
+Hyundai,Marzo 2020,50383.25,750.00,0.00
+Hyundai,Abril 2020,49633.25,750.00,0.00
+Hyundai,Mayo 2020,48883.25,750.00,0.00
+Hyundai,Junio 2020,48133.25,0.00,0.00
+Hyundai,Julio 2020,48133.25,750.00,0.00
+Hyundai,Agosto 2020,46633.25,750.00,0.00
+Hyundai,Septiembre 2020,45883.25,750.00,0.00
+Hyundai,Octubre 2020,45133.25,750.00,0.00
+Hyundai,Noviembre 2020,44383.25,750.00,0.00
+Hyundai,Diciembre 2020,43633.25,0.00,0.00
+Hyundai,Enero 2021,43633.25,750.00,0.00
+Hyundai,Febrero 2021,42833.25,750.00,0.00
+Hyundai,Marzo 2021,42033.25,750.00,0.00
+Hyundai,Abril 2021,41283.25,750.00,0.00
+Hyundai,Mayo 2021,40633.25,750.00,100.00
+Hyundai,Junio 2021,39133.25,750.00,0.00
+Hyundai,Julio 2021,38383.25,750.00,0.00
+Hyundai,Agosto 2021,36883.25,750.00,0.00
+Hyundai,Septiembre 2021,36133.25,750.00,0.00
+Hyundai,Octubre 2021,35383.25,750.00,0.00
+Hyundai,Noviembre 2021,34633.25,750.00,0.00
+Hyundai,Diciembre 2021,33833.25,750.00,0.00
+Hyundai,Enero 2022,33083.25,750.00,0.00
+Hyundai,Febrero 2022,35383.25,0.00,3050.00
+Hyundai,Marzo 2022,31583.25,750.00,0.00
+Hyundai,Abril 2022,31633.25,750.00,800.00
+Hyundai,Mayo 2022,30833.25,750.00,0.00
+Hyundai,Junio 2022,30083.25,750.00,0.00
+Hyundai,Julio 2022,29333.25,750.00,0.00
+Hyundai,Agosto 2022,28633.25,750.00,50.00
+Hyundai,Septiembre 2022,27883.25,0.00,0.00
+Hyundai,Octubre 2022,27883.25,0.00,0.00
+Hyundai,Noviembre 2022,27883.25,0.00,0.00
+Hyundai,Diciembre 2022,27883.25,0.00,0.00
+Navient,Febrero 2019,4316.01,50.23,0.00
+Navient,Marzo 2019,4185.93,100.00,0.00
+Navient,Abril 2019,4085.93,50.00,0.00
+Navient,Mayo 2019,4061.80,100.00,25.87
+Navient,Junio 2019,3973.62,50.00,11.82
+Navient,Julio 2019,3936.94,100.00,13.32
+Navient,Agosto 2019,3848.40,100.00,11.46
+Navient,Septiembre 2019,3923.62,0.00,175.22
+Navient,Octubre 2019,3760.74,100.00,0.00
+Navient,Noviembre 2019,3760.74,100.00,100.00
+Navient,Diciembre 2019,3587.87,32.03,0.00
+Navient,Enero 2020,3567.90,32.03,12.06
+Navient,Febrero 2020,3541.58,32.03,5.71
+Navient,Marzo 2020,3519.71,32.03,10.16
+Navient,Abril 2020,3487.68,55.00,0.00
+Navient,Mayo 2020,3437.68,55.00,5.00
+Navient,Junio 2020,3437.68,0.00,55.00
+Navient,Julio 2020,3437.68,0.00,0.00
+Navient,Agosto 2020,3437.68,0.00,0.00
+Navient,Septiembre 2020,3382.68,50.00,0.00
+Navient,Octubre 2020,3382.68,0.00,50.00
+Navient,Noviembre 2020,3382.68,0.00,0.00
+Navient,Diciembre 2020,3382.68,0.00,0.00
+Navient,Enero 2021,3382.68,0.00,0.00
+Navient,Febrero 2021,3382.68,0.00,0.00
+Navient,Marzo 2021,3382.68,0.00,0.00
+Navient,Abril 2021,3382.68,0.00,0.00
+Navient,Mayo 2021,3382.68,0.00,0.00
+Navient,Junio 2021,3382.68,0.00,0.00
+Navient,Julio 2021,3382.68,0.00,0.00
+Navient,Agosto 2021,3382.68,50.00,0.00
+Navient,Septiembre 2021,3382.68,50.00,50.00
+Navient,Octubre 2021,3382.68,50.00,50.00
+Navient,Noviembre 2021,3382.68,50.00,50.00
+Navient,Diciembre 2021,3382.68,50.00,50.00
+Navient,Enero 2022,3182.68,100.00,0.00
+Navient,Febrero 2022,3382.68,50.00,300.00
+Navient,Marzo 2022,2982.58,100.00,0.00
+Navient,Abril 2022,2882.68,2882.68,0.00
+Navient,Agosto 2022,0.00,0.00,0.00
+Reloj,Diciembre 2021,66.00,62.00,0.00
+Seguro Casa,Diciembre 2022,0.00,0.00,0.00
+USAA,Noviembre 2019,139.05,139.05,0.00
+USAA,Diciembre 2019,139.05,139.05,139.05
+USAA,Enero 2020,139.05,139.05,139.05
+USAA,Febrero 2020,139.05,0.00,139.05
+USAA,Marzo 2020,139.05,0.00,0.00
+USAA,Abril 2020,144.63,0.00,5.58
+USAA,Mayo 2020,97.03,0.00,0.00
+USAA,Junio 2020,144.63,0.00,47.60
+USAA,Julio 2020,138.64,0.00,0.00
+USAA,Agosto 2020,138.64,0.00,0.00
+USAA,Septiembre 2020,138.64,0.00,0.00
+USAA,Octubre 2020,138.73,0.00,0.00
+USAA,Noviembre 2020,26.61,26.61,0.00
+USAA,Diciembre 2020,138.73,0.00,138.73
+USAA,Enero 2021,138.73,0.00,0.00
+USAA,Febrero 2021,138.73,0.00,0.00
+USAA,Marzo 2021,138.73,0.00,0.00
+USAA,Abril 2021,138.73,0.00,0.00
+USAA,Mayo 2021,138.73,0.00,0.00
+USAA,Junio 2021,138.73,0.00,0.00
+USAA,Julio 2021,138.73,0.00,0.00
+USAA,Agosto 2021,103.53,0.00,0.00
+USAA,Septiembre 2021,103.53,0.00,0.00
+USAA,Octubre 2021,103.53,0.00,0.00
+USAA,Noviembre 2021,103.53,0.00,0.00
+USAA,Diciembre 2021,138.54,138.54,35.01
+USAA,Enero 2022,128.38,128.38,128.38
+USAA,Febrero 2022,138.54,0.00,138.54
+USAA,Marzo 2022,153.35,153.35,14.81
+USAA,Abril 2022,153.35,153.35,153.35
+USAA,Mayo 2022,138.00,138.00,138.00
+USAA,Junio 2022,200.00,200.00,200.00
+USAA,Julio 2022,200.00,200.00,200.00
+USAA,Agosto 2022,180.00,180.00,180.00
+USAA,Septiembre 2022,200.00,200.00,200.00
+USAA,Octubre 2022,0.00,0.00,0.00
+USAA,Noviembre 2022,200.00,200.00,200.00
+USAA,Diciembre 2022,1800.00,200.00,1800.00
+Victoria Secret,Octubre 2019,72.92,72.92,0.00
+Wyndham,Febrero 2019,0.00,422.56,0.00
+Wyndham,Abril 2019,4694.80,330.00,5117.36
+Wyndham,Mayo 2019,4364.80,300.00,0.00
+Wyndham,Junio 2019,4064.80,300.00,0.00
+Wyndham,Julio 2019,3850.85,300.00,86.05
+Wyndham,Agosto 2019,3569.23,300.00,18.38
+Wyndham,Septiembre 2019,3285.73,300.00,16.50
+Wyndham,Octubre 2019,3102.21,300.00,116.48
+Wyndham,Noviembre 2019,2816.25,300.00,14.04
+Wyndham,Diciembre 2019,2529.49,300.00,13.24
+Wyndham,Enero 2020,2241.12,300.00,11.63
+Wyndham,Febrero 2020,1950.74,300.00,9.62
+Wyndham,Marzo 2020,1659.62,1659.62,8.88
+Wyndham,Septiembre 2022,13309.83,0.00,13309.83
+Wyndham,Octubre 2022,13309.83,0.00,0.00
+Wyndham,Noviembre 2022,13309.83,0.00,0.00
+Wyndham,Diciembre 2022,13309.83,0.00,0.00
