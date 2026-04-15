@@ -10772,6 +10772,7 @@ fn menu_asesor_rastreador(state: &mut AppState) {
         let opciones = &[
             "➕  Agregar nueva deuda",
             "📅  Registrar mes de pago (a una deuda)",
+            "�  Revisar deuda individual (análisis predatorio + pagos sugeridos)",
             "📊  Diagnóstico completo (errores + recomendaciones)",
             "📈  Simulación: ¿qué hubiera pasado si...?",
             "🗺️   Simulación: camino a la libertad financiera",
@@ -10781,7 +10782,7 @@ fn menu_asesor_rastreador(state: &mut AppState) {
             "💵  Configurar ingresos",
             "📥  Exportar CSV del rastreador",
             "📂  Importar desde CSV (Excel convertido)",
-            "�  Gestionar deudas (activar/desactivar, obligatoria)",
+            "🔧  Gestionar deudas (activar/desactivar, obligatoria)",
             "🗑️   Eliminar una deuda",
             "🔙  Volver",
         ];
@@ -10789,20 +10790,720 @@ fn menu_asesor_rastreador(state: &mut AppState) {
         match menu("¿Qué hacer?", opciones) {
             Some(0) => rastreador_agregar_deuda(state),
             Some(1) => rastreador_registrar_mes(state),
-            Some(2) => rastreador_diagnostico(state),
-            Some(3) => rastreador_simulacion(state),
-            Some(4) => rastreador_simulacion_libertad(state),
-            Some(5) => rastreador_tabla_aporte_minimo(state),
-            Some(6) => rastreador_editar_pago(state),
-            Some(7) => rastreador_ajustar_tasa(state),
-            Some(8) => rastreador_ingreso(state),
-            Some(9) => rastreador_exportar(state),
-            Some(10) => rastreador_importar_csv(state),
-            Some(11) => rastreador_gestionar_deudas(state),
-            Some(12) => rastreador_eliminar(state),
+            Some(2) => rastreador_revisar_deuda_individual(state),
+            Some(3) => rastreador_diagnostico(state),
+            Some(4) => rastreador_simulacion(state),
+            Some(5) => rastreador_simulacion_libertad(state),
+            Some(6) => rastreador_tabla_aporte_minimo(state),
+            Some(7) => rastreador_editar_pago(state),
+            Some(8) => rastreador_ajustar_tasa(state),
+            Some(9) => rastreador_ingreso(state),
+            Some(10) => rastreador_exportar(state),
+            Some(11) => rastreador_importar_csv(state),
+            Some(12) => rastreador_gestionar_deudas(state),
+            Some(13) => rastreador_eliminar(state),
             _ => return,
         }
     }
+}
+
+fn rastreador_revisar_deuda_individual(state: &AppState) {
+    let deudas_con_interes: Vec<(usize, &omniplanner::ml::advisor::DeudaRastreada)> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.activa && !d.es_pago_corriente() && d.saldo_actual() > 0.01)
+        .collect();
+
+    if deudas_con_interes.is_empty() {
+        println!("  No hay deudas activas para revisar.");
+        pausa();
+        return;
+    }
+
+    loop {
+        limpiar();
+        println!(
+            "{}",
+            "╔══════════════════════════════════════════════════════════════╗".cyan()
+        );
+        println!(
+            "{}",
+            "║  🔍 REVISIÓN INDIVIDUAL DE DEUDAS                         ║"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "║  Selecciona una deuda para ver análisis detallado          ║".cyan()
+        );
+        println!(
+            "{}",
+            "╚══════════════════════════════════════════════════════════════╝".cyan()
+        );
+        println!();
+
+        // Resumen rápido con indicadores
+        println!(
+            "  {:<22} {:>11} {:>7} {:>9} {:>10} {:>10} {:>10} {}",
+            "Cuenta", "Saldo", "Tasa%", "Int/mes", "Pago mín", "Sugerido", "A capital", "Estado"
+        );
+        println!("  {}", "─".repeat(100));
+
+        let mut opciones_menu: Vec<String> = Vec::new();
+        let mut total_sugerido: f64 = 0.0;
+        for (_, (_, d)) in deudas_con_interes.iter().enumerate() {
+            let saldo = d.saldo_actual();
+            let tasa_mensual = d.tasa_efectiva() / 100.0 / 12.0;
+            let interes_mensual = saldo * tasa_mensual;
+            let es_predatoria = d.pago_minimo < interes_mensual && d.tasa_anual > 0.01;
+
+            // Regla: pagar el DOBLE del mínimo o al menos +75%, lo que sea mayor
+            let pago_sugerido = if d.tasa_anual >= 20.0 {
+                (d.pago_minimo * 2.0).max(d.pago_minimo * 1.75).max(interes_mensual * 2.0)
+            } else if d.tasa_anual > 0.01 {
+                d.pago_minimo * 1.75
+            } else {
+                d.pago_minimo
+            };
+            total_sugerido += pago_sugerido;
+
+            let a_capital_min = d.pago_minimo - interes_mensual;
+            let _a_capital_sug = pago_sugerido - interes_mensual;
+
+            let estado = if es_predatoria {
+                "⛔ CRECE".red().bold().to_string()
+            } else if d.tasa_anual >= 20.0 {
+                "⚠️  PREDATORIA".yellow().bold().to_string()
+            } else if interes_mensual > 0.01 && a_capital_min < interes_mensual * 0.3 {
+                "⚠️  Lenta".yellow().to_string()
+            } else if d.tasa_anual < 0.01 {
+                "✅ Sin int.".green().to_string()
+            } else {
+                "✅ Bajando".green().to_string()
+            };
+
+            let nombre_corto = if d.nombre.len() > 21 {
+                format!("{}…", &d.nombre[..20])
+            } else {
+                d.nombre.clone()
+            };
+
+            let capital_str = if a_capital_min < 0.0 {
+                format!("-${:.0}", a_capital_min.abs()).red().to_string()
+            } else {
+                format!("${:.0}", a_capital_min).to_string()
+            };
+
+            println!(
+                "  {:<22} {:>11} {:>6.1}% {:>9} {:>10} {:>10} {:>10} {}",
+                nombre_corto,
+                format!("${:.2}", saldo),
+                d.tasa_anual,
+                format!("${:.0}", interes_mensual),
+                format!("${:.0}", d.pago_minimo),
+                format!("${:.0}", pago_sugerido).green(),
+                capital_str,
+                estado
+            );
+
+            let tag = if es_predatoria {
+                " ⛔ CRECE"
+            } else if d.tasa_anual >= 20.0 {
+                " ⚠️"
+            } else {
+                ""
+            };
+            opciones_menu.push(format!("{}  ${:.2}{}", d.nombre, saldo, tag));
+        }
+        println!("  {}", "─".repeat(100));
+
+        // Totales
+        let total_saldo: f64 = deudas_con_interes.iter().map(|(_, d)| d.saldo_actual()).sum();
+        let total_interes: f64 = deudas_con_interes
+            .iter()
+            .map(|(_, d)| d.saldo_actual() * d.tasa_efectiva() / 100.0 / 12.0)
+            .sum();
+        let total_minimos: f64 = deudas_con_interes.iter().map(|(_, d)| d.pago_minimo).sum();
+
+        println!(
+            "  {:<22} {:>11} {:>7} {:>9} {:>10} {:>10}",
+            "TOTALES",
+            format!("${:.2}", total_saldo).red().bold(),
+            "",
+            format!("${:.0}", total_interes).red(),
+            format!("${:.0}", total_minimos).yellow(),
+            format!("${:.0}", total_sugerido).green().bold()
+        );
+        println!();
+
+        // Warning box siempre visible
+        println!(
+            "  {}",
+            "┌──────────────────────────────────────────────────────────────────┐".yellow()
+        );
+        println!(
+            "  {} ⚠️  REGLA DE ORO: Pagar SIEMPRE el DOBLE del mínimo o +75%{}  {}",
+            "│".yellow(),
+            " ".repeat(5),
+            "│".yellow()
+        );
+        println!(
+            "  {} El pago mínimo es una TRAMPA — solo alimenta intereses{}     {}",
+            "│".yellow(),
+            " ".repeat(5),
+            "│".yellow()
+        );
+        println!(
+            "  {}",
+            "├──────────────────────────────────────────────────────────────────┤".yellow()
+        );
+        // Show each card's minimum as warning
+        for (_, d) in &deudas_con_interes {
+            if d.tasa_anual >= 20.0 {
+                let int_m = d.saldo_actual() * d.tasa_efectiva() / 100.0 / 12.0;
+                let sug = (d.pago_minimo * 2.0).max(d.pago_minimo * 1.75).max(int_m * 2.0);
+                let crece = if d.pago_minimo < int_m { " ⛔ CRECE" } else { "" };
+                println!(
+                    "  {} {:<20} mín: ${:<8.0} → sugerido: ${:<8.0} (int: ${:.0}/mes){}{}",
+                    "│".yellow(),
+                    d.nombre,
+                    d.pago_minimo,
+                    sug,
+                    int_m,
+                    crece,
+                    format!("{:>width$}│", "", width = 1).yellow()
+                );
+            }
+        }
+        println!(
+            "  {}",
+            "└──────────────────────────────────────────────────────────────────┘".yellow()
+        );
+
+        if total_interes > total_minimos * 0.4 {
+            println!();
+            println!(
+                "  {} De los ${:.0} en pagos mínimos, ${:.0} ({:.0}%) se va SOLO a intereses.",
+                "🚨".to_string(),
+                total_minimos,
+                total_interes,
+                (total_interes / total_minimos) * 100.0
+            );
+            println!(
+                "     Pagando los sugeridos (${:.0}/mes), más dinero iría a reducir la deuda.",
+                total_sugerido
+            );
+        }
+        println!();
+
+        opciones_menu.push("🔙  Volver".to_string());
+        let opciones_ref: Vec<&str> = opciones_menu.iter().map(|s| s.as_str()).collect();
+
+        match menu("¿Qué deuda deseas revisar?", &opciones_ref) {
+            Some(i) if i < deudas_con_interes.len() => {
+                let (_, deuda) = deudas_con_interes[i];
+                mostrar_analisis_deuda_individual(deuda);
+            }
+            _ => return,
+        }
+    }
+}
+
+fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastreada) {
+    let saldo = d.saldo_actual();
+    let tasa_mensual = d.tasa_efectiva() / 100.0 / 12.0;
+    let interes_mensual = saldo * tasa_mensual;
+    let es_predatoria = d.pago_minimo < interes_mensual && d.tasa_anual > 0.01;
+    let pago_para_empatar = interes_mensual * 1.005;
+    // Regla de oro: doble del mínimo o +75%, lo que sea mayor; nunca menos que 2x el interés
+    let pago_sugerido = if d.tasa_anual >= 20.0 {
+        (d.pago_minimo * 2.0).max(d.pago_minimo * 1.75).max(interes_mensual * 2.0)
+    } else if d.tasa_anual > 0.01 {
+        d.pago_minimo * 1.75
+    } else {
+        d.pago_minimo
+    };
+
+    loop {
+        limpiar();
+
+        // ── Encabezado ──
+        if es_predatoria {
+            println!(
+                "{}",
+                "╔══════════════════════════════════════════════════════════════╗"
+                    .red()
+            );
+            println!(
+                "{}",
+                format!(
+                    "║  ⛔ DEUDA PREDATORIA: {:<38}║",
+                    d.nombre
+                )
+                .red()
+                .bold()
+            );
+            println!(
+                "{}",
+                "║  El pago mínimo NO cubre los intereses — la deuda CRECE    ║"
+                    .red()
+            );
+            println!(
+                "{}",
+                "╚══════════════════════════════════════════════════════════════╝"
+                    .red()
+            );
+        } else if d.tasa_anual >= 20.0 {
+            println!(
+                "{}",
+                "╔══════════════════════════════════════════════════════════════╗"
+                    .yellow()
+            );
+            println!(
+                "{}",
+                format!(
+                    "║  ⚠️  TASA PREDATORIA: {:<37}║",
+                    d.nombre
+                )
+                .yellow()
+                .bold()
+            );
+            println!(
+                "{}",
+                "║  Tasa ≥20% — cada mes que pase es dinero regalado al banco  ║"
+                    .yellow()
+            );
+            println!(
+                "{}",
+                "╚══════════════════════════════════════════════════════════════╝"
+                    .yellow()
+            );
+        } else {
+            println!(
+                "{}",
+                "╔══════════════════════════════════════════════════════════════╗".cyan()
+            );
+            println!(
+                "{}",
+                format!(
+                    "║  🔍 ANÁLISIS: {:<45}║",
+                    d.nombre
+                )
+                .cyan()
+                .bold()
+            );
+            println!(
+                "{}",
+                "╚══════════════════════════════════════════════════════════════╝".cyan()
+            );
+        }
+
+        // ── WARNING: Pago mínimo siempre visible ──
+        println!();
+        println!(
+            "  {}",
+            "┌──────────────────────────────────────────────────────────────┐".yellow()
+        );
+        println!(
+            "  {}  ⚠️  PAGO MÍNIMO:  {}    ←  esto es lo que pide el banco{}",
+            "│".yellow(),
+            format!("${:.2}", d.pago_minimo).red().bold(),
+            format!("{:>width$}│", "", width = 3).yellow()
+        );
+        println!(
+            "  {}  💰 PAGO SUGERIDO: {}    ←  mínimo para avanzar de verdad{}",
+            "│".yellow(),
+            format!("${:.2}", pago_sugerido).green().bold(),
+            format!("{:>width$}│", "", width = 1).yellow()
+        );
+        if es_predatoria {
+            println!(
+                "  {}  🛑 PARA EMPATAR:  {}    ←  solo para que DEJE de crecer{}",
+                "│".yellow(),
+                format!("${:.2}", pago_para_empatar).yellow().bold(),
+                format!("{:>width$}│", "", width = 1).yellow()
+            );
+        }
+        println!(
+            "  {}",
+            "└──────────────────────────────────────────────────────────────┘".yellow()
+        );
+
+        // ── Sección 1: Radiografía ──
+        println!();
+        println!("  {} RADIOGRAFÍA DE LA DEUDA", "📋".to_string());
+        println!("  {}", "─".repeat(60));
+        println!("  Saldo actual:           {}", format!("${:.2}", saldo).red().bold());
+        println!("  Tasa anual:             {}  (todas las tarjetas al 30% son predatorias)",
+            format!("{:.1}%", d.tasa_anual).red());
+        println!("  Tasa mensual:           {:.2}%", tasa_mensual * 100.0);
+        println!(
+            "  Intereses que genera:   {} cada mes",
+            format!("${:.2}", interes_mensual).red().bold()
+        );
+        println!(
+            "  Intereses al año:       {} — dinero regalado al banco",
+            format!("${:.2}", interes_mensual * 12.0).red()
+        );
+        println!(
+            "  Pago mínimo del banco:  {} ← NO pagues solo esto",
+            format!("${:.2}", d.pago_minimo).yellow()
+        );
+        println!(
+            "  Pago sugerido (×2/+75%):{}  ← MÍNIMO recomendado",
+            format!("${:.2}", pago_sugerido).green().bold()
+        );
+
+        if es_predatoria {
+            let deficit = interes_mensual - d.pago_minimo;
+            println!();
+            println!(
+                "  {} ALERTA CRÍTICA: Pagando el mínimo de ${:.2}, la deuda SUBE ${:.2}/mes",
+                "⛔".to_string(),
+                d.pago_minimo,
+                deficit
+            );
+            println!(
+                "    → En 12 meses habrás pagado ${:.2} y la deuda habrá SUBIDO",
+                d.pago_minimo * 12.0
+            );
+            println!(
+                "    → Necesitas pagar al menos {} para que deje de crecer",
+                format!("${:.2}", pago_para_empatar).yellow().bold()
+            );
+            println!(
+                "    → Con el sugerido de {} empezarías a reducirla de verdad",
+                format!("${:.2}", pago_sugerido).green().bold()
+            );
+        } else if d.tasa_anual > 0.01 {
+            let a_capital_min = d.pago_minimo - interes_mensual;
+            let a_capital_sug = pago_sugerido - interes_mensual;
+            let pct_interes = (interes_mensual / d.pago_minimo) * 100.0;
+            println!();
+            println!(
+                "  Pagando el mínimo de ${:.2}:",
+                d.pago_minimo
+            );
+            println!(
+                "    → ${:.2} ({:.0}%) se va a intereses (dinero regalado al banco)",
+                interes_mensual, pct_interes
+            );
+            println!(
+                "    → ${:.2} ({:.0}%) reduce tu deuda realmente",
+                a_capital_min,
+                100.0 - pct_interes
+            );
+            println!();
+            println!(
+                "  Pagando el sugerido de {}:",
+                format!("${:.2}", pago_sugerido).green()
+            );
+            println!(
+                "    → ${:.2} iría a capital — {:.1}× más rápido que con el mínimo",
+                a_capital_sug,
+                if a_capital_min > 0.01 { a_capital_sug / a_capital_min } else { 0.0 }
+            );
+        }
+
+        // ── Sección 2: Tabla comparativa de pagos ──
+        println!();
+        println!("  {} COMPARACIÓN DE PAGOS — ¿Cuánto debería pagar?", "💰".to_string());
+        println!("  {}", "─".repeat(60));
+
+        // Generar opciones: mínimo, empatar, sugerido, doble, triple, por meses
+        let mut montos: Vec<(String, f64)> = Vec::new();
+
+        montos.push(("⛔ Pago mínimo (trampa)".to_string(), d.pago_minimo));
+
+        if es_predatoria {
+            montos.push(("🛑 Para detener crecimiento".to_string(), pago_para_empatar.ceil()));
+        }
+
+        // Pago sugerido (+75% / doble)
+        montos.push(("💰 SUGERIDO (×2 / +75%)".to_string(), pago_sugerido));
+
+        // Calcular montos estratégicos
+        let opciones_monto = [
+            ("Triple del mínimo", d.pago_minimo * 3.0),
+        ];
+        for (nombre, monto) in &opciones_monto {
+            if *monto > pago_sugerido + 10.0 && !montos.iter().any(|(_, m)| (*m - *monto).abs() < 10.0) {
+                montos.push((nombre.to_string(), *monto));
+            }
+        }
+
+        // Pago para salir en X meses (búsqueda simple)
+        for target_meses in [12u32, 24, 36, 48] {
+            let pago_necesario = calcular_pago_para_meses(saldo, tasa_mensual, target_meses);
+            if pago_necesario > d.pago_minimo && pago_necesario < saldo
+                && !montos.iter().any(|(_, m)| (*m - pago_necesario).abs() < 10.0)
+            {
+                montos.push((format!("Liquidar en {} meses", target_meses), pago_necesario));
+            }
+        }
+
+        // Pago total (liquidar ya)
+        montos.push(("Pago total (liquidar ya)".to_string(), saldo));
+
+        // Ordenar por monto
+        montos.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        // Tabla
+        println!(
+            "  ┌──────────────────────────────┬──────────┬────────┬──────────────┬──────────────┬─────────────┐"
+        );
+        println!(
+            "  │ {:<28} │ {:>8} │ {:>6} │ {:>12} │ {:>12} │ {:>11} │",
+            "Estrategia", "Pago/mes", "Meses", "Intereses", "Total pagado", "Costo extra"
+        );
+        println!(
+            "  ├──────────────────────────────┼──────────┼────────┼──────────────┼──────────────┼─────────────┤"
+        );
+
+        let mut resultados: Vec<(String, f64, u32, f64, f64)> = Vec::new();
+        for (nombre, monto) in &montos {
+            let (meses, total_int, total_pag) = simular_pagos_simple(saldo, tasa_mensual, *monto);
+            resultados.push((nombre.clone(), *monto, meses, total_int, total_pag));
+        }
+
+        let costo_minimo = resultados.last().map(|(_, _, _, _, tp)| *tp).unwrap_or(saldo);
+
+        for (nombre, monto, meses, total_int, total_pag) in &resultados {
+            let costo_extra = total_pag - costo_minimo;
+            let meses_str = if *meses >= 600 {
+                "∞".to_string()
+            } else {
+                format!("{}", meses)
+            };
+
+            let nombre_corto = if nombre.len() > 28 {
+                format!("{}…", &nombre[..27])
+            } else {
+                nombre.clone()
+            };
+
+            // Indicador visual
+            let indicador = if *meses >= 600 {
+                " ⛔"
+            } else if *meses > 60 {
+                " ⚠️ "
+            } else if *meses <= 24 {
+                " ✅"
+            } else {
+                ""
+            };
+
+            println!(
+                "  │ {:<28} │ {:>8} │ {:>5}{} │ {:>12} │ {:>12} │ {:>11} │",
+                nombre_corto,
+                format!("${:.0}", monto),
+                meses_str,
+                if indicador.is_empty() { " " } else { indicador },
+                format!("${:.2}", total_int),
+                format!("${:.2}", total_pag),
+                if costo_extra > 0.5 {
+                    format!("+${:.0}", costo_extra)
+                } else {
+                    "—".to_string()
+                }
+            );
+        }
+
+        println!(
+            "  └──────────────────────────────┴──────────┴────────┴──────────────┴──────────────┴─────────────┘"
+        );
+
+        println!();
+        println!(
+            "  💡 \"Costo extra\" = cuánto más pagas en total vs liquidar de inmediato."
+        );
+        println!(
+            "     Cada dólar en esa columna es dinero regalado al banco."
+        );
+
+        // ── Sección 3: Historial ──
+        if !d.historial.is_empty() {
+            println!();
+            println!("  {} HISTORIAL DE PAGOS REGISTRADOS", "📅".to_string());
+            println!("  {}", "─".repeat(60));
+            println!(
+                "  {:<12} {:>12} {:>10} {:>10} {:>10} {:>12}",
+                "Mes", "Saldo ini.", "Pago", "Interés", "Cargos", "Saldo fin."
+            );
+            println!("  {}", "─".repeat(68));
+            for m in &d.historial {
+                println!(
+                    "  {:<12} {:>12} {:>10} {:>10} {:>10} {:>12}",
+                    m.mes,
+                    format!("${:.2}", m.saldo_inicio),
+                    format!("${:.2}", m.pago),
+                    format!("${:.2}", m.intereses),
+                    format!("${:.2}", m.nuevos_cargos),
+                    format!("${:.2}", m.saldo_final)
+                );
+            }
+            println!("  {}", "─".repeat(68));
+            let total_pagado: f64 = d.historial.iter().map(|m| m.pago).sum();
+            let total_interes: f64 = d.historial.iter().map(|m| m.intereses).sum();
+            println!(
+                "  Total pagado: {}  |  Total en intereses: {}  |  Eficiencia: {:.0}%",
+                format!("${:.2}", total_pagado).green(),
+                format!("${:.2}", total_interes).red(),
+                if total_pagado > 0.01 {
+                    ((total_pagado - total_interes) / total_pagado) * 100.0
+                } else {
+                    0.0
+                }
+            );
+        }
+
+        // ── Sub-menú ──
+        println!();
+        let sub_opciones = &[
+            "📊  Ver proyección mes a mes con un monto específico",
+            "�  Ver proyección con el pago SUGERIDO",
+            "🔙  Volver al listado de deudas",
+        ];
+
+        match menu("¿Qué deseas hacer?", sub_opciones) {
+            Some(0) => {
+                let monto = pedir_f64("Monto de pago mensual a proyectar ($)", pago_sugerido);
+                let max_m = pedir_f64("¿Cuántos meses proyectar? (máx)", 60.0) as u32;
+                mostrar_proyeccion_individual(d, monto, max_m);
+            }
+            Some(1) => {
+                mostrar_proyeccion_individual(d, pago_sugerido, 60);
+            }
+            _ => return,
+        }
+    }
+}
+
+/// Calcula el pago mensual fijo necesario para liquidar una deuda en X meses.
+fn calcular_pago_para_meses(saldo: f64, tasa_mensual: f64, meses: u32) -> f64 {
+    if tasa_mensual < 0.0001 {
+        return saldo / meses as f64;
+    }
+    // Fórmula de amortización: P = S * [r(1+r)^n] / [(1+r)^n - 1]
+    let r = tasa_mensual;
+    let n = meses as f64;
+    let factor = r * (1.0 + r).powf(n);
+    let denom = (1.0 + r).powf(n) - 1.0;
+    if denom.abs() < 0.0001 {
+        return saldo / meses as f64;
+    }
+    (saldo * factor / denom).ceil()
+}
+
+/// Simula pagos fijos mensuales y devuelve (meses, total_intereses, total_pagado).
+fn simular_pagos_simple(saldo_inicial: f64, tasa_mensual: f64, monto: f64) -> (u32, f64, f64) {
+    let mut saldo = saldo_inicial;
+    let mut total_int = 0.0;
+    let mut total_pag = 0.0;
+    let mut meses = 0u32;
+
+    while saldo > 0.01 && meses < 600 {
+        let interes = saldo * tasa_mensual;
+        total_int += interes;
+        saldo += interes;
+        let pago = monto.min(saldo);
+        saldo -= pago;
+        total_pag += pago;
+        meses += 1;
+    }
+    (meses, total_int, total_pag)
+}
+
+/// Muestra proyección mes a mes para una deuda con un monto de pago dado.
+fn mostrar_proyeccion_individual(d: &omniplanner::ml::advisor::DeudaRastreada, monto: f64, max_meses: u32) {
+    let saldo_ini = d.saldo_actual();
+    let tasa_mensual = d.tasa_efectiva() / 100.0 / 12.0;
+    let interes_mes1 = saldo_ini * tasa_mensual;
+
+    limpiar();
+    separador(&format!(
+        "📊 PROYECCIÓN: {} — pagando ${:.2}/mes",
+        d.nombre, monto
+    ));
+
+    if monto <= interes_mes1 && d.tasa_anual > 0.01 {
+        println!();
+        println!(
+            "  {} Con ${:.2}/mes NO cubres los intereses de ${:.2}/mes.",
+            "⛔".to_string(),
+            monto,
+            interes_mes1
+        );
+        println!("  La deuda crecerá indefinidamente. Necesitas pagar más.");
+        println!();
+    }
+
+    println!();
+    println!(
+        "  {:<5} {:>12} {:>10} {:>12} {:>12} {:>14}",
+        "Mes", "Saldo", "Pago", "→ Interés", "→ Capital", "Int. acum."
+    );
+    println!("  {}", "─".repeat(70));
+
+    let mut saldo = saldo_ini;
+    let mut int_acum = 0.0;
+
+    for mes in 1..=max_meses {
+        if saldo < 0.01 {
+            break;
+        }
+        let interes = saldo * tasa_mensual;
+        int_acum += interes;
+        saldo += interes;
+        let pago = monto.min(saldo);
+        let a_capital = pago - interes;
+        saldo -= pago;
+        if saldo < 0.01 {
+            saldo = 0.0;
+        }
+
+        // Colorear: rojo si a_capital negativo, verde si positivo
+        let capital_str = if a_capital < 0.0 {
+            format!("-${:.2}", a_capital.abs()).red().to_string()
+        } else {
+            format!("${:.2}", a_capital).green().to_string()
+        };
+
+        println!(
+            "  {:<5} {:>12} {:>10} {:>12} {:>12} {:>14}",
+            mes,
+            format!("${:.2}", saldo),
+            format!("${:.2}", pago),
+            format!("${:.2}", interes),
+            capital_str,
+            format!("${:.2}", int_acum)
+        );
+
+        if saldo < 0.01 {
+            println!();
+            println!(
+                "  {} ¡Deuda liquidada en {} meses! Total intereses: ${:.2}",
+                "🎉".to_string(),
+                mes,
+                int_acum
+            );
+            break;
+        }
+    }
+
+    if saldo > 0.01 {
+        println!("  {}", "─".repeat(70));
+        println!(
+            "  Después de {} meses: Saldo restante ${:.2}  |  Intereses pagados: ${:.2}",
+            max_meses, saldo, int_acum
+        );
+    }
+
+    println!();
+    pausa();
 }
 
 fn rastreador_agregar_deuda(state: &mut AppState) {
