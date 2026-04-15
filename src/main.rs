@@ -4514,7 +4514,11 @@ fn menu_sync(state: &mut AppState) {
 
         let gist_estado = if state.sync.gist_configurado() {
             if !state.sync.gist_id.is_empty() {
-                "✅ Sincronizado".green().to_string()
+                if state.sync.auto_sync {
+                    "✅ Sync automático ACTIVO".green().to_string()
+                } else {
+                    "✅ Sincronizado (manual)".green().to_string()
+                }
             } else {
                 "⚠️  Token listo (sin Gist aún)".yellow().to_string()
             }
@@ -4542,11 +4546,18 @@ fn menu_sync(state: &mut AppState) {
             state.sync.mapa_tareas.len()
         );
 
+        let toggle_auto = if state.sync.auto_sync {
+            "🔄 Desactivar sync automático"
+        } else {
+            "🔄 Activar sync automático"
+        };
+
         let opciones = &[
             "🔑 Subir datos via GitHub Gist (push)",
             "🔑 Descargar datos via GitHub Gist (pull)",
             "🔑 Buscar Gist existente (otro dispositivo)",
             "🔑 Configurar GitHub Gist (token)",
+            toggle_auto,
             "───────────────────────────",
             "☁️  Subir datos a Google Drive (push)",
             "☁️  Descargar datos de Google Drive (pull)",
@@ -4573,24 +4584,44 @@ fn menu_sync(state: &mut AppState) {
             Some(1) => gist_pull_datos(state),
             Some(2) => gist_buscar_existente(state),
             Some(3) => configurar_gist(state),
-            Some(4) => {} // separador
-            Some(5) => drive_push(state),
-            Some(6) => drive_pull(state),
-            Some(7) => drive_buscar(state),
-            Some(8) => {} // separador
-            Some(9) => exportar_ics(state),
-            Some(10) => importar_ics(state),
-            Some(11) => sync_push_google(state),
-            Some(12) => sync_pull_google(state),
-            Some(13) => resync_google(state),
-            Some(14) => iniciar_dashboard_web(state),
-            Some(15) => exportar_estado(state),
-            Some(16) => importar_estado(state),
-            Some(17) => enviar_resumen(state),
-            Some(18) => enviar_recordatorio(state),
-            Some(19) => enviar_followup_email(state),
-            Some(20) => configurar_google(state),
-            Some(21) => configurar_email(state),
+            Some(4) => {
+                // Toggle auto-sync
+                if !state.sync.gist_configurado() {
+                    println!("  {} Primero configura tu token de GitHub.", "✗".red());
+                    pausa();
+                } else {
+                    state.sync.auto_sync = !state.sync.auto_sync;
+                    if state.sync.auto_sync {
+                        println!(
+                            "  {} Sync automático {}",
+                            "✓".green(),
+                            "ACTIVADO".green().bold()
+                        );
+                        println!("    Tus datos se respaldarán en la nube automáticamente.");
+                    } else {
+                        println!("  ℹ Sync automático {}", "DESACTIVADO".yellow().bold());
+                    }
+                    pausa();
+                }
+            }
+            Some(5) => {} // separador
+            Some(6) => drive_push(state),
+            Some(7) => drive_pull(state),
+            Some(8) => drive_buscar(state),
+            Some(9) => {} // separador
+            Some(10) => exportar_ics(state),
+            Some(11) => importar_ics(state),
+            Some(12) => sync_push_google(state),
+            Some(13) => sync_pull_google(state),
+            Some(14) => resync_google(state),
+            Some(15) => iniciar_dashboard_web(state),
+            Some(16) => exportar_estado(state),
+            Some(17) => importar_estado(state),
+            Some(18) => enviar_resumen(state),
+            Some(19) => enviar_recordatorio(state),
+            Some(20) => enviar_followup_email(state),
+            Some(21) => configurar_google(state),
+            Some(22) => configurar_email(state),
             _ => return,
         }
     }
@@ -4663,6 +4694,7 @@ fn configurar_gist(state: &mut AppState) {
                 usuario.cyan()
             );
             state.sync.gist_token = token;
+            state.sync.auto_sync = true; // Activar sync automático
 
             // Buscar si ya hay un gist existente
             println!("  Buscando Gist existente...");
@@ -4676,6 +4708,33 @@ fn configurar_gist(state: &mut AppState) {
                     state.sync.gist_id = String::new();
                 }
                 Err(e) => println!("  {} Error buscando: {}", "⚠".yellow(), e),
+            }
+
+            println!();
+            println!(
+                "  {} Sync automático {} — tus datos se respaldarán",
+                "✓".green(),
+                "ACTIVADO".green().bold()
+            );
+            println!("    en la nube cada vez que guardes.");
+
+            // Hacer push inmediato para que haya datos en la nube desde ya
+            println!();
+            println!("  Subiendo datos a la nube...");
+            let json = serde_json::to_string_pretty(&*state).unwrap_or_default();
+            match sync::gist::gist_push(&state.sync, &json) {
+                Ok(gist_id) => {
+                    state.sync.gist_id = gist_id;
+                    println!(
+                        "  {} ¡Datos sincronizados! Ya puedes acceder desde otro dispositivo.",
+                        "✓".green()
+                    );
+                    println!("  💡 En el otro dispositivo: configura el mismo token y haz 'pull'.");
+                }
+                Err(e) => {
+                    println!("  {} Error subiendo: {}", "⚠".yellow(), e);
+                    println!("  Se reintentará automáticamente en el próximo guardado.");
+                }
             }
         }
         Err(e) => {
