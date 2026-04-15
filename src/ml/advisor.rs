@@ -1714,6 +1714,102 @@ impl RastreadorDeudas {
             total_gastos_fijos,
         }
     }
+
+    /// Dado un presupuesto mensual, calcula en cuántos meses se sale de deudas.
+    /// Retorna None si no se puede pagar (presupuesto < mínimos).
+    pub fn meses_para_salir(&self, presupuesto: f64, bola_nieve: bool) -> Option<usize> {
+        let sim = self.simular_libertad(presupuesto, bola_nieve);
+        if sim.meses.is_empty() {
+            return Some(0);
+        }
+        let ultimo = sim.meses.last()?;
+        if ultimo.deuda_total < 0.01 {
+            Some(sim.meses.len())
+        } else {
+            None // no alcanza
+        }
+    }
+
+    /// Busca el aporte mínimo mensual para salir de deudas en exactamente `objetivo_meses`.
+    /// Usa búsqueda binaria sobre el presupuesto. Retorna el monto redondeado al dólar.
+    fn aporte_minimo_para_meses(
+        &self,
+        objetivo_meses: usize,
+        bola_nieve: bool,
+    ) -> Option<f64> {
+        // Cotas: mínimo = suma de pagos mínimos + corrientes, máximo = deuda total
+        let corrientes: f64 = self
+            .deudas
+            .iter()
+            .filter(|d| d.activa && d.es_pago_corriente())
+            .map(|d| d.pago_minimo)
+            .sum();
+        let min_deudas: f64 = self
+            .deudas
+            .iter()
+            .filter(|d| d.activa && !d.es_pago_corriente() && d.saldo_actual() > 0.01)
+            .map(|d| d.pago_minimo)
+            .sum();
+        let deuda_total: f64 = self
+            .deudas
+            .iter()
+            .filter(|d| d.activa && !d.es_pago_corriente())
+            .map(|d| d.saldo_actual())
+            .sum();
+
+        if deuda_total < 0.01 {
+            return Some(0.0);
+        }
+
+        let mut lo = min_deudas + corrientes;
+        let mut hi = deuda_total + corrientes + 1.0;
+
+        // Verificar que al menos con hi se puede en <= objetivo_meses
+        match self.meses_para_salir(hi, bola_nieve) {
+            Some(m) if m <= objetivo_meses => {}
+            _ => {
+                hi *= 2.0;
+                match self.meses_para_salir(hi, bola_nieve) {
+                    Some(m) if m <= objetivo_meses => {}
+                    _ => return None,
+                }
+            }
+        }
+
+        // Búsqueda binaria: encontrar el menor presupuesto que da <= objetivo_meses
+        for _ in 0..60 {
+            if hi - lo < 0.50 {
+                break;
+            }
+            let mid = (lo + hi) / 2.0;
+            match self.meses_para_salir(mid, bola_nieve) {
+                Some(m) if m <= objetivo_meses => hi = mid,
+                _ => lo = mid,
+            }
+        }
+
+        Some(hi.ceil())
+    }
+
+    /// Genera tabla de proyección: para cada número de meses (de `max_meses` hasta 1),
+    /// calcula el aporte mínimo mensual necesario para salir de deudas.
+    /// Retorna Vec<(meses, aporte_minimo, total_pagado, total_intereses)>.
+    pub fn tabla_aporte_minimo(
+        &self,
+        max_meses: usize,
+        min_meses: usize,
+        bola_nieve: bool,
+    ) -> Vec<(usize, f64, f64, f64)> {
+        let mut tabla = Vec::new();
+        for objetivo in (min_meses..=max_meses).rev() {
+            if let Some(aporte) = self.aporte_minimo_para_meses(objetivo, bola_nieve) {
+                let sim = self.simular_libertad(aporte, bola_nieve);
+                let meses_reales = sim.meses.len();
+                tabla.push((meses_reales, aporte, sim.total_pagado, sim.total_intereses));
+            }
+        }
+        tabla
+    }
 }
 
 /// Estado de una deuda durante la simulación.

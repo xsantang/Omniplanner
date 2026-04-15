@@ -10775,6 +10775,7 @@ fn menu_asesor_rastreador(state: &mut AppState) {
             "📊  Diagnóstico completo (errores + recomendaciones)",
             "📈  Simulación: ¿qué hubiera pasado si...?",
             "🗺️   Simulación: camino a la libertad financiera",
+            "📋  Tabla de aporte mínimo (¿cuánto necesito para salir en X meses?)",
             "✏️   Editar pago de un mes",
             "⚙️   Ajustar tasa de interés",
             "💵  Configurar ingresos",
@@ -10791,13 +10792,14 @@ fn menu_asesor_rastreador(state: &mut AppState) {
             Some(2) => rastreador_diagnostico(state),
             Some(3) => rastreador_simulacion(state),
             Some(4) => rastreador_simulacion_libertad(state),
-            Some(5) => rastreador_editar_pago(state),
-            Some(6) => rastreador_ajustar_tasa(state),
-            Some(7) => rastreador_ingreso(state),
-            Some(8) => rastreador_exportar(state),
-            Some(9) => rastreador_importar_csv(state),
-            Some(10) => rastreador_gestionar_deudas(state),
-            Some(11) => rastreador_eliminar(state),
+            Some(5) => rastreador_tabla_aporte_minimo(state),
+            Some(6) => rastreador_editar_pago(state),
+            Some(7) => rastreador_ajustar_tasa(state),
+            Some(8) => rastreador_ingreso(state),
+            Some(9) => rastreador_exportar(state),
+            Some(10) => rastreador_importar_csv(state),
+            Some(11) => rastreador_gestionar_deudas(state),
+            Some(12) => rastreador_eliminar(state),
             _ => return,
         }
     }
@@ -11819,6 +11821,240 @@ fn rastreador_simulacion_libertad(state: &AppState) {
         }
     }
 
+    pausa();
+}
+
+fn rastreador_tabla_aporte_minimo(state: &AppState) {
+    let deudas_reales: Vec<&DeudaRastreada> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .filter(|d| d.activa && !d.es_pago_corriente() && d.saldo_actual() > 0.01)
+        .collect();
+
+    if deudas_reales.is_empty() {
+        println!("  No hay deudas activas para proyectar.");
+        pausa();
+        return;
+    }
+
+    limpiar();
+    separador("📊 TABLA DE APORTE MÍNIMO MENSUAL — ¿Cuánto necesitas para salir de deudas?");
+
+    let deuda_total: f64 = deudas_reales.iter().map(|d| d.saldo_actual()).sum();
+    let ingreso_mensual = state.asesor.rastreador.ingreso_mensual_total();
+    let minimos: f64 = deudas_reales.iter().map(|d| d.pago_minimo).sum();
+
+    println!();
+    println!(
+        "  Deuda total:     {}",
+        format!("${:.2}", deuda_total).red().bold()
+    );
+    println!(
+        "  Ingreso mensual: {}",
+        format!("${:.2}", ingreso_mensual).green()
+    );
+    println!(
+        "  Mínimos deudas:  {}",
+        format!("${:.2}", minimos).yellow()
+    );
+    println!();
+
+    // Elegir estrategia
+    let estrategias = &[
+        "❄️  Avalancha (tasa más alta primero)",
+        "⛄ Bola de nieve (saldo más bajo primero)",
+    ];
+    let bola_nieve = match menu("¿Qué estrategia usar?", estrategias) {
+        Some(1) => true,
+        Some(0) => false,
+        _ => return,
+    };
+
+    // Calcular máximo de meses con pagos mínimos
+    let max_meses_default = match state
+        .asesor
+        .rastreador
+        .meses_para_salir(minimos + state.asesor.rastreador.deudas.iter()
+            .filter(|d| d.activa && d.es_pago_corriente())
+            .map(|d| d.pago_minimo)
+            .sum::<f64>(), bola_nieve)
+    {
+        Some(m) if m > 0 => (m as usize).min(120),
+        _ => 60,
+    };
+
+    let max_meses = pedir_f64(
+        "¿Hasta cuántos meses mostrar? (máx referencia con pago mínimo)",
+        max_meses_default as f64,
+    ) as usize;
+
+    let min_meses = pedir_f64("¿Desde cuántos meses? (mínimo agresivo)", 1.0) as usize;
+
+    if min_meses > max_meses || min_meses == 0 {
+        println!("  Rango inválido.");
+        pausa();
+        return;
+    }
+
+    println!();
+    println!("  ⏳ Calculando proyecciones... (esto puede tomar unos segundos)");
+    println!();
+
+    let tabla = state
+        .asesor
+        .rastreador
+        .tabla_aporte_minimo(max_meses, min_meses, bola_nieve);
+
+    if tabla.is_empty() {
+        println!("  No se pudo calcular ninguna proyección.");
+        pausa();
+        return;
+    }
+
+    limpiar();
+    let nombre_est = if bola_nieve { "Bola de nieve" } else { "Avalancha" };
+    separador(&format!(
+        "📊 TABLA DE APORTE MÍNIMO — {} | Deuda: ${:.2}",
+        nombre_est, deuda_total
+    ));
+
+    println!();
+    println!(
+        "  💡 Esta tabla muestra cuánto necesitas aportar como mínimo cada mes"
+    );
+    println!(
+        "     para salir de deudas en el número de meses indicado."
+    );
+    println!(
+        "     Úsala como referencia para saber cuánto debes ganar o destinar."
+    );
+    println!();
+
+    // Encabezados de la tabla
+    println!(
+        "  ┌──────────┬──────────────────┬──────────────────┬──────────────────┬────────────────┐"
+    );
+    println!(
+        "  │ {:>8} │ {:>16} │ {:>16} │ {:>16} │ {:>14} │",
+        "Meses", "Aporte/mes", "Total pagado", "Intereses", "Ahorro vs max"
+    );
+    println!(
+        "  ├──────────┼──────────────────┼──────────────────┼──────────────────┼────────────────┤"
+    );
+
+    // El mayor total pagado (más meses = más intereses) para calcular ahorro
+    let max_total = tabla
+        .first()
+        .map(|(_, _, tp, _)| *tp)
+        .unwrap_or(0.0);
+
+    let mut prev_aporte = 0.0f64;
+    for (meses, aporte, total_pagado, total_intereses) in &tabla {
+        let ahorro = max_total - total_pagado;
+        let delta = if prev_aporte > 0.01 {
+            aporte - prev_aporte
+        } else {
+            0.0
+        };
+        let delta_str = if delta.abs() > 0.01 {
+            format!(" (+${:.0})", delta)
+        } else {
+            String::new()
+        };
+
+        // Colorear según accesibilidad
+        let aporte_str = format!("${:.2}", aporte);
+        let aporte_display = if ingreso_mensual > 0.01 && *aporte <= ingreso_mensual {
+            format!("{:>16}", aporte_str).green().to_string()
+        } else if ingreso_mensual > 0.01 && *aporte <= ingreso_mensual * 1.2 {
+            format!("{:>16}", aporte_str).yellow().to_string()
+        } else {
+            format!("{:>16}", aporte_str).red().to_string()
+        };
+
+        println!(
+            "  │ {:>6}m  │ {} │ {:>16} │ {:>16} │ {:>14} │",
+            meses,
+            aporte_display,
+            format!("${:.2}", total_pagado),
+            format!("${:.2}", total_intereses),
+            if ahorro > 0.01 {
+                format!("${:.2}", ahorro)
+            } else {
+                "—".to_string()
+            }
+        );
+
+        if !delta_str.is_empty() {
+            println!(
+                "  │          │ {:>16} │                  │                  │                │",
+                delta_str
+            );
+        }
+
+        prev_aporte = *aporte;
+    }
+    println!(
+        "  └──────────┴──────────────────┴──────────────────┴──────────────────┴────────────────┘"
+    );
+
+    // Resumen
+    println!();
+    if let Some((meses_max, aporte_min, _, int_max)) = tabla.first() {
+        if let Some((meses_min, aporte_max, _, int_min)) = tabla.last() {
+            println!(
+                "  📌 Con {} puedes salir en {}m (máximo interés: {})",
+                format!("${:.2}/mes", aporte_min).yellow(),
+                meses_max,
+                format!("${:.2}", int_max).red()
+            );
+            println!(
+                "  🚀 Con {} sales en solo {}m (interés: {})",
+                format!("${:.2}/mes", aporte_max).green().bold(),
+                meses_min,
+                format!("${:.2}", int_min).red()
+            );
+            let ahorro_total = int_max - int_min;
+            if ahorro_total > 0.01 {
+                println!(
+                    "  💰 Diferencia en intereses: {} — ¡eso te ahorras pagando más rápido!",
+                    format!("${:.2}", ahorro_total).green().bold()
+                );
+            }
+        }
+    }
+
+    // Indicar qué es viable con ingreso actual
+    if ingreso_mensual > 0.01 {
+        println!();
+        let viables: Vec<_> = tabla
+            .iter()
+            .filter(|(_, aporte, _, _)| *aporte <= ingreso_mensual)
+            .collect();
+        if let Some((meses_rapido, aporte_rapido, _, _)) = viables.last() {
+            println!(
+                "  ✅ Con tu ingreso actual ({}) lo más rápido viable es {}m aportando {}",
+                format!("${:.2}", ingreso_mensual).green(),
+                meses_rapido,
+                format!("${:.2}/mes", aporte_rapido).green().bold()
+            );
+        } else {
+            println!(
+                "  ⚠️  Tu ingreso actual ({}) no alcanza para ninguna opción.",
+                format!("${:.2}", ingreso_mensual).red()
+            );
+            if let Some((_, aporte_min, _, _)) = tabla.first() {
+                println!(
+                    "     Necesitas al menos {} para el plan más lento.",
+                    format!("${:.2}/mes", aporte_min).yellow()
+                );
+            }
+        }
+    }
+
+    println!();
     pausa();
 }
 
