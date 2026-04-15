@@ -949,9 +949,28 @@ impl DeudaRastreada {
     }
 
     /// ¿Es un pago corriente (renta, seguro, suscripción)?
-    /// Sin intereses, se paga completo cada mes, nunca se "liquida".
+    /// Sin intereses, obligatorio, se paga completo cada mes, nunca se "liquida".
+    /// NO aplica si el saldo es significativamente mayor al pago mínimo
+    /// (eso indica una deuda finita que se está pagando, no un gasto recurrente).
     pub fn es_pago_corriente(&self) -> bool {
-        self.obligatoria && self.tasa_anual < 0.01
+        if !self.obligatoria || self.tasa_anual >= 0.01 {
+            return false;
+        }
+        // Si el saldo es mayor a 1.5× el pago mínimo, es una deuda real
+        // (ej: Navy Federal $1396 con pago $500 → deuda, no corriente)
+        // Un corriente tiene saldo ≈ pago_minimo o 0 (renta, celular, etc.)
+        let saldo = self.saldo_actual();
+        if self.pago_minimo > 0.01 && saldo > self.pago_minimo * 1.5 {
+            return false;
+        }
+        true
+    }
+
+    /// ¿Es un pago fijo a cuotas? (préstamo a cuotas fijas, ej: Navy Federal, Unit Con Fin)
+    /// Se paga exactamente pago_minimo cada mes, sin intereses extra,
+    /// no participa en avalancha/bola de nieve.
+    pub fn es_pago_fijo(&self) -> bool {
+        self.tasa_anual < 0.01 && self.saldo_actual() > 0.01 && !self.es_pago_corriente()
     }
 
     pub fn saldo_actual(&self) -> f64 {
@@ -1476,9 +1495,10 @@ impl RastreadorDeudas {
                 saldo: d.saldo_actual(),
                 tasa_anual: d.tasa_anual,
                 pago_minimo: d.pago_minimo,
-                obligatoria: d.obligatoria,
                 liquidada_mes: None,
                 meses_gracia: d.meses_gracia,
+                pago_fijo: d.es_pago_fijo(),
+                obligatoria: d.obligatoria,
             })
             .collect();
 
@@ -1511,31 +1531,46 @@ impl RastreadorDeudas {
         let mut total_intereses = 0.0;
         let mut orden_liquidacion: Vec<(String, usize)> = Vec::new();
 
+        // Rastrear cuánto se libera de deudas liquidadas
+        let minimos_originales: f64 = deudas.iter().map(|d| d.pago_minimo).sum();
+
         for mes_num in 1..=600usize {
             let vivas: usize = deudas.iter().filter(|d| d.liquidada_mes.is_none()).count();
             if vivas == 0 {
                 break;
             }
 
+            // Calcular cuánto se liberó de deudas ya liquidadas
+            let minimos_vivos: f64 = deudas
+                .iter()
+                .filter(|d| d.liquidada_mes.is_none())
+                .map(|d| d.pago_minimo)
+                .sum();
+            let liberado = minimos_originales - minimos_vivos;
+
             let mut disponible = presupuesto_deudas;
             let mut pagos_mes: Vec<(String, f64)> = Vec::new();
             let mut intereses_mes: Vec<(String, f64)> = Vec::new();
 
-            // Paso 1: Pagar mínimos
-            for d in deudas.iter_mut() {
-                if d.liquidada_mes.is_some() {
-                    continue;
+            // Paso 1: Pagar mínimos — obligatorias primero (hipoteca, carro, etc.)
+            for obligatoria_primero in [true, false] {
+                for d in deudas.iter() {
+                    if d.liquidada_mes.is_some() || d.obligatoria != obligatoria_primero {
+                        continue;
+                    }
+                    let minimo = d.pago_minimo.min(d.saldo);
+                    let pago = minimo.min(disponible);
+                    disponible -= pago;
+                    pagos_mes.push((d.nombre.clone(), pago));
                 }
-                let minimo = d.pago_minimo.min(d.saldo);
-                let pago = minimo.min(disponible);
-                disponible -= pago;
-                pagos_mes.push((d.nombre.clone(), pago));
             }
 
             // Paso 2: Distribuir sobrante según estrategia
+            // Primero a deudas con interés (avalancha/bola de nieve),
+            // luego si sobra, a pagos fijos (tasa 0) para liquidarlos antes.
             if disponible > 0.01 {
                 let mut indices_vivas: Vec<usize> = (0..n)
-                    .filter(|&i| deudas[i].liquidada_mes.is_none())
+                    .filter(|&i| deudas[i].liquidada_mes.is_none() && !deudas[i].pago_fijo)
                     .collect();
 
                 if estrategia_bola_nieve {
@@ -1555,6 +1590,41 @@ impl RastreadorDeudas {
                 }
 
                 for &idx in &indices_vivas {
+                    if disponible < 0.01 {
+                        break;
+                    }
+                    let d = &deudas[idx];
+                    let ya_pagado = pagos_mes
+                        .iter()
+                        .find(|(nm, _)| *nm == d.nombre)
+                        .map(|(_, p)| *p)
+                        .unwrap_or(0.0);
+                    let max_extra = (d.saldo - ya_pagado).max(0.0);
+                    let extra = max_extra.min(disponible);
+                    if extra > 0.01 {
+                        if let Some(entry) = pagos_mes.iter_mut().find(|(nm, _)| *nm == deudas[idx].nombre) {
+                            entry.1 += extra;
+                        }
+                        disponible -= extra;
+                    }
+                }
+            }
+
+            // Paso 2b: Si aún sobra dinero, pagar extra a pagos fijos (tasa 0%)
+            // para liquidarlos más rápido en vez de dejar dinero inerte.
+            if disponible > 0.01 {
+                let mut indices_fijos: Vec<usize> = (0..n)
+                    .filter(|&i| deudas[i].liquidada_mes.is_none() && deudas[i].pago_fijo)
+                    .collect();
+                // Bola de nieve: menor saldo primero
+                indices_fijos.sort_by(|&a, &b| {
+                    deudas[a]
+                        .saldo
+                        .partial_cmp(&deudas[b].saldo)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                for &idx in &indices_fijos {
                     if disponible < 0.01 {
                         break;
                     }
@@ -1623,6 +1693,9 @@ impl RastreadorDeudas {
                 intereses: intereses_mes,
                 deuda_total,
                 liquidadas_este_mes,
+                presupuesto_efectivo: presupuesto_deudas,
+                sobrante: disponible.max(0.0),
+                liberado_de_liquidadas: liberado,
             });
 
             if deuda_total < 0.01 {
@@ -1650,9 +1723,12 @@ struct DeudaSimulada {
     saldo: f64,
     tasa_anual: f64,
     pago_minimo: f64,
-    obligatoria: bool,
     liquidada_mes: Option<usize>,
     meses_gracia: usize,
+    /// Pago fijo obligatorio: no participa en avalancha/bola de nieve.
+    pago_fijo: bool,
+    /// Deuda obligatoria (hipoteca, carro, etc.) — se paga primero.
+    obligatoria: bool,
 }
 
 /// Un mes de la simulación global.
@@ -1664,6 +1740,12 @@ pub struct MesSimulado {
     pub intereses: Vec<(String, f64)>,
     pub deuda_total: f64,
     pub liquidadas_este_mes: Vec<String>,
+    /// Presupuesto efectivo para deudas este mes (descontando gastos fijos).
+    pub presupuesto_efectivo: f64,
+    /// Dinero sobrante que no se pudo asignar este mes.
+    pub sobrante: f64,
+    /// Dinero liberado de deudas ya liquidadas en meses anteriores.
+    pub liberado_de_liquidadas: f64,
 }
 
 /// Resultado de la simulación completa de libertad financiera.

@@ -1,62 +1,37 @@
 use omniplanner::ml::SimulacionLibertad;
 use omniplanner::storage::AppState;
-use rust_xlsxwriter::{Format, FormatAlign, FormatBorder, Workbook};
 
 fn main() {
     let state = AppState::cargar().expect("Error cargando datos");
     let rast = &state.asesor.rastreador;
 
-    let sim = rast.simular_libertad(3500.0, false);
-    let nombres: Vec<String> = if let Some(m) = sim.meses.first() {
-        m.saldos.iter().map(|(n, _)| n.clone()).collect()
-    } else {
-        vec![]
-    };
-
-    println!("Simulacion {} meses, exportando...", sim.meses.len());
-    match exportar_test(&sim, &nombres) {
-        Ok(ruta) => println!("Excel guardado en: {}", ruta),
-        Err(e) => println!("Error: {}", e),
+    println!("=== DEUDAS ===");
+    for d in &rast.deudas {
+        if !d.activa { continue; }
+        let tipo = if d.es_pago_corriente() { "CORRIENTE" }
+                   else if d.es_pago_fijo() { "FIJO" }
+                   else { "DEUDA" };
+        println!("  {} | ${:.2} | {:.0}% | min ${} | {}",
+            d.nombre, d.saldo_actual(), d.tasa_anual, d.pago_minimo, tipo);
     }
-}
 
-fn exportar_test(sim: &SimulacionLibertad, nombres: &[String]) -> Result<String, String> {
-    let carpeta = dirs::document_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("OmniPlanner");
-    std::fs::create_dir_all(&carpeta).map_err(|e| e.to_string())?;
-    let archivo = carpeta.join("test_export.xlsx");
+    let sim = rast.simular_libertad(3500.0, false);
+    println!("\n=== AVALANCHA $3500/mes ===");
+    println!("Gastos fijos: ${:.2} ({})", sim.total_gastos_fijos,
+        sim.gastos_fijos.iter().map(|(n,m)| format!("{} ${}", n, m)).collect::<Vec<_>>().join(", "));
+    println!("Para deudas: ${:.2}\n", sim.presupuesto_mensual - sim.total_gastos_fijos);
 
-    let mut wb = Workbook::new();
-    let fmt_header = Format::new().set_bold().set_border(FormatBorder::Thin)
-        .set_background_color("4472C4").set_font_color("FFFFFF");
-    let fmt_dinero = Format::new().set_num_format("$#,##0.00").set_border(FormatBorder::Thin);
-
-    let ws = wb.add_worksheet();
-    ws.set_name("Amortización").map_err(|e| e.to_string())?;
-    ws.write_string_with_format(0, 0, "Deuda", &fmt_header).map_err(|e| e.to_string())?;
-    ws.write_string_with_format(0, 1, "Pago", &fmt_header).map_err(|e| e.to_string())?;
-    ws.write_string_with_format(0, 2, "Interés", &fmt_header).map_err(|e| e.to_string())?;
-    ws.write_string_with_format(0, 3, "Saldo", &fmt_header).map_err(|e| e.to_string())?;
-
-    let mut row = 1u32;
     for mes in &sim.meses {
+        let pagos_total: f64 = mes.pagos.iter().map(|(_,p)| *p).sum();
+        println!("--- MES {} --- (deuda: ${:.2}, pagos: ${:.2})", mes.mes_numero, mes.deuda_total, pagos_total);
         for (nombre, saldo) in &mes.saldos {
             let pago = mes.pagos.iter().find(|(n,_)| n == nombre).map(|(_,p)| *p).unwrap_or(0.0);
             let interes = mes.intereses.iter().find(|(n,_)| n == nombre).map(|(_,i)| *i).unwrap_or(0.0);
-            ws.write_string(row, 0, &format!("M{} {}", mes.mes_numero, nombre)).map_err(|e| e.to_string())?;
-            ws.write_number_with_format(row, 1, pago, &fmt_dinero).map_err(|e| e.to_string())?;
-            ws.write_number_with_format(row, 2, interes, &fmt_dinero).map_err(|e| e.to_string())?;
-            ws.write_number_with_format(row, 3, *saldo, &fmt_dinero).map_err(|e| e.to_string())?;
-            row += 1;
+            if *saldo < 0.01 && pago < 0.01 { continue; }
+            let liq = if mes.liquidadas_este_mes.contains(nombre) { " << LIQUIDADA" } else { "" };
+            println!("  {} | pago: ${:.2} | int: ${:.2} | saldo: ${:.2}{}", nombre, pago, interes, saldo, liq);
         }
     }
-
-    ws.set_column_width(0, 25).map_err(|e| e.to_string())?;
-    ws.set_column_width(1, 14).map_err(|e| e.to_string())?;
-    ws.set_column_width(2, 14).map_err(|e| e.to_string())?;
-    ws.set_column_width(3, 14).map_err(|e| e.to_string())?;
-
-    wb.save(&archivo).map_err(|e| e.to_string())?;
-    Ok(archivo.to_string_lossy().to_string())
+    println!("\nTotal: {} meses | pagado: ${:.2} | intereses: ${:.2}", sim.meses.len(), sim.total_pagado, sim.total_intereses);
+    for (n, m) in &sim.orden_liquidacion { println!("  {} -> mes {}", n, m); }
 }

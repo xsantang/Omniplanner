@@ -10780,6 +10780,7 @@ fn menu_asesor_rastreador(state: &mut AppState) {
             "💵  Configurar ingresos",
             "📥  Exportar CSV del rastreador",
             "📂  Importar desde CSV (Excel convertido)",
+            "�  Gestionar deudas (activar/desactivar, obligatoria)",
             "🗑️   Eliminar una deuda",
             "🔙  Volver",
         ];
@@ -10795,7 +10796,8 @@ fn menu_asesor_rastreador(state: &mut AppState) {
             Some(7) => rastreador_ingreso(state),
             Some(8) => rastreador_exportar(state),
             Some(9) => rastreador_importar_csv(state),
-            Some(10) => rastreador_eliminar(state),
+            Some(10) => rastreador_gestionar_deudas(state),
+            Some(11) => rastreador_eliminar(state),
             _ => return,
         }
     }
@@ -11532,15 +11534,36 @@ fn rastreador_simulacion_libertad(state: &AppState) {
             "  ┌─── {} ──────────────────────────────────────────────┐",
             format!("MES {}", mes.mes_numero).bold()
         );
+
+        // Línea 1: Presupuesto efectivo con detalle de liberados
+        if mes.liberado_de_liquidadas > 0.01 {
+            println!(
+                "  │  Presupuesto: {} (base ${:.2} + {} liberados)",
+                format!("${:.2}", mes.presupuesto_efectivo).green().bold(),
+                mes.presupuesto_efectivo - mes.liberado_de_liquidadas,
+                format!("${:.2}", mes.liberado_de_liquidadas).green(),
+            );
+        } else {
+            println!(
+                "  │  Presupuesto: {}",
+                format!("${:.2}", mes.presupuesto_efectivo),
+            );
+        }
+
+        // Línea 2: Pagos, intereses, deuda restante, sobrante
         println!(
-            "  │  Presupuesto: ${:.2}  →  Pagos: {}  │  Intereses: {}  │  Deuda restante: {}",
-            sim.presupuesto_mensual - sim.total_gastos_fijos,
+            "  │  Pagos: {}  │  Intereses: {}  │  Deuda restante: {}{}",
             format!("${:.2}", pago_total_mes).green(),
             format!("${:.2}", interes_total_mes).red(),
             if mes.deuda_total < 0.01 {
                 "$0.00".green().bold().to_string()
             } else {
                 format!("${:.2}", mes.deuda_total)
+            },
+            if mes.sobrante > 0.01 {
+                format!("  │  Sin asignar: {}", format!("${:.2}", mes.sobrante).yellow())
+            } else {
+                String::new()
             }
         );
         println!(
@@ -11626,16 +11649,17 @@ fn rastreador_simulacion_libertad(state: &AppState) {
         // Evento de liquidación
         if !mes.liquidadas_este_mes.is_empty() {
             for nombre in &mes.liquidadas_este_mes {
+                let pago_final = mes.pagos
+                    .iter()
+                    .find(|(n, _)| n == nombre)
+                    .map(|(_, p)| *p)
+                    .unwrap_or(0.0);
                 println!(
                     "  {}",
                     format!(
-                        "  🎉 ¡{} LIQUIDADA! Los ${:.2} que iban a esta deuda ahora ruedan a la siguiente.",
+                        "  🎉 ¡{} LIQUIDADA! → ${:.2}/mes liberados para las demás deudas.",
                         nombre.to_uppercase(),
-                        mes.pagos
-                            .iter()
-                            .find(|(n, _)| n == nombre)
-                            .map(|(_, p)| *p)
-                            .unwrap_or(0.0)
+                        pago_final
                     )
                     .green()
                     .bold()
@@ -12630,6 +12654,177 @@ fn rastreador_importar_csv(state: &mut AppState) {
         }
     }
     pausa();
+}
+
+fn rastreador_gestionar_deudas(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("🔀 GESTIONAR DEUDAS");
+
+        if state.asesor.rastreador.deudas.is_empty() {
+            println!("  Sin deudas registradas.");
+            pausa();
+            return;
+        }
+
+        // Mostrar tabla con estado actual
+        println!(
+            "  {:<4} {:<25} {:>10} {:>8} {:>10}  {}",
+            "#", "Deuda", "Saldo", "Tasa%", "Pago mín", "Estado"
+        );
+        println!("  {}", "─".repeat(78));
+
+        for (i, d) in state.asesor.rastreador.deudas.iter().enumerate() {
+            let estado = if !d.activa {
+                "⏸️  INACTIVA".to_string()
+            } else if d.es_pago_corriente() {
+                "🔒 Corriente".to_string()
+            } else if d.obligatoria {
+                "🔒 Obligatoria".to_string()
+            } else {
+                "📋 Normal".to_string()
+            };
+
+            let nombre_corto = if d.nombre.len() > 24 {
+                format!("{}…", &d.nombre[..23])
+            } else {
+                d.nombre.clone()
+            };
+
+            let saldo_str = if d.es_pago_corriente() {
+                "corriente".to_string()
+            } else {
+                format!("${:.2}", d.saldo_actual())
+            };
+
+            println!(
+                "  {:<4} {:<25} {:>10} {:>7}% {:>10}  {}",
+                format!("{}.", i + 1),
+                nombre_corto,
+                saldo_str,
+                format!("{:.1}", d.tasa_anual),
+                format!("${:.2}", d.pago_minimo),
+                estado
+            );
+        }
+        println!("  {}", "─".repeat(78));
+        println!();
+
+        let acciones = &[
+            "⏸️   Activar / Desactivar una deuda (excluir de simulación)",
+            "🔒  Cambiar a Obligatoria / Normal (prioridad de pago)",
+            "🔙  Volver",
+        ];
+
+        match menu("¿Qué quieres hacer?", acciones) {
+            Some(0) => {
+                // Toggle activa/inactiva
+                let nombres: Vec<String> = state
+                    .asesor
+                    .rastreador
+                    .deudas
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        let estado = if d.activa { "ACTIVA" } else { "INACTIVA" };
+                        format!(
+                            "{}. {} — ${:.2} [{}]",
+                            i + 1,
+                            d.nombre,
+                            d.saldo_actual(),
+                            estado
+                        )
+                    })
+                    .collect();
+                let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+
+                if let Some(idx) = menu("¿Cuál deuda cambiar?", &refs) {
+                    let d = &mut state.asesor.rastreador.deudas[idx];
+                    let nuevo_estado = !d.activa;
+                    let accion = if nuevo_estado {
+                        "ACTIVADA ✅"
+                    } else {
+                        "DESACTIVADA ⏸️"
+                    };
+                    d.activa = nuevo_estado;
+                    println!();
+                    println!(
+                        "  {} '{}' ahora está {}",
+                        "✓".green(),
+                        d.nombre,
+                        accion
+                    );
+                    if !nuevo_estado {
+                        println!(
+                            "  {}",
+                            "  → No aparecerá en simulaciones ni diagnósticos."
+                                .dimmed()
+                        );
+                    }
+                    state.guardar().ok();
+                    pausa();
+                }
+            }
+            Some(1) => {
+                // Toggle obligatoria/normal
+                let deudas_no_corrientes: Vec<(usize, String)> = state
+                    .asesor
+                    .rastreador
+                    .deudas
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| !d.es_pago_corriente())
+                    .map(|(i, d)| {
+                        let tipo = if d.obligatoria {
+                            "🔒 OBLIGATORIA"
+                        } else {
+                            "📋 Normal"
+                        };
+                        (
+                            i,
+                            format!(
+                                "{} — ${:.2} [{}]",
+                                d.nombre,
+                                d.saldo_actual(),
+                                tipo
+                            ),
+                        )
+                    })
+                    .collect();
+
+                if deudas_no_corrientes.is_empty() {
+                    println!("  No hay deudas editables (solo pagos corrientes).");
+                    pausa();
+                    continue;
+                }
+
+                let labels: Vec<&str> =
+                    deudas_no_corrientes.iter().map(|(_, s)| s.as_str()).collect();
+
+                if let Some(sel) = menu("¿Cuál deuda cambiar?", &labels) {
+                    let real_idx = deudas_no_corrientes[sel].0;
+                    let d = &mut state.asesor.rastreador.deudas[real_idx];
+                    let nueva_prioridad = !d.obligatoria;
+                    let accion = if nueva_prioridad {
+                        "OBLIGATORIA 🔒 (se paga primero en simulación)"
+                    } else {
+                        "NORMAL 📋 (participa en avalancha/bola de nieve)"
+                    };
+                    d.obligatoria = nueva_prioridad;
+                    println!();
+                    println!(
+                        "  {} '{}' ahora es {}",
+                        "✓".green(),
+                        d.nombre,
+                        accion
+                    );
+                    state.guardar().ok();
+                    pausa();
+                }
+            }
+            _ => return,
+        }
+    }
 }
 
 fn rastreador_eliminar(state: &mut AppState) {
