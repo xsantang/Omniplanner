@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 //! Optimizadores y utilidades de entrenamiento para redes neuronales.
 //!
 //! Contiene Adam, SGD, LR scheduling (4 estrategias), early stopping,
@@ -374,9 +376,10 @@ impl EstadoAdamVec {
 //  Learning Rate Scheduling
 // ══════════════════════════════════════════════════════════════
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum LRSchedule {
     /// Tasa constante (sin scheduling)
+    #[default]
     Constante,
     /// Step decay: lr *= factor cada `step_size` épocas
     StepDecay { step_size: usize, factor: f64 },
@@ -388,12 +391,6 @@ pub enum LRSchedule {
         paciencia: usize,
         lr_min: f64,
     },
-}
-
-impl Default for LRSchedule {
-    fn default() -> Self {
-        LRSchedule::Constante
-    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -497,7 +494,7 @@ impl LRScheduler {
         match &self.schedule {
             LRSchedule::Constante => {}
             LRSchedule::StepDecay { step_size, factor } => {
-                if (epoca + 1) % step_size == 0 {
+                if (epoca + 1).is_multiple_of(*step_size) {
                     self.lr_actual *= factor;
                 }
             }

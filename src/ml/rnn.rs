@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use super::linalg::{sigmoid, Matriz, Rng};
 use serde::{Deserialize, Serialize};
 

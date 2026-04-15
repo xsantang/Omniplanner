@@ -164,8 +164,7 @@ impl TaskManager {
     }
 
     pub fn ordenar_por_fecha(&mut self) {
-        self.tareas
-            .sort_by(|a, b| a.fecha_hora().cmp(&b.fecha_hora()));
+        self.tareas.sort_by_key(|a| a.fecha_hora());
     }
 
     pub fn ordenar_por_prioridad(&mut self) {

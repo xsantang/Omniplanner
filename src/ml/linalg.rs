@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 //! Álgebra lineal minimal — matrices, activaciones, funciones de pérdida y RNG.
 //!
 //! Provee [`Matriz`] con operaciones básicas (mul, hadamard, transpuesta),

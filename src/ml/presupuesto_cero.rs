@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop, clippy::if_same_then_else)]
+
 //! Presupuesto Base Cero — cada dólar tiene un destino, saldo final = $0.
 //!
 //! Sistema quincenal inspirado en el método "zero-based budget":
@@ -175,10 +177,26 @@ impl PresupuestoMensual {
         let pagado = self.total_pagado();
         let pendiente = self.total_pendiente();
 
-        let pct_fijos = if ingresos > 0.0 { fijos / ingresos * 100.0 } else { 0.0 };
-        let pct_variables = if ingresos > 0.0 { variables / ingresos * 100.0 } else { 0.0 };
-        let pct_deuda = if ingresos > 0.0 { deuda / ingresos * 100.0 } else { 0.0 };
-        let pct_ahorro = if ingresos > 0.0 { ahorro / ingresos * 100.0 } else { 0.0 };
+        let pct_fijos = if ingresos > 0.0 {
+            fijos / ingresos * 100.0
+        } else {
+            0.0
+        };
+        let pct_variables = if ingresos > 0.0 {
+            variables / ingresos * 100.0
+        } else {
+            0.0
+        };
+        let pct_deuda = if ingresos > 0.0 {
+            deuda / ingresos * 100.0
+        } else {
+            0.0
+        };
+        let pct_ahorro = if ingresos > 0.0 {
+            ahorro / ingresos * 100.0
+        } else {
+            0.0
+        };
 
         let salud = if saldo.abs() < 0.01 {
             SaludPresupuesto::Perfecto
@@ -339,17 +357,31 @@ fn categorizar(nombre: &str) -> Categoria {
         Categoria::Ingreso
     } else if n.contains("saving") || n.contains("ahorro") {
         Categoria::Ahorro
-    } else if n.contains("casa") || n.contains("mortgage") || n.contains("rent")
-        || n.contains("arriendo") || n.contains("carro") || n.contains("hyundai")
-        || n.contains("toyota") || n.contains("motor finance")
-        || n.contains("att") || n.contains("gci") || n.contains("windstream")
-        || n.contains("canoochee") || n.contains("usaa") || n.contains("electric")
+    } else if n.contains("casa")
+        || n.contains("mortgage")
+        || n.contains("rent")
+        || n.contains("arriendo")
+        || n.contains("carro")
+        || n.contains("hyundai")
+        || n.contains("toyota")
+        || n.contains("motor finance")
+        || n.contains("att")
+        || n.contains("gci")
+        || n.contains("windstream")
+        || n.contains("canoochee")
+        || n.contains("usaa")
+        || n.contains("electric")
         || n.contains("pago de carro")
     {
         Categoria::GastoFijo
-    } else if n.contains("bofa") || n.contains("discover") || n.contains("amazon")
-        || n.contains("american express") || n.contains("amex")
-        || n.contains("dell") || n.contains("navient") || n.contains("coma")
+    } else if n.contains("bofa")
+        || n.contains("discover")
+        || n.contains("amazon")
+        || n.contains("american express")
+        || n.contains("amex")
+        || n.contains("dell")
+        || n.contains("navient")
+        || n.contains("coma")
         || n.contains("wyndham")
     {
         Categoria::PagoDeuda
@@ -372,9 +404,7 @@ pub fn importar_excel(ruta: &Path) -> ImportacionExcel {
     let mut wb = match workbook {
         Ok(wb) => wb,
         Err(e) => {
-            resultado
-                .errores
-                .push(format!("No se pudo abrir: {}", e));
+            resultado.errores.push(format!("No se pudo abrir: {}", e));
             return resultado;
         }
     };
@@ -484,9 +514,7 @@ fn find_name_in_right_side(row: &[String], start_col: usize) -> Option<(String, 
 }
 
 /// Genera una plantilla a partir de los datos importados (promedia los montos)
-pub fn generar_plantilla_desde_importacion(
-    meses: &[PresupuestoMensual],
-) -> PlantillaPresupuesto {
+pub fn generar_plantilla_desde_importacion(meses: &[PresupuestoMensual]) -> PlantillaPresupuesto {
     use std::collections::HashMap;
 
     // Agrupar por nombre y categoría, promediar montos
@@ -568,6 +596,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Casa".into(),
@@ -576,6 +605,7 @@ mod tests {
             pagado: false,
             fecha_limite: "1".into(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Carro".into(),
@@ -584,6 +614,7 @@ mod tests {
             pagado: false,
             fecha_limite: "15".into(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "BOFA".into(),
@@ -592,6 +623,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Comida".into(),
@@ -600,6 +632,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Savings".into(),
@@ -608,6 +641,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
 
         // 3500 - 1500 - 750 - 300 - 400 - 50 = 500
@@ -626,6 +660,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Renta".into(),
@@ -634,6 +669,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Ahorro".into(),
@@ -642,6 +678,7 @@ mod tests {
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
+            saldo_total_deuda: None,
         });
 
         let resumen = pres.resumen();
@@ -669,12 +706,14 @@ mod tests {
                     categoria: Categoria::Ingreso,
                     monto_default: 3000.0,
                     fecha_limite: String::new(),
+                    saldo_total_deuda: None,
                 },
                 LineaPlantilla {
                     nombre: "Renta".into(),
                     categoria: Categoria::GastoFijo,
                     monto_default: 1500.0,
                     fecha_limite: "1".into(),
+                    saldo_total_deuda: None,
                 },
             ],
         };

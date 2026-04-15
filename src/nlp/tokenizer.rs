@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -56,8 +58,7 @@ impl Tokenizer {
             .replace('é', "e")
             .replace('í', "i")
             .replace('ó', "o")
-            .replace('ú', "u")
-            .replace('ü', "u")
+            .replace(['ú', 'ü'], "u")
             .replace('ñ', "n")
     }
 

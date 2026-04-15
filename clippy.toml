@@ -1,4 +1,3 @@
-[clippy]
-warn = [
-    "clippy::all",
-]
+# Configuración de Clippy
+# Los lints se configuran en Cargo.toml bajo [lints.clippy]
+

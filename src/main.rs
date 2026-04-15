@@ -1,3 +1,10 @@
+#![allow(
+    clippy::while_let_loop,
+    clippy::format_in_format_args,
+    clippy::needless_range_loop,
+    clippy::single_element_loop
+)]
+
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use colored::Colorize;
 use dialoguer::{Confirm, Input, Select};
@@ -9,18 +16,17 @@ use omniplanner::canvas::{Canvas, Elemento};
 use omniplanner::diagrams::{Diagrama, Nodo, TipoConexion, TipoDiagrama, TipoNodo};
 use omniplanner::mapper::{Codificacion, EsquemaMapa, Mapper};
 use omniplanner::memoria::Recuerdo;
+use omniplanner::ml::presupuesto_cero::{
+    self, Categoria, LineaPresupuesto, PlantillaPresupuesto, PresupuestoMensual, SaludPresupuesto,
+};
 use omniplanner::ml::{
     dataset_circulos, dataset_iris_sintetico, dataset_secuencia_temporal, dataset_xor, Activacion,
     AnalisisDeuda, ArbolDecision, BosqueAleatorio, ComparacionRapida, CorteBancario, Dataset,
     DeudaRastreada, FrecuenciaPago, GridWorld, ImpactoAccion, IngresoRastreado, MatrizDecision,
     MetaAhorro, ModeloML, Movimiento, MultiBandit, Perdida, QTable, RegistroAsesor, Rng,
-    SVMMulticlase, SimulacionLibertad, TipoModelo, TipoRegistro, TipoRNN, ANN, CNN, DNN, RNN, SVM,
+    SVMMulticlase, SimulacionLibertad, TipoModelo, TipoRNN, TipoRegistro, ANN, CNN, DNN, RNN, SVM,
 };
 use omniplanner::nlp::{DatosEntrenamiento, TipoRelacion, Valoracion};
-use omniplanner::ml::presupuesto_cero::{
-    self, Categoria, LineaPresupuesto, PlantillaPresupuesto,
-    PresupuestoMensual, SaludPresupuesto,
-};
 use omniplanner::storage::AppState;
 use omniplanner::sync;
 use omniplanner::tasks::{Prioridad, Task, TaskStatus};
@@ -124,14 +130,8 @@ fn formatear_fecha_es(f: NaiveDate) -> String {
 }
 
 fn pedir_fecha(prompt: &str) -> Option<NaiveDate> {
-    println!(
-        "    {} Formatos: hoy, mañana, 28/03/2026, 28-03-2026, 28032026,",
-        "💡".to_string()
-    );
-    println!(
-        "    {}           28 de marzo de 2026, march 28 2026, 2026-03-28",
-        " ".to_string()
-    );
+    println!("    💡 Formatos: hoy, mañana, 28/03/2026, 28-03-2026, 28032026,");
+    println!("                28 de marzo de 2026, march 28 2026, 2026-03-28");
     loop {
         let s = pedir_texto_opcional(&format!("{} (vacío=cancelar)", prompt));
         if s.is_empty() {
@@ -379,7 +379,7 @@ fn parsear_fecha_texto_es(s: &str) -> Option<NaiveDate> {
 
 fn parsear_fecha_texto_en(s: &str) -> Option<NaiveDate> {
     // "march 28, 2026" o "march 28 2026" o "mar 28"
-    let limpio: String = s.replace(',', " ").replace('/', " ");
+    let limpio: String = s.replace([',', '/'], " ");
     let partes: Vec<&str> = limpio.split_whitespace().collect();
     if partes.len() >= 2 {
         let mes = mes_texto_a_numero(partes[0])?;
@@ -423,10 +423,7 @@ fn parse_mmddyyyy(s: &str) -> Option<NaiveDate> {
 }
 
 fn pedir_hora(prompt: &str) -> Option<NaiveTime> {
-    println!(
-        "    {} Formatos: 14:30, 2:30pm, 6pm, 1430, 6 (=06:00)",
-        "💡".to_string()
-    );
+    println!("    💡 Formatos: 14:30, 2:30pm, 6pm, 1430, 6 (=06:00)");
     loop {
         let s = pedir_texto_opcional(&format!("{} (vacío=cancelar)", prompt));
         if s.is_empty() {
@@ -546,8 +543,7 @@ fn dashboard(state: &AppState) {
     let ahora = Local::now().time();
 
     println!(
-        "  {} {} ({:?}) - {}",
-        "📅".to_string(),
+        "  📅 {} ({:?}) - {}",
         hoy.format("%d/%m/%Y"),
         dia,
         ahora.format("%H:%M")
@@ -618,11 +614,9 @@ fn dashboard(state: &AppState) {
                 concepto_txt.dimmed()
             );
             println!(
-                "       {} {} {}  {} {} {}",
-                "📆".to_string(),
+                "       📆 {} {}  🕐 {} {}",
                 "Evento:".dimmed(),
                 e.fecha.format("%d/%m/%Y").to_string().cyan(),
-                "🕐".to_string(),
                 "Registrado:".dimmed(),
                 e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
             );
@@ -664,16 +658,11 @@ fn dashboard(state: &AppState) {
     // Resumen rápido
     println!();
     println!(
-        "  {} {} tareas  {} {} eventos  {} {} diagramas  {} {} canvas  {} {} recuerdos",
-        "📋".to_string(),
+        "  📋 {} tareas  📅 {} eventos  📊 {} diagramas  ✏️ {} canvas  🧠 {} recuerdos",
         state.tasks.tareas.len(),
-        "📅".to_string(),
         state.agenda.eventos.len(),
-        "📊".to_string(),
         state.diagramas.len(),
-        "✏️".to_string(),
         state.canvases.len(),
-        "🧠".to_string(),
         state.memoria.recuerdos.len(),
     );
 
@@ -975,11 +964,7 @@ fn follow_up_tarea(state: &mut AppState) {
     let fh = NaiveDateTime::new(fecha, hora);
 
     state.tasks.tareas[idx].programar_follow_up(fh);
-    println!(
-        "  {} Follow-up programado: {}",
-        "🔔".to_string(),
-        fh.format("%d/%m/%Y %H:%M")
-    );
+    println!("  🔔 Follow-up programado: {}", fh.format("%d/%m/%Y %H:%M"));
     pausa();
 }
 
@@ -1021,10 +1006,7 @@ fn recordar_tarea(state: &mut AppState) {
         Recuerdo::new(format!("Tarea: {}", tarea.titulo), tags).con_origen("tarea", &tarea.id);
     state.memoria.agregar_recuerdo(recuerdo);
 
-    println!(
-        "  {} Palabras clave guardadas en la memoria",
-        "🧠".to_string()
-    );
+    println!("  🧠 Palabras clave guardadas en la memoria");
     pausa();
 }
 
@@ -1081,10 +1063,7 @@ fn finalizar_tarea(state: &mut AppState, idx: usize) {
     if !etiquetas_existentes.is_empty() {
         let sugerencias = state.memoria.diccionario.sugerir(&etiquetas_existentes);
         if !sugerencias.is_empty() {
-            println!(
-                "  {} Ideas relacionadas en tu diccionario:",
-                "💡".to_string()
-            );
+            println!("  💡 Ideas relacionadas en tu diccionario:");
             for (idea, fuerza) in sugerencias.iter().take(5) {
                 let barra = "█".repeat(*fuerza as usize).cyan();
                 println!("    {} {} (fuerza: {})", barra, idea.yellow(), fuerza);
@@ -1108,8 +1087,7 @@ fn finalizar_tarea(state: &mut AppState, idx: usize) {
             sorted.sort();
             println!();
             println!(
-                "  {} Tu diccionario tiene: {}",
-                "📚".to_string(),
+                "  📚 Tu diccionario tiene: {}",
                 sorted
                     .iter()
                     .map(|s| s.cyan().to_string())
@@ -1194,7 +1172,7 @@ fn finalizar_tarea(state: &mut AppState, idx: usize) {
         let sugerencias = state.memoria.diccionario.sugerir(&palabras);
         if !sugerencias.is_empty() {
             println!();
-            println!("  {} Posibles conexiones para explorar:", "🔮".to_string());
+            println!("  🔮 Posibles conexiones para explorar:");
             for (idea, fuerza) in sugerencias.iter().take(5) {
                 println!("    → {} (fuerza: {})", idea.yellow(), fuerza);
             }
@@ -1285,11 +1263,9 @@ fn menu_agenda(state: &mut AppState) {
                     concepto,
                 );
                 println!(
-                    "      {} {} {}  {} {} {}",
-                    "📆".to_string(),
+                    "      📆 {} {}  🕐 {} {}",
                     "Evento:".dimmed(),
                     e.fecha.format("%d/%m/%Y").to_string().cyan(),
-                    "🕐".to_string(),
                     "Registrado:".dimmed(),
                     e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
                 );
@@ -1572,7 +1548,7 @@ fn recordar_evento(state: &mut AppState) {
         Recuerdo::new(format!("Evento: {}", evento.titulo), tags).con_origen("evento", &evento.id);
     state.memoria.agregar_recuerdo(recuerdo);
 
-    println!("  {} Guardado en la memoria", "🧠".to_string());
+    println!("  🧠 Guardado en la memoria");
     pausa();
 }
 
@@ -1846,24 +1822,18 @@ fn calcular_diferencia_fechas() {
 
     println!();
     println!(
-        "  {} {} → {}",
-        "📅".to_string(),
+        "  📅 {} → {}",
         desde.format("%d/%m/%Y"),
         hasta.format("%d/%m/%Y")
     );
     println!();
+    println!("  📏 {} días calendario", dias.to_string().cyan().bold());
     println!(
-        "  {} {} días calendario",
-        "📏".to_string(),
-        dias.to_string().cyan().bold()
-    );
-    println!(
-        "  {} {} semanas y {} días",
-        "📅".to_string(),
+        "  📅 {} semanas y {} días",
         semanas.to_string().cyan().bold(),
         dias_restantes.to_string().cyan()
     );
-    println!("  {} ~{:.1} meses", "🗓️".to_string(), meses_aprox);
+    println!("  🗓️ ~{:.1} meses", meses_aprox);
 
     // Contar fines de semana
     let mut fines_semana = 0i64;
@@ -1879,8 +1849,7 @@ fn calcular_diferencia_fechas() {
         fecha += Duration::days(1);
     }
     println!(
-        "  {} {} días laborales, {} fines de semana",
-        "🏢".to_string(),
+        "  🏢 {} días laborales, {} fines de semana",
         dias_laborales.to_string().green(),
         fines_semana.to_string().red()
     );
@@ -1935,8 +1904,7 @@ fn avanzar_semanas() {
 
     println!();
     println!(
-        "  {} {} + {} {} = {}",
-        "📅".to_string(),
+        "  📅 {} + {} {} = {}",
         desde.format("%d/%m/%Y"),
         cantidad.to_string().cyan().bold(),
         nombre_unidad,
@@ -1948,7 +1916,7 @@ fn avanzar_semanas() {
     );
 
     let dias_diff = (resultado - desde).num_days().abs();
-    println!("  {} ({} días calendario)", "📏".to_string(), dias_diff);
+    println!("  📏 ({} días calendario)", dias_diff);
     println!();
     pausa();
 }
@@ -2114,12 +2082,7 @@ fn ver_mes_detallado(state: &AppState) {
                 Weekday::Sat => "Sáb",
                 Weekday::Sun => "Dom",
             };
-            println!(
-                "  {} {} {}:",
-                "📌".to_string(),
-                fecha.format("%d/%m"),
-                dia_nombre
-            );
+            println!("  📌 {} {}:", fecha.format("%d/%m"), dia_nombre);
             for e in &eventos {
                 let fin = e
                     .hora_fin
@@ -2146,11 +2109,9 @@ fn ver_mes_detallado(state: &AppState) {
                     concepto_txt.dimmed()
                 );
                 println!(
-                    "         {} {} {}  {} {} {}",
-                    "📆".to_string(),
+                    "         📆 {} {}  🕐 {} {}",
                     "Evento:".dimmed(),
                     e.fecha.format("%d/%m/%Y").to_string().cyan(),
-                    "🕐".to_string(),
                     "Registrado:".dimmed(),
                     e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
                 );
@@ -2251,13 +2212,11 @@ fn ver_resumen_trimestral(state: &AppState) {
     }
 
     println!(
-        "  {} {} eventos programados",
-        "📌".to_string(),
+        "  📌 {} eventos programados",
         total_eventos.to_string().cyan().bold()
     );
     println!(
-        "  {} {} días marcados ({} libres, {} feriados)",
-        "🎨".to_string(),
+        "  🎨 {} días marcados ({} libres, {} feriados)",
         total_marcas.to_string().cyan(),
         dias_libres.to_string().green(),
         dias_feriado.to_string().red()
@@ -2451,21 +2410,21 @@ fn agregar_imagen_canvas(state: &mut AppState) {
     };
 
     // Verificar si es archivo local
-    if !ruta.starts_with("http://") && !ruta.starts_with("https://") {
-        if !std::path::Path::new(&ruta).exists() {
-            println!(
-                "  {} El archivo '{}' no existe. ¿Agregar de todos modos?",
-                "⚠️".to_string(),
-                ruta
-            );
-            if !Confirm::new()
-                .with_prompt("  ¿Continuar?")
-                .default(false)
-                .interact()
-                .unwrap_or(false)
-            {
-                return;
-            }
+    if !ruta.starts_with("http://")
+        && !ruta.starts_with("https://")
+        && !std::path::Path::new(&ruta).exists()
+    {
+        println!(
+            "  ⚠️ El archivo '{}' no existe. ¿Agregar de todos modos?",
+            ruta
+        );
+        if !Confirm::new()
+            .with_prompt("  ¿Continuar?")
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+        {
+            return;
         }
     }
 
@@ -2486,7 +2445,7 @@ fn agregar_lista_canvas(state: &mut AppState) {
     };
 
     let items: Vec<&str> = items_str
-        .split(|c| c == ',' || c == ';')
+        .split([',', ';'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
@@ -2584,7 +2543,7 @@ fn ver_canvas(state: &AppState) {
             println!();
         }
         if !c.trazos.is_empty() {
-            println!("  {} {} trazos legacy", "✏️".to_string(), c.trazos.len());
+            println!("  ✏️ {} trazos legacy", c.trazos.len());
         }
     }
     pausa();
@@ -2691,7 +2650,7 @@ fn eliminar_canvas(state: &mut AppState) {
     let nombre = state.canvases[idx].nombre.clone();
 
     if Confirm::new()
-        .with_prompt(&format!(
+        .with_prompt(format!(
             "  ¿Eliminar canvas '{}'? Esto no se puede deshacer",
             nombre
         ))
@@ -3048,7 +3007,7 @@ fn recordar_diagrama(state: &mut AppState) {
         Recuerdo::new(format!("Diagrama: {}", diag.nombre), tags).con_origen("diagrama", &diag.id);
     state.memoria.agregar_recuerdo(recuerdo);
 
-    println!("  {} Guardado en la memoria", "🧠".to_string());
+    println!("  🧠 Guardado en la memoria");
     pausa();
 }
 
@@ -3392,8 +3351,7 @@ fn ver_diccionario(state: &mut AppState) {
             .collect();
         ideas.sort();
         println!(
-            "  {} {} ideas | {} conexiones | {} entradas",
-            "📊".to_string(),
+            "  📊 {} ideas | {} conexiones | {} entradas",
             ideas.len(),
             state.memoria.diccionario.conexiones.len(),
             state.memoria.diccionario.historial.len()
@@ -3419,7 +3377,7 @@ fn ver_diccionario(state: &mut AppState) {
             conexiones_ord.sort_by(|a, b| b.2.cmp(&a.2));
 
             if !conexiones_ord.is_empty() {
-                println!("  {} Conexiones más fuertes:", "🔥".to_string());
+                println!("  🔥 Conexiones más fuertes:");
                 for (pa, pb, fuerza, ctx) in conexiones_ord.iter().take(10) {
                     let barra = "█".repeat(*fuerza as usize).cyan();
                     let ctx_str = if ctx.is_empty() {
@@ -3509,17 +3467,13 @@ fn explorar_idea(state: &mut AppState) {
     let idea = &ideas[idx];
 
     println!();
-    println!(
-        "  {} Explorando: {}",
-        "🧬".to_string(),
-        idea.yellow().bold()
-    );
+    println!("  🧬 Explorando: {}", idea.yellow().bold());
     println!();
 
     // Ideas relacionadas
     let relacionadas = dic.ideas_relacionadas(idea);
     if !relacionadas.is_empty() {
-        println!("  {} Conexiones:", "🔗".to_string());
+        println!("  🔗 Conexiones:");
         for (rel, fuerza) in &relacionadas {
             let barra = "█".repeat(*fuerza as usize).cyan();
             println!("    {} {} (fuerza: {})", barra, rel.yellow(), fuerza);
@@ -3530,7 +3484,7 @@ fn explorar_idea(state: &mut AppState) {
     // Recuerdos con esta palabra
     let recuerdos = state.memoria.recuerdos_con_palabra(idea);
     if !recuerdos.is_empty() {
-        println!("  {} Recuerdos asociados:", "🧠".to_string());
+        println!("  🧠 Recuerdos asociados:");
         for r in &recuerdos {
             println!("    • [{}] {}", r.id.dimmed(), r.contenido);
         }
@@ -3548,7 +3502,7 @@ fn explorar_idea(state: &mut AppState) {
         })
         .collect();
     if !historial.is_empty() {
-        println!("  {} Historial:", "📋".to_string());
+        println!("  📋 Historial:");
         for e in &historial {
             println!(
                 "    • [{}] {} — {} ({})",
@@ -3562,9 +3516,9 @@ fn explorar_idea(state: &mut AppState) {
     }
 
     // Sugerir ideas basadas en esta
-    let sugerencias = dic.sugerir(&[idea.clone()]);
+    let sugerencias = dic.sugerir(std::slice::from_ref(idea));
     if !sugerencias.is_empty() {
-        println!("  {} Sugerencias para explorar:", "🔮".to_string());
+        println!("  🔮 Sugerencias para explorar:");
         for (sug, score) in sugerencias.iter().take(5) {
             println!("    → {} (relevancia: {})", sug.yellow(), score);
         }
@@ -4032,13 +3986,7 @@ fn enlazar_elementos(state: &mut AppState) {
     };
 
     state.memoria.enlazar(&mod1, &id1, &mod2, &id2, &relacion);
-    println!(
-        "  {} Enlace creado: {} ↔ {} ({})",
-        "🔗".to_string(),
-        mod1,
-        mod2,
-        relacion
-    );
+    println!("  🔗 Enlace creado: {} ↔ {} ({})", mod1, mod2, relacion);
     pausa();
 }
 
@@ -4219,12 +4167,7 @@ fn ver_recuerdos(state: &AppState) {
                 _ => String::new(),
             };
             let fecha = r.creado.format("%d/%m/%Y %H:%M");
-            println!(
-                "    {} [{}] {}",
-                "•".to_string(),
-                r.id.dimmed(),
-                r.contenido
-            );
+            println!("    • [{}] {}", r.id.dimmed(), r.contenido);
             println!(
                 "      🏷️  {} {} {}",
                 r.palabras_clave.join(", ").cyan(),
@@ -4530,7 +4473,7 @@ fn eliminar_recuerdo(state: &mut AppState) {
     println!("  {} Esta acción no se puede deshacer.", "⚠".yellow());
 
     if Confirm::new()
-        .with_prompt(format!("  ¿Estás seguro de eliminar este recuerdo?"))
+        .with_prompt("  ¿Estás seguro de eliminar este recuerdo?".to_string())
         .default(false)
         .interact()
         .unwrap_or(false)
@@ -4589,7 +4532,7 @@ fn menu_sync(state: &mut AppState) {
             "❌ Autentica Google primero".red().to_string()
         };
 
-        println!("  {} GitHub Gist:    {}", "🔑".to_string(), gist_estado);
+        println!("  🔑 GitHub Gist:    {}", gist_estado);
         println!("  Google Calendar: {}", gcal);
         println!("  Email SMTP:      {}", email);
         println!("  Google Drive:    {}", drive_estado);
@@ -4686,11 +4629,7 @@ fn configurar_gist(state: &mut AppState) {
             }
         );
         if !state.sync.gist_id.is_empty() {
-            println!(
-                "  {} Gist ID: {}",
-                "📎".to_string(),
-                state.sync.gist_id.cyan()
-            );
+            println!("  📎 Gist ID: {}", state.sync.gist_id.cyan());
         }
         if !Confirm::new()
             .with_prompt("  ¿Reconfigurar?")
@@ -4733,10 +4672,7 @@ fn configurar_gist(state: &mut AppState) {
                     state.sync.gist_id = id;
                 }
                 Ok(None) => {
-                    println!(
-                        "  {} No hay Gist previo. Se creará uno al hacer push.",
-                        "ℹ".to_string()
-                    );
+                    println!("  ℹ No hay Gist previo. Se creará uno al hacer push.");
                     state.sync.gist_id = String::new();
                 }
                 Err(e) => println!("  {} Error buscando: {}", "⚠".yellow(), e),
@@ -4756,10 +4692,7 @@ fn gist_push_datos(state: &mut AppState) {
 
     if !state.sync.gist_configurado() {
         println!("  {} Primero configura tu token de GitHub.", "✗".red());
-        println!(
-            "  {} Usa '🔑 Configurar GitHub Gist (token)'",
-            "💡".to_string()
-        );
+        println!("  💡 Usa '🔑 Configurar GitHub Gist (token)'");
         pausa();
         return;
     }
@@ -4791,17 +4724,16 @@ fn gist_push_datos(state: &mut AppState) {
                 println!("  {} Datos actualizados en Gist", "✓".green());
             }
             println!(
-                "  {} {} tareas, {} eventos, {} diagramas, {} canvas, {} recuerdos",
-                "📦".to_string(),
+                "  📦 {} tareas, {} eventos, {} diagramas, {} canvas, {} recuerdos",
                 state.tasks.tareas.len(),
                 state.agenda.eventos.len(),
                 state.diagramas.len(),
                 state.canvases.len(),
                 state.memoria.recuerdos.len(),
             );
-            println!("  {} {}", "🕐".to_string(), ahora);
+            println!("  🕐 {}", ahora);
             println!();
-            println!("  {} Para descargar en otro dispositivo:", "💡".to_string());
+            println!("  💡 Para descargar en otro dispositivo:");
             println!("  Usa el mismo token de GitHub y haz 'pull'.");
         }
         Err(e) => {
@@ -4828,10 +4760,7 @@ fn gist_pull_datos(state: &mut AppState) {
 
     if state.sync.gist_id.is_empty() {
         println!("  {} No hay Gist vinculado.", "✗".red());
-        println!(
-            "  {} Usa 'Buscar Gist existente' o haz push primero.",
-            "💡".to_string()
-        );
+        println!("  💡 Usa 'Buscar Gist existente' o haz push primero.");
         pausa();
         return;
     }
@@ -4856,14 +4785,14 @@ fn gist_pull_datos(state: &mut AppState) {
         }
     };
 
-    println!("\n  {} Datos remotos:", "📊".to_string());
+    println!("\n  📊 Datos remotos:");
     println!("    Tareas:    {}", remoto.tasks.tareas.len());
     println!("    Eventos:   {}", remoto.agenda.eventos.len());
     println!("    Canvases:  {}", remoto.canvases.len());
     println!("    Diagramas: {}", remoto.diagramas.len());
     println!("    Recuerdos: {}", remoto.memoria.recuerdos.len());
 
-    println!("\n  {} Datos locales:", "📊".to_string());
+    println!("\n  📊 Datos locales:");
     println!("    Tareas:    {}", state.tasks.tareas.len());
     println!("    Eventos:   {}", state.agenda.eventos.len());
     println!("    Canvases:  {}", state.canvases.len());
@@ -4994,7 +4923,7 @@ fn drive_push(state: &mut AppState) {
     let resultado = match sync::drive::drive_push(&state.sync, &json) {
         Ok(file_id) => Ok(file_id),
         Err(e) if e.contains("401") || e.contains("403") => {
-            println!("  {} Token expirado, refrescando...", "🔄".to_string());
+            println!("  🔄 Token expirado, refrescando...");
             match sync::calendario::google_refrescar_token(&mut state.sync) {
                 Ok(()) => {
                     println!("  {} Token refrescado, reintentando...", "✓".green());
@@ -5002,10 +4931,7 @@ fn drive_push(state: &mut AppState) {
                 }
                 Err(re) => {
                     println!("  {} No se pudo refrescar token: {}", "✗".red(), re);
-                    println!(
-                        "  {} Re-autentica Google desde Configurar Google Calendar.",
-                        "💡".to_string()
-                    );
+                    println!("  💡 Re-autentica Google desde Configurar Google Calendar.");
                     Err(e)
                 }
             }
@@ -5022,15 +4948,14 @@ fn drive_push(state: &mut AppState) {
             }
             state.sync.drive_file_id = file_id;
             println!(
-                "  {} {} tareas, {} eventos, {} diagramas, {} canvas, {} recuerdos",
-                "📦".to_string(),
+                "  📦 {} tareas, {} eventos, {} diagramas, {} canvas, {} recuerdos",
                 state.tasks.tareas.len(),
                 state.agenda.eventos.len(),
                 state.diagramas.len(),
                 state.canvases.len(),
                 state.memoria.recuerdos.len(),
             );
-            println!("  {} {}", "🕐".to_string(), ahora);
+            println!("  🕐 {}", ahora);
         }
         Err(e) => {
             println!("  {} Error: {}", "✗".red(), e);
@@ -5050,10 +4975,7 @@ fn drive_pull(state: &mut AppState) {
 
     if state.sync.drive_file_id.is_empty() {
         println!("  {} No hay archivo de Drive vinculado.", "✗".red());
-        println!(
-            "  {} Usa 'Buscar archivo en Drive' si ya subiste datos desde otro dispositivo.",
-            "💡".to_string()
-        );
+        println!("  💡 Usa 'Buscar archivo en Drive' si ya subiste datos desde otro dispositivo.");
         pausa();
         return;
     }
@@ -5063,7 +4985,7 @@ fn drive_pull(state: &mut AppState) {
     let contenido = match sync::drive::drive_pull(&state.sync) {
         Ok(c) => c,
         Err(e) if e.contains("401") || e.contains("403") => {
-            println!("  {} Token expirado, refrescando...", "🔄".to_string());
+            println!("  🔄 Token expirado, refrescando...");
             match sync::calendario::google_refrescar_token(&mut state.sync) {
                 Ok(()) => {
                     println!("  {} Token refrescado, reintentando...", "✓".green());
@@ -5078,10 +5000,7 @@ fn drive_pull(state: &mut AppState) {
                 }
                 Err(re) => {
                     println!("  {} No se pudo refrescar token: {}", "✗".red(), re);
-                    println!(
-                        "  {} Re-autentica Google desde Configurar Google Calendar.",
-                        "💡".to_string()
-                    );
+                    println!("  💡 Re-autentica Google desde Configurar Google Calendar.");
                     pausa();
                     return;
                 }
@@ -5103,14 +5022,14 @@ fn drive_pull(state: &mut AppState) {
         }
     };
 
-    println!("\n  {} Datos remotos:", "📊".to_string());
+    println!("\n  📊 Datos remotos:");
     println!("    Tareas:    {}", remoto.tasks.tareas.len());
     println!("    Eventos:   {}", remoto.agenda.eventos.len());
     println!("    Canvases:  {}", remoto.canvases.len());
     println!("    Diagramas: {}", remoto.diagramas.len());
     println!("    Recuerdos: {}", remoto.memoria.recuerdos.len());
 
-    println!("\n  {} Datos locales:", "📊".to_string());
+    println!("\n  📊 Datos locales:");
     println!("    Tareas:    {}", state.tasks.tareas.len());
     println!("    Eventos:   {}", state.agenda.eventos.len());
     println!("    Canvases:  {}", state.canvases.len());
@@ -5167,7 +5086,7 @@ fn drive_buscar(state: &mut AppState) {
     let resultado = match sync::drive::drive_buscar(&state.sync) {
         Ok(r) => Ok(r),
         Err(e) if e.contains("401") || e.contains("403") => {
-            println!("  {} Token expirado, refrescando...", "🔄".to_string());
+            println!("  🔄 Token expirado, refrescando...");
             match sync::calendario::google_refrescar_token(&mut state.sync) {
                 Ok(()) => sync::drive::drive_buscar(&state.sync),
                 Err(re) => {
@@ -5662,7 +5581,7 @@ fn iniciar_dashboard_web(state: &mut AppState) {
                 "╚══════════════════════════════════════════════╝".green()
             );
             println!();
-            println!("  {} También disponible:", "📡".to_string());
+            println!("  📡 También disponible:");
             println!("    {}  → Dashboard visual", format!("{}/", url).cyan());
             println!(
                 "    {}  → Datos JSON (para apps)",
@@ -5712,10 +5631,7 @@ fn exportar_estado(state: &AppState) {
                     state.memoria.recuerdos.len(),
                 );
                 println!();
-                println!(
-                    "  {} Para sincronizar con otro dispositivo:",
-                    "💡".to_string()
-                );
+                println!("  💡 Para sincronizar con otro dispositivo:");
                 println!("    1. Sube este archivo a Google Drive / OneDrive / Dropbox");
                 println!("    2. En el otro dispositivo, descárgalo e impórtalo");
             }
@@ -5925,21 +5841,18 @@ fn autenticar_google(state: &mut AppState) {
     println!("  Inicia sesión con tu cuenta de Google y autoriza OmniPlanner.");
     let _ = open::that(&url);
 
-    println!(
-        "  {} Esperando autorización en el navegador...",
-        "⏳".to_string()
-    );
+    println!("  ⏳ Esperando autorización en el navegador...");
 
     let codigo = match sync::calendario::escuchar_codigo_oauth() {
         Ok(c) => c,
         Err(e) => {
             println!("  {} Error capturando código: {}", "✗".red(), e);
             println!("  Intenta pegar el código manualmente:");
-            let c = match pedir_texto("Código de autorización") {
+
+            match pedir_texto("Código de autorización") {
                 Some(t) => t,
                 None => return,
-            };
-            c
+            }
         }
     };
 
@@ -6323,9 +6236,7 @@ fn generar_reporte_semanal(state: &AppState, lunes: NaiveDate) -> String {
         let nombre = nombre_dia_es(dia.weekday());
         let mes = nombre_mes_es(dia.month());
 
-        r.push_str(&format!(
-            "\n──────────────────────────────────────────────────────────\n"
-        ));
+        r.push_str("\n──────────────────────────────────────────────────────────\n");
         r.push_str(&format!(
             "  {} {} de {} de {}\n",
             nombre,
@@ -6625,8 +6536,7 @@ fn menu_ml_ann(state: &mut AppState) {
 
     println!();
     println!(
-        "  {} Train: {} muestras — Test: {} muestras",
-        "📊".to_string(),
+        "  📊 Train: {} muestras — Test: {} muestras",
         train.num_muestras(),
         test.num_muestras()
     );
@@ -7157,7 +7067,7 @@ fn menu_ml_rnn(state: &mut AppState) {
 
     let modelo = ModeloML {
         id: uuid::Uuid::new_v4().to_string(),
-        nombre: format!("RNN — secuencias temporales"),
+        nombre: "RNN — secuencias temporales".to_string(),
         tipo: TipoModelo::RNN(rnn),
         creado: Local::now().format("%Y-%m-%d %H:%M").to_string(),
         precision_train: None,
@@ -7471,7 +7381,7 @@ fn menu_nlp_chat(state: &mut AppState) {
         let resultado = state.nlp.motor.procesar(&input);
 
         // Mostrar respuesta
-        println!("\n  {} {}", "🤖".to_string(), resultado.respuesta.green());
+        println!("\n  🤖 {}", resultado.respuesta.green());
 
         // Info adicional
         println!(
@@ -8177,8 +8087,7 @@ fn menu_asesor(state: &mut AppState) {
         {
             println!(
                 "  {}",
-                "📌 Tip: Configura tu presupuesto para obtener proyecciones reales."
-                    .yellow()
+                "📌 Tip: Configura tu presupuesto para obtener proyecciones reales.".yellow()
             );
         } else {
             let color_balance = if balance >= 0.0 {
@@ -8266,10 +8175,7 @@ fn menu_asesor_deuda(state: &mut AppState) {
 
     // Preguntar opciones de pago
     println!();
-    println!(
-        "  {} Ahora define las opciones de pago a comparar.",
-        "💡".to_string()
-    );
+    println!("  💡 Ahora define las opciones de pago a comparar.");
     println!(
         "  {} Opción 1 ya es el pago mínimo (${:.2})",
         "→".dimmed(),
@@ -8277,7 +8183,8 @@ fn menu_asesor_deuda(state: &mut AppState) {
     );
     println!();
 
-    let mut montos: Vec<(String, f64)> = vec![(format!("Pago mínimo (${:.0})", pago_min), pago_min)];
+    let mut montos: Vec<(String, f64)> =
+        vec![(format!("Pago mínimo (${:.0})", pago_min), pago_min)];
 
     // Pedir montos adicionales
     for i in 2..=5 {
@@ -8336,7 +8243,12 @@ fn menu_asesor_deuda(state: &mut AppState) {
         };
         println!(
             "  ║  {:<25} {:>6}m   ${:>10.2}   ${:>10.2}   {:>10}{}",
-            op.nombre, op.meses_para_liquidar, op.total_intereses, op.total_pagado, ahorro_str, marca
+            op.nombre,
+            op.meses_para_liquidar,
+            op.total_intereses,
+            op.total_pagado,
+            ahorro_str,
+            marca
         );
     }
 
@@ -8349,14 +8261,12 @@ fn menu_asesor_deuda(state: &mut AppState) {
     if let Some(idx) = mejor {
         println!();
         println!(
-            "  {} La mejor opción es: {}",
-            "⭐".to_string(),
+            "  ⭐ La mejor opción es: {}",
             opciones[idx].nombre.green().bold()
         );
         if opciones[idx].ahorro_vs_minimo > 0.01 {
             println!(
-                "  {} Te ahorras ${:.2} en intereses vs. pago mínimo",
-                "💰".to_string(),
+                "  💰 Te ahorras ${:.2} en intereses vs. pago mínimo",
                 opciones[idx].ahorro_vs_minimo
             );
         }
@@ -8383,7 +8293,12 @@ fn menu_asesor_deuda(state: &mut AppState) {
             for f in &proy {
                 println!(
                     "  {:<5} ${:>8.2} ${:>8.2} ${:>10.2} ${:>10.2} ${:>12.2}",
-                    f.mes, f.pago, f.interes, f.abono_capital, f.saldo_restante, f.intereses_acumulados
+                    f.mes,
+                    f.pago,
+                    f.interes,
+                    f.abono_capital,
+                    f.saldo_restante,
+                    f.intereses_acumulados
                 );
             }
             println!("  {}", "─".repeat(65));
@@ -8444,14 +8359,8 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
     limpiar();
     separador("🏦 CORTE BANCARIO — DATOS REALES");
 
-    println!(
-        "  {} Ingresa los datos tal como aparecen en tu estado de cuenta.",
-        "📄".to_string()
-    );
-    println!(
-        "  {} Solo necesitas los montos, el sistema calcula la tasa de interés.",
-        "💡".to_string()
-    );
+    println!("  📄 Ingresa los datos tal como aparecen en tu estado de cuenta.");
+    println!("  💡 Solo necesitas los montos, el sistema calcula la tasa de interés.");
     println!();
 
     let nombre = match pedir_texto("Nombre de la tarjeta (ej: Visa Banco X)") {
@@ -8463,22 +8372,19 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
     corte.fecha_corte = pedir_texto_opcional("Fecha de corte (ej: 2026-04-01)");
 
     println!();
-    println!(
-        "  {} Datos del estado de cuenta:",
-        "📋".to_string()
-    );
+    println!("  📋 Datos del estado de cuenta:");
     corte.saldo_anterior = pedir_f64("Saldo anterior (período pasado) $", 0.0);
     corte.pago_realizado = pedir_f64("Pago(s) realizado(s) en el período $", 0.0);
     corte.compras_periodo = pedir_f64("Nuevas compras / cargos en el período $", 0.0);
     corte.intereses_cobrados = pedir_f64("Intereses cobrados (aparece en el corte) $", 0.0);
-    corte.otros_cargos = pedir_f64("Otros cargos (comisiones, seguros, IVA interés, etc.) $", 0.0);
+    corte.otros_cargos = pedir_f64(
+        "Otros cargos (comisiones, seguros, IVA interés, etc.) $",
+        0.0,
+    );
     corte.saldo_al_corte = pedir_f64("Saldo al corte (nuevo saldo total) $", 0.0);
 
     println!();
-    println!(
-        "  {} Datos de pago:",
-        "💰".to_string()
-    );
+    println!("  💰 Datos de pago:");
     corte.pago_minimo = pedir_f64("Pago mínimo que indica el banco $", 0.0);
     corte.pago_no_intereses = pedir_f64("Pago para no generar intereses $", corte.saldo_al_corte);
 
@@ -8494,17 +8400,13 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
         "{}",
         "  ╔═══════════════════════════════════════════════════════════════════╗".cyan()
     );
-    println!(
-        "  ║  {} — Corte: {}",
-        nombre.bold(),
-        corte.fecha_corte
-    );
+    println!("  ║  {} — Corte: {}", nombre.bold(), corte.fecha_corte);
     println!(
         "{}",
         "  ╠═══════════════════════════════════════════════════════════════════╣".cyan()
     );
     println!("  ║");
-    println!("  ║  {} Movimientos del período:", "📋".to_string());
+    println!("  ║  📋 Movimientos del período:");
     println!(
         "  ║    Saldo anterior:        ${:>10.2}",
         corte.saldo_anterior
@@ -8539,8 +8441,7 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
 
     if analisis.diferencia_vs_real > 0.01 {
         println!(
-            "  ║  {} Los números no cuadran (dif: ${:.2}) — puede haber cargos no listados",
-            "⚠️".to_string(),
+            "  ║  ⚠️ Los números no cuadran (dif: ${:.2}) — puede haber cargos no listados",
             analisis.diferencia_vs_real
         );
         println!("  ║");
@@ -8590,11 +8491,7 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
             "  ╠═══════════════════════════════════════════════════════════════════╣".cyan()
         );
         println!("  ║");
-        println!(
-            "  ║  {} TU PAGO DE ${:.2}:",
-            "💰".to_string(),
-            corte.pago_realizado
-        );
+        println!("  ║  💰 TU PAGO DE ${:.2}:", corte.pago_realizado);
         println!(
             "  ║    ✅ A reducir deuda:  ${:>10.2}  ({})",
             analisis.pago_a_capital,
@@ -8607,10 +8504,7 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
         );
         if !est.pago_cubre_intereses {
             println!("  ║");
-            println!(
-                "  ║  {} Tu pago NI SIQUIERA cubre los intereses.",
-                "⛔".to_string()
-            );
+            println!("  ║  ⛔ Tu pago NI SIQUIERA cubre los intereses.");
             println!(
                 "  ║     {}",
                 "La deuda está CRECIENDO cada mes aunque pagues."
@@ -8629,22 +8523,14 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
         "  ╠═══════════════════════════════════════════════════════════════════╣".cyan()
     );
     println!("  ║");
-    println!(
-        "  ║  {} ESTRATEGIA PARA ELIMINAR INTERESES:",
-        "🎯".to_string()
-    );
+    println!("  ║  🎯 ESTRATEGIA PARA ELIMINAR INTERESES:");
     println!("  ║");
 
     if est.tiene_intereses {
-        println!(
-            "  ║  {} Para CORTAR los intereses de raíz este mes, necesitas pagar:",
-            "→".to_string()
-        );
+        println!("  ║  → Para CORTAR los intereses de raíz este mes, necesitas pagar:");
         println!(
             "  ║     {}",
-            format!("${:.2}", est.monto_corta_intereses)
-                .green()
-                .bold()
+            format!("${:.2}", est.monto_corta_intereses).green().bold()
         );
         println!(
             "  ║     {}",
@@ -8653,19 +8539,13 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
         if est.interes_residual_estimado > 0.01 {
             println!("  ║");
             println!(
-                "  ║  {} Ojo: puede aparecer ~${:.2} de interés residual en el siguiente",
-                "⚠️".to_string(),
+                "  ║  ⚠️ Ojo: puede aparecer ~${:.2} de interés residual en el siguiente",
                 est.interes_residual_estimado
             );
-            println!(
-                "  ║     corte (interés de días entre compra y corte). Es normal y es poco."
-            );
+            println!("  ║     corte (interés de días entre compra y corte). Es normal y es poco.");
         }
     } else {
-        println!(
-            "  ║  {} Estás libre de intereses. Sigue pagando el total cada mes.",
-            "✅".to_string()
-        );
+        println!("  ║  ✅ Estás libre de intereses. Sigue pagando el total cada mes.");
     }
 
     println!("  ║");
@@ -8678,10 +8558,7 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
     //  SECCIÓN 5: Tabla comparativa — mínimo vs actual vs sin intereses vs total
     // ═══════════════════════════════════════════════════════
     println!();
-    println!(
-        "  {} COMPARACIÓN: ¿Qué pasa con cada estrategia de pago?",
-        "📊".to_string()
-    );
+    println!("  📊 COMPARACIÓN: ¿Qué pasa con cada estrategia de pago?");
     println!();
     println!(
         "{}",
@@ -8721,10 +8598,7 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
             "—".dimmed().to_string()
         };
 
-        let nombre_display = format!(
-            "{} (${:.0}/mes)",
-            plan.nombre, plan.monto_mensual
-        );
+        let nombre_display = format!("{} (${:.0}/mes)", plan.nombre, plan.monto_mensual);
 
         println!(
             "  ║  {:<35} {:>6}m   ${:>12.2}   ${:>12.2}   {:>14}{}",
@@ -8750,8 +8624,7 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
     if est.tiene_intereses {
         if est.dinero_regalado_al_banco_minimo > 0.01 {
             println!(
-                "  {} Si sigues pagando el mínimo, le regalas ${:.2} al banco en intereses.",
-                "🔴".to_string(),
+                "  🔴 Si sigues pagando el mínimo, le regalas ${:.2} al banco en intereses.",
                 est.dinero_regalado_al_banco_minimo
             );
         }
@@ -8760,18 +8633,13 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
                 > 0.01
         {
             println!(
-                "  {} Con tu pago actual (${:.0}), aún regalas ${:.2} en intereses.",
-                "🟡".to_string(),
-                corte.pago_realizado,
-                est.dinero_regalado_al_banco_actual
+                "  🟡 Con tu pago actual (${:.0}), aún regalas ${:.2} en intereses.",
+                corte.pago_realizado, est.dinero_regalado_al_banco_actual
             );
         }
 
         println!();
-        println!(
-            "  {} RECOMENDACIÓN:",
-            "⭐".to_string()
-        );
+        println!("  ⭐ RECOMENDACIÓN:");
         if est.monto_corta_intereses <= corte.pago_realizado * 1.5 {
             println!(
                 "  {}  Paga ${:.2} este mes y CORTAS los intereses de un solo golpe.",
@@ -8784,31 +8652,24 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
             );
         } else {
             println!(
-                "  {}  Lo ideal: pagar ${:.2} para cortar los intereses.",
-                "→".to_string(),
+                "  →  Lo ideal: pagar ${:.2} para cortar los intereses.",
                 est.monto_corta_intereses
             );
             let plan_doble = &est.plan_actual;
             if plan_doble.meses_para_liquidar <= 3 {
                 println!(
-                    "  {}  Con tu pago actual (${:.0}/mes) terminas en {} meses.",
-                    "→".to_string(),
-                    corte.pago_realizado,
-                    plan_doble.meses_para_liquidar
+                    "  →  Con tu pago actual (${:.0}/mes) terminas en {} meses.",
+                    corte.pago_realizado, plan_doble.meses_para_liquidar
                 );
             } else {
                 // Sugerir un monto intermedio que liquide en ~3 meses
                 let monto_3m = corte.saldo_al_corte / 3.0 * 1.05; // +5% para cubrir intereses
                 println!(
-                    "  {}  Si no puedes pagar todo, intenta ${:.0}/mes → ~3 meses para liquidar.",
-                    "→".to_string(),
+                    "  →  Si no puedes pagar todo, intenta ${:.0}/mes → ~3 meses para liquidar.",
                     monto_3m
                 );
             }
-            println!(
-                "  {}  Mientras más rápido pagues, menos intereses acumulas.",
-                "→".to_string()
-            );
+            println!("  →  Mientras más rápido pagues, menos intereses acumulas.");
         }
 
         // Si pago_minimo ni siquiera cubre intereses
@@ -8824,13 +8685,9 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
             );
         }
     } else {
+        println!("  ✅ No tienes intereses pendientes. Sigue así.");
         println!(
-            "  {} No tienes intereses pendientes. Sigue así.",
-            "✅".to_string()
-        );
-        println!(
-            "  {} Para mantenerlo: paga ${:.2} antes de la fecha límite.",
-            "→".to_string(),
+            "  → Para mantenerlo: paga ${:.2} antes de la fecha límite.",
             corte.pago_no_intereses
         );
     }
@@ -8875,7 +8732,12 @@ fn menu_asesor_corte_bancario(state: &mut AppState) {
         &hora_reg,
         &nombre,
         &resumen_corte,
-        vec!["tarjeta".into(), "intereses".into(), "banco".into(), nombre.clone()],
+        vec![
+            "tarjeta".into(),
+            "intereses".into(),
+            "banco".into(),
+            nombre.clone(),
+        ],
         TipoRegistro::CorteBancario {
             corte: corte.clone(),
             tasa_mensual: analisis.tasa_mensual_calculada,
@@ -8932,20 +8794,14 @@ fn mostrar_tabla_mensual(
     for f in &proy {
         println!(
             "  {:<5} ${:>8.2} ${:>8.2} ${:>10.2} ${:>10.2} ${:>12.2}",
-            f.mes,
-            f.pago,
-            f.interes,
-            f.abono_capital,
-            f.saldo_restante,
-            f.intereses_acumulados
+            f.mes, f.pago, f.interes, f.abono_capital, f.saldo_restante, f.intereses_acumulados
         );
     }
     if let Some(last) = proy.last() {
         if last.saldo_restante > 0.01 {
             println!();
             println!(
-                "  {} Después de 60 meses aún deberías ${:.2}",
-                "⚠️".to_string(),
+                "  ⚠️ Después de 60 meses aún deberías ${:.2}",
                 last.saldo_restante
             );
         }
@@ -8983,14 +8839,8 @@ fn menu_presupuesto_cero(state: &mut AppState) {
             "╚══════════════════════════════════════════════════════════╝".cyan()
         );
         println!();
-        println!(
-            "  {} Vamos a configurar tu presupuesto por primera vez.",
-            "👋".to_string()
-        );
-        println!(
-            "  {} Solo necesitas hacerlo una vez — después cada mes se genera solo.",
-            "💡".to_string()
-        );
+        println!("  👋 Vamos a configurar tu presupuesto por primera vez.");
+        println!("  💡 Solo necesitas hacerlo una vez — después cada mes se genera solo.");
         println!();
         if Confirm::new()
             .with_prompt("  ¿Crear tu plantilla de presupuesto ahora?")
@@ -9010,8 +8860,7 @@ fn menu_presupuesto_cero(state: &mut AppState) {
         if let Some(plantilla) = &state.presupuesto.plantilla {
             let nuevo = plantilla.generar_mes(&mes_actual);
             println!(
-                "\n  {} Presupuesto de {} generado automáticamente ({} líneas).",
-                "✅".to_string(),
+                "\n  ✅ Presupuesto de {} generado automáticamente ({} líneas).",
                 mes_actual,
                 nuevo.lineas.len()
             );
@@ -9113,24 +8962,13 @@ fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual) {
 
     match &res.salud {
         SaludPresupuesto::Perfecto => {
-            println!(
-                "    {}  Saldo: $0.00 — ¡Cada dólar asignado!",
-                "✅".to_string()
-            );
+            println!("    ✅  Saldo: $0.00 — ¡Cada dólar asignado!");
         }
         SaludPresupuesto::SobraDinero(s) => {
-            println!(
-                "    {} Sobran ${:.2} — asígnalos a ahorro o deuda.",
-                "🟡".to_string(),
-                s
-            );
+            println!("    🟡 Sobran ${:.2} — asígnalos a ahorro o deuda.", s);
         }
         SaludPresupuesto::FaltaDinero(f) => {
-            println!(
-                "    {} Faltan ${:.2} — recorta gastos.",
-                "🔴".to_string(),
-                f
-            );
+            println!("    🔴 Faltan ${:.2} — recorta gastos.", f);
         }
     }
 
@@ -9158,11 +8996,7 @@ fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual) {
 
 fn generar_presupuesto_mes(state: &mut AppState, mes: &str) {
     if state.presupuesto.mes_actual(mes).is_some() {
-        println!(
-            "  {} Ya existe un presupuesto para {}. ¿Regenerar?",
-            "⚠️".to_string(),
-            mes
-        );
+        println!("  ⚠️ Ya existe un presupuesto para {}. ¿Regenerar?", mes);
         if !Confirm::new()
             .with_prompt("  Esto reemplazará el existente")
             .default(false)
@@ -9178,8 +9012,7 @@ fn generar_presupuesto_mes(state: &mut AppState, mes: &str) {
     if let Some(plantilla) = &state.presupuesto.plantilla {
         let nuevo = plantilla.generar_mes(mes);
         println!(
-            "  {} Presupuesto generado para {} con {} líneas.",
-            "✅".to_string(),
+            "  ✅ Presupuesto generado para {} con {} líneas.",
             mes,
             nuevo.lineas.len()
         );
@@ -9199,15 +9032,10 @@ fn crear_plantilla_manual(state: &mut AppState) {
 
     let mut lineas = Vec::new();
 
-    println!(
-        "  {} Primero tus ingresos (sueldos, etc.):",
-        "💵".to_string()
-    );
+    println!("  💵 Primero tus ingresos (sueldos, etc.):");
     loop {
-        let nombre = match pedir_texto(&format!(
-            "Ingreso {} (vacío=siguiente)",
-            lineas.len() + 1
-        )) {
+        let nombre = match pedir_texto(&format!("Ingreso {} (vacío=siguiente)", lineas.len() + 1))
+        {
             Some(n) => n,
             None => break,
         };
@@ -9226,14 +9054,15 @@ fn crear_plantilla_manual(state: &mut AppState) {
     }
 
     println!();
-    println!(
-        "  {} Gastos FIJOS (casa, carro, seguros, servicios):",
-        "🏠".to_string()
-    );
+    println!("  🏠 Gastos FIJOS (casa, carro, seguros, servicios):");
     loop {
         let nombre = match pedir_texto(&format!(
             "Gasto fijo {} (vacío=siguiente)",
-            lineas.iter().filter(|l| l.categoria == Categoria::GastoFijo).count() + 1
+            lineas
+                .iter()
+                .filter(|l| l.categoria == Categoria::GastoFijo)
+                .count()
+                + 1
         )) {
             Some(n) => n,
             None => break,
@@ -9253,14 +9082,15 @@ fn crear_plantilla_manual(state: &mut AppState) {
     }
 
     println!();
-    println!(
-        "  {} Gastos VARIABLES (comida, gasolina, entretenimiento):",
-        "🛒".to_string()
-    );
+    println!("  🛒 Gastos VARIABLES (comida, gasolina, entretenimiento):");
     loop {
         let nombre = match pedir_texto(&format!(
             "Gasto variable {} (vacío=siguiente)",
-            lineas.iter().filter(|l| l.categoria == Categoria::GastoVariable).count() + 1
+            lineas
+                .iter()
+                .filter(|l| l.categoria == Categoria::GastoVariable)
+                .count()
+                + 1
         )) {
             Some(n) => n,
             None => break,
@@ -9279,14 +9109,15 @@ fn crear_plantilla_manual(state: &mut AppState) {
     }
 
     println!();
-    println!(
-        "  {} Pagos de DEUDA (tarjetas, préstamos):",
-        "💳".to_string()
-    );
+    println!("  💳 Pagos de DEUDA (tarjetas, préstamos):");
     loop {
         let nombre = match pedir_texto(&format!(
             "Deuda {} (vacío=siguiente)",
-            lineas.iter().filter(|l| l.categoria == Categoria::PagoDeuda).count() + 1
+            lineas
+                .iter()
+                .filter(|l| l.categoria == Categoria::PagoDeuda)
+                .count()
+                + 1
         )) {
             Some(n) => n,
             None => break,
@@ -9299,8 +9130,10 @@ fn crear_plantilla_manual(state: &mut AppState) {
         if saldo_total > 0.0 {
             let meses_restantes = (saldo_total / monto).ceil() as u32;
             println!(
-                "    {} Con ${:.0}/mes pagarás ${:.2} en ~{} meses ({:.1} años)",
-                "📊".to_string(), monto, saldo_total, meses_restantes,
+                "    📊 Con ${:.0}/mes pagarás ${:.2} en ~{} meses ({:.1} años)",
+                monto,
+                saldo_total,
+                meses_restantes,
                 meses_restantes as f64 / 12.0
             );
         }
@@ -9310,19 +9143,24 @@ fn crear_plantilla_manual(state: &mut AppState) {
             categoria: Categoria::PagoDeuda,
             monto_default: monto,
             fecha_limite: fecha,
-            saldo_total_deuda: if saldo_total > 0.0 { Some(saldo_total) } else { None },
+            saldo_total_deuda: if saldo_total > 0.0 {
+                Some(saldo_total)
+            } else {
+                None
+            },
         });
     }
 
     println!();
-    println!(
-        "  {} AHORRO (savings, fondo de emergencia):",
-        "🏦".to_string()
-    );
+    println!("  🏦 AHORRO (savings, fondo de emergencia):");
     loop {
         let nombre = match pedir_texto(&format!(
             "Ahorro {} (vacío=terminar)",
-            lineas.iter().filter(|l| l.categoria == Categoria::Ahorro).count() + 1
+            lineas
+                .iter()
+                .filter(|l| l.categoria == Categoria::Ahorro)
+                .count()
+                + 1
         )) {
             Some(n) => n,
             None => break,
@@ -9364,20 +9202,15 @@ fn crear_plantilla_manual(state: &mut AppState) {
     println!("    Ingresos: ${:.2}", total_ing);
     println!("    Egresos:  ${:.2}", total_eg);
     if saldo.abs() < 0.01 {
-        println!(
-            "    {} Saldo: $0.00 — ¡Perfecto, cada dólar asignado!",
-            "✅".to_string()
-        );
+        println!("    ✅ Saldo: $0.00 — ¡Perfecto, cada dólar asignado!");
     } else if saldo > 0.0 {
         println!(
-            "    {} Sobran ${:.2} — podrías asignarlos a ahorro o deuda",
-            "🟡".to_string(),
+            "    🟡 Sobran ${:.2} — podrías asignarlos a ahorro o deuda",
             saldo
         );
     } else {
         println!(
-            "    {} Faltan ${:.2} — necesitas recortar o agregar ingreso",
-            "🔴".to_string(),
+            "    🔴 Faltan ${:.2} — necesitas recortar o agregar ingreso",
             -saldo
         );
     }
@@ -9387,7 +9220,7 @@ fn crear_plantilla_manual(state: &mut AppState) {
         lineas,
     });
     println!();
-    println!("  {} Plantilla guardada.", "✅".to_string());
+    println!("  ✅ Plantilla guardada.");
     pausa();
 }
 
@@ -9417,7 +9250,7 @@ fn marcar_pagos(state: &mut AppState, mes: &str) {
         .collect();
 
     if pendientes.is_empty() {
-        println!("  {} ¡Todos los pagos están al día!", "✅".to_string());
+        println!("  ✅ ¡Todos los pagos están al día!");
         pausa();
         return;
     }
@@ -9440,10 +9273,7 @@ fn marcar_pagos(state: &mut AppState, mes: &str) {
         })
         .collect();
 
-    println!(
-        "  {} Selecciona los pagos que ya realizaste:",
-        "💰".to_string()
-    );
+    println!("  💰 Selecciona los pagos que ya realizaste:");
 
     // Marcar uno a uno
     loop {
@@ -9456,7 +9286,7 @@ fn marcar_pagos(state: &mut AppState, mes: &str) {
             .collect();
 
         if pendientes_now.is_empty() {
-            println!("  {} ¡Todo pagado!", "✅".to_string());
+            println!("  ✅ ¡Todo pagado!");
             break;
         }
 
@@ -9464,12 +9294,7 @@ fn marcar_pagos(state: &mut AppState, mes: &str) {
             .iter()
             .map(|&i| {
                 let l = &pres.lineas[i];
-                format!(
-                    "{} {} — ${:.2}",
-                    l.categoria.emoji(),
-                    l.nombre,
-                    l.monto,
-                )
+                format!("{} {} — ${:.2}", l.categoria.emoji(), l.nombre, l.monto,)
             })
             .collect();
         let mut opciones: Vec<&str> = nombres_now.iter().map(|s| s.as_str()).collect();
@@ -9495,11 +9320,7 @@ fn agregar_linea_mes(state: &mut AppState, mes: &str) {
     let pres = match state.presupuesto.mes_actual_mut(mes) {
         Some(p) => p,
         None => {
-            println!(
-                "  {} No hay presupuesto para {}.",
-                "✗".red(),
-                mes
-            );
+            println!("  {} No hay presupuesto para {}.", "✗".red(), mes);
             pausa();
             return;
         }
@@ -9532,7 +9353,11 @@ fn agregar_linea_mes(state: &mut AppState, mes: &str) {
 
     let saldo_deuda = if cat == Categoria::PagoDeuda {
         let s = pedir_f64("  Saldo TOTAL de la deuda (0=no aplica) $", 0.0);
-        if s > 0.0 { Some(s) } else { None }
+        if s > 0.0 {
+            Some(s)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -9547,7 +9372,7 @@ fn agregar_linea_mes(state: &mut AppState, mes: &str) {
         saldo_total_deuda: saldo_deuda,
     });
 
-    println!("  {} '{}' agregado: ${:.2}", "✅".to_string(), nombre, monto);
+    println!("  ✅ '{}' agregado: ${:.2}", nombre, monto);
     pausa();
 }
 
@@ -9584,12 +9409,15 @@ fn editar_monto_linea(state: &mut AppState, mes: &str) {
 
     if let Some(idx) = menu("¿Cuál editar?", &refs) {
         let nuevo = pedir_f64(
-            &format!("Nuevo monto para '{}' (actual: ${:.2})", pres.lineas[idx].nombre, pres.lineas[idx].monto),
+            &format!(
+                "Nuevo monto para '{}' (actual: ${:.2})",
+                pres.lineas[idx].nombre, pres.lineas[idx].monto
+            ),
             pres.lineas[idx].monto,
         );
         if nuevo > 0.0 {
             pres.lineas[idx].monto = nuevo;
-            println!("  {} Actualizado a ${:.2}", "✅".to_string(), nuevo);
+            println!("  ✅ Actualizado a ${:.2}", nuevo);
         }
     }
     pausa();
@@ -9599,11 +9427,7 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
     let pres = match state.presupuesto.mes_actual(mes) {
         Some(p) => p,
         None => {
-            println!(
-                "  {} No hay presupuesto para {}.",
-                "✗".red(),
-                mes
-            );
+            println!("  {} No hay presupuesto para {}.", "✗".red(), mes);
             return;
         }
     };
@@ -9613,11 +9437,7 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
         "{}",
         "╔══════════════════════════════════════════════════════════════════╗".cyan()
     );
-    println!(
-        "  {} PRESUPUESTO BASE CERO — {}",
-        "📊".to_string(),
-        mes.bold()
-    );
+    println!("  📊 PRESUPUESTO BASE CERO — {}", mes.bold());
     println!(
         "{}",
         "╠══════════════════════════════════════════════════════════════════╣".cyan()
@@ -9666,7 +9486,10 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
             };
             println!(
                 "    {} {:<30} ${:>10.2}{}",
-                estado, item.nombre, item.monto, fecha_str.dimmed()
+                estado,
+                item.nombre,
+                item.monto,
+                fecha_str.dimmed()
             );
             // Mostrar info de saldo total para deudas
             if item.categoria == Categoria::PagoDeuda {
@@ -9677,8 +9500,7 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
                         0
                     };
                     println!(
-                        "      {} Saldo total: ${:.2} — ~{} meses restantes ({:.1} años)",
-                        "📋".to_string(),
+                        "      📋 Saldo total: ${:.2} — ~{} meses restantes ({:.1} años)",
                         saldo,
                         meses_rest,
                         meses_rest as f64 / 12.0
@@ -9701,34 +9523,23 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
     );
 
     let res = pres.resumen();
-    println!(
-        "  💵 Ingresos:           ${:>10.2}",
-        res.ingresos
-    );
-    println!(
-        "  💸 Total egresos:     -${:>10.2}",
-        res.egresos
-    );
+    println!("  💵 Ingresos:           ${:>10.2}", res.ingresos);
+    println!("  💸 Total egresos:     -${:>10.2}", res.egresos);
     println!("  ─────────────────────────────────────────");
 
     match &res.salud {
         SaludPresupuesto::Perfecto => {
-            println!(
-                "  {} SALDO: $0.00 — ¡PERFECTO! Cada dólar tiene destino.",
-                "✅".to_string()
-            );
+            println!("  ✅ SALDO: $0.00 — ¡PERFECTO! Cada dólar tiene destino.");
         }
         SaludPresupuesto::SobraDinero(s) => {
             println!(
-                "  {} SOBRAN: ${:.2} — Asígnalos a ahorro o pago extra de deuda",
-                "🟡".to_string(),
+                "  🟡 SOBRAN: ${:.2} — Asígnalos a ahorro o pago extra de deuda",
                 s
             );
         }
         SaludPresupuesto::FaltaDinero(f) => {
             println!(
-                "  {} FALTAN: ${:.2} — Recorta gastos variables o aumenta ingreso",
-                "🔴".to_string(),
+                "  🔴 FALTAN: ${:.2} — Recorta gastos variables o aumenta ingreso",
                 f
             );
         }
@@ -9763,10 +9574,7 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
     let deudas = pres.info_deudas();
     if !deudas.is_empty() {
         println!();
-        println!(
-            "  {} RESUMEN DE DEUDAS:",
-            "💳".to_string()
-        );
+        println!("  💳 RESUMEN DE DEUDAS:");
         println!("  ─────────────────────────────────────────────────");
         let mut total_deuda = 0.0f64;
         let mut total_pago_mes = 0.0f64;
@@ -9774,19 +9582,13 @@ fn ver_presupuesto_completo(state: &AppState, mes: &str) {
             total_deuda += saldo;
             total_pago_mes += pago;
             println!(
-                "    {} {:<25} Saldo: ${:>10.2}  Pago: ${:>7.2}/mes  ~{} meses",
-                "•".to_string(), nombre, saldo, pago, meses
+                "    • {:<25} Saldo: ${:>10.2}  Pago: ${:>7.2}/mes  ~{} meses",
+                nombre, saldo, pago, meses
             );
         }
         println!("    ─────────────────────────────────────────────");
-        println!(
-            "    Deuda total:  ${:.2}",
-            total_deuda
-        );
-        println!(
-            "    Pago total/mes: ${:.2}",
-            total_pago_mes
-        );
+        println!("    Deuda total:  ${:.2}", total_deuda);
+        println!("    Pago total/mes: ${:.2}", total_pago_mes);
         if total_pago_mes > 0.0 {
             let meses_global = (total_deuda / total_pago_mes).ceil() as u32;
             println!(
@@ -9846,7 +9648,7 @@ fn menu_asesor_comparacion(state: &mut AppState) {
         "{}",
         "  ╔════════════════════════════════════════════════════╗".cyan()
     );
-    println!("  ║  {} {}", "⚖️".to_string(), comp.titulo.bold());
+    println!("  ║  ⚖️ {}", comp.titulo.bold());
     println!(
         "{}",
         "  ╠════════════════════════════════════════════════════╣".cyan()
@@ -9881,13 +9683,9 @@ fn menu_asesor_comparacion(state: &mut AppState) {
     );
     println!("  ║");
     if comp.diferencia.abs() > 0.01 {
-        println!(
-            "  ║  {} Diferencia: ${:.2}",
-            "💰".to_string(),
-            comp.diferencia.abs()
-        );
+        println!("  ║  💰 Diferencia: ${:.2}", comp.diferencia.abs());
     }
-    println!("  ║  {} {}", "📌".to_string(), comp.recomendacion.green());
+    println!("  ║  📌 {}", comp.recomendacion.green());
     println!("  ║");
     println!(
         "{}",
@@ -9898,10 +9696,7 @@ fn menu_asesor_comparacion(state: &mut AppState) {
     let similares = state.asesor.diccionario.buscar_similares(&titulo);
     if !similares.is_empty() {
         println!();
-        println!(
-            "  {} Decisiones similares previas:",
-            "🔍".to_string()
-        );
+        println!("  🔍 Decisiones similares previas:");
         for a in similares.iter().take(3) {
             println!(
                 "    {} {} — {} ({}) {}",
@@ -9909,7 +9704,10 @@ fn menu_asesor_comparacion(state: &mut AppState) {
                 a.accion,
                 a.categoria,
                 a.fecha,
-                a.monto.map(|m| format!("${:.2}", m)).unwrap_or_default().dimmed()
+                a.monto
+                    .map(|m| format!("${:.2}", m))
+                    .unwrap_or_default()
+                    .dimmed()
             );
         }
     }
@@ -9977,8 +9775,12 @@ fn menu_asesor_matriz(state: &mut AppState) {
                     pausa();
                     continue;
                 }
-                let nombres: Vec<String> =
-                    state.asesor.matrices.iter().map(|m| m.titulo.clone()).collect();
+                let nombres: Vec<String> = state
+                    .asesor
+                    .matrices
+                    .iter()
+                    .map(|m| m.titulo.clone())
+                    .collect();
                 let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
                 if let Some(idx) = menu("¿Cuál eliminar?", &refs) {
                     state.asesor.matrices.remove(idx);
@@ -10004,14 +9806,8 @@ fn nueva_matriz_decision(state: &mut AppState) {
 
     // Agregar criterios
     println!();
-    println!(
-        "  {} Define los criterios de evaluación y su peso (0.0 a 1.0)",
-        "📐".to_string()
-    );
-    println!(
-        "  {} Ej: Precio (0.4), Calidad (0.3), Rapidez (0.3)",
-        "💡".to_string()
-    );
+    println!("  📐 Define los criterios de evaluación y su peso (0.0 a 1.0)");
+    println!("  💡 Ej: Precio (0.4), Calidad (0.3), Rapidez (0.3)");
     println!();
 
     loop {
@@ -10040,10 +9836,7 @@ fn nueva_matriz_decision(state: &mut AppState) {
 
     // Agregar opciones
     println!();
-    println!(
-        "  {} Ahora define las opciones a comparar:",
-        "📋".to_string()
-    );
+    println!("  📋 Ahora define las opciones a comparar:");
     loop {
         let nombre = match pedir_texto(&format!(
             "Opción {} (vacío=terminar)",
@@ -10063,10 +9856,7 @@ fn nueva_matriz_decision(state: &mut AppState) {
 
     // Puntuar cada opción en cada criterio
     println!();
-    println!(
-        "  {} Puntúa cada opción en cada criterio (0-10):",
-        "📊".to_string()
-    );
+    println!("  📊 Puntúa cada opción en cada criterio (0-10):");
     for (i, opcion) in matriz.opciones.clone().iter().enumerate() {
         println!();
         println!("  → {}", opcion.bold());
@@ -10114,7 +9904,12 @@ fn ver_matriz_decision(state: &AppState) {
         pausa();
         return;
     }
-    let nombres: Vec<String> = state.asesor.matrices.iter().map(|m| m.titulo.clone()).collect();
+    let nombres: Vec<String> = state
+        .asesor
+        .matrices
+        .iter()
+        .map(|m| m.titulo.clone())
+        .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
     if let Some(idx) = menu("¿Cuál ver?", &refs) {
         mostrar_matriz_resultado(&state.asesor.matrices[idx]);
@@ -10124,12 +9919,7 @@ fn ver_matriz_decision(state: &AppState) {
 
 fn mostrar_matriz_resultado(m: &MatrizDecision) {
     println!();
-    println!(
-        "  {} {} ({})",
-        "🧮".to_string(),
-        m.titulo.bold(),
-        m.fecha.dimmed()
-    );
+    println!("  🧮 {} ({})", m.titulo.bold(), m.fecha.dimmed());
 
     // Header
     print!("  {:<20}", "");
@@ -10151,19 +9941,14 @@ fn mostrar_matriz_resultado(m: &MatrizDecision) {
         for j in 0..m.criterios.len() {
             print!(" {:>10.1}", m.valores[i][j]);
         }
-        println!(
-            " {:>10}{}",
-            format!("{:.2}", score).green().bold(),
-            marca
-        );
+        println!(" {:>10}{}", format!("{:.2}", score).green().bold(), marca);
     }
     println!("  {}", "─".repeat(20 + m.criterios.len() * 11 + 11));
 
     if let Some((nombre, score)) = m.mejor_opcion() {
         println!();
         println!(
-            "  {} Recomendación: {} ({:.1}/10)",
-            "⭐".to_string(),
+            "  ⭐ Recomendación: {} ({:.1}/10)",
             nombre.green().bold(),
             score
         );
@@ -10184,14 +9969,8 @@ fn menu_asesor_presupuesto(state: &mut AppState) {
 
         if !pres.ingresos.is_empty() || !pres.gastos.is_empty() {
             println!("  📊 Resumen:");
-            println!(
-                "    Ingresos:  {}",
-                format!("${:.2}/mes", ingresos).green()
-            );
-            println!(
-                "    Gastos:    {}",
-                format!("${:.2}/mes", gastos).red()
-            );
+            println!("    Ingresos:  {}", format!("${:.2}/mes", ingresos).green());
+            println!("    Gastos:    {}", format!("${:.2}/mes", gastos).red());
             let balance_str = if balance >= 0.0 {
                 format!("${:.2}/mes", balance).green().bold().to_string()
             } else {
@@ -10229,15 +10008,17 @@ fn menu_asesor_presupuesto(state: &mut AppState) {
                     let barra = "█".repeat((pct / 5.0).ceil() as usize);
                     println!(
                         "      {:<15} ${:>8.2} ({:>4.1}%) {}",
-                        cat, monto, pct, barra.cyan()
+                        cat,
+                        monto,
+                        pct,
+                        barra.cyan()
                     );
                 }
             }
         } else {
             println!(
                 "  {}",
-                "(vacío — agrega tus ingresos y gastos para ver el panorama completo)"
-                    .dimmed()
+                "(vacío — agrega tus ingresos y gastos para ver el panorama completo)".dimmed()
             );
         }
         println!();
@@ -10347,7 +10128,7 @@ fn ver_movimientos(state: &AppState) {
 
     if !pres.ingresos.is_empty() {
         println!();
-        println!("  {} Ingresos:", "💵".to_string());
+        println!("  💵 Ingresos:");
         for (i, m) in pres.ingresos.iter().enumerate() {
             println!(
                 "    {}. {} — ${:.2} ({}) [{}] {}",
@@ -10363,7 +10144,7 @@ fn ver_movimientos(state: &AppState) {
 
     if !pres.gastos.is_empty() {
         println!();
-        println!("  {} Gastos:", "💸".to_string());
+        println!("  💸 Gastos:");
         for (i, m) in pres.gastos.iter().enumerate() {
             println!(
                 "    {}. {} — ${:.2} ({}) [{}] {}",
@@ -10379,7 +10160,7 @@ fn ver_movimientos(state: &AppState) {
 
     if !pres.metas.is_empty() {
         println!();
-        println!("  {} Metas de ahorro:", "🎯".to_string());
+        println!("  🎯 Metas de ahorro:");
         for m in &pres.metas {
             let pct = if m.objetivo > 0.0 {
                 m.ahorrado / m.objetivo * 100.0
@@ -10387,13 +10168,18 @@ fn ver_movimientos(state: &AppState) {
                 0.0
             };
             let barra_len = (pct / 5.0).ceil() as usize;
-            let barra = format!("{}{}",
+            let barra = format!(
+                "{}{}",
                 "█".repeat(barra_len.min(20)),
                 "░".repeat(20_usize.saturating_sub(barra_len))
             );
             println!(
                 "    🎯 {} — ${:.2} / ${:.2} ({:.0}%) {}",
-                m.nombre, m.ahorrado, m.objetivo, pct, barra.cyan()
+                m.nombre,
+                m.ahorrado,
+                m.objetivo,
+                pct,
+                barra.cyan()
             );
             if !m.fecha_meta.is_empty() {
                 println!("       Fecha meta: {}", m.fecha_meta);
@@ -10461,10 +10247,7 @@ fn menu_asesor_proyecciones(state: &mut AppState) {
     let balance = pres.balance_mensual();
 
     if pres.ingresos.is_empty() && pres.gastos.is_empty() {
-        println!(
-            "  {} Configura tu presupuesto primero para ver proyecciones.",
-            "⚠️".to_string()
-        );
+        println!("  ⚠️ Configura tu presupuesto primero para ver proyecciones.");
         pausa();
         return;
     }
@@ -10517,7 +10300,9 @@ fn menu_asesor_proyecciones(state: &mut AppState) {
                 };
                 println!(
                     "    ✅ {} — Faltante: ${:.2} → {} para alcanzarla",
-                    nombre, faltante, tiempo.green()
+                    nombre,
+                    faltante,
+                    tiempo.green()
                 );
             }
         }
@@ -10643,13 +10428,10 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
         .split_whitespace()
         .map(|s| s.to_lowercase())
         .collect();
-    state.memoria.diccionario.registrar(
-        "asesor",
-        &hoy,
-        &accion,
-        &palabras,
-        &notas,
-    );
+    state
+        .memoria
+        .diccionario
+        .registrar("asesor", &hoy, &accion, &palabras, &notas);
 
     pausa();
 }
@@ -10681,14 +10463,8 @@ fn menu_asesor_rastreador(state: &mut AppState) {
 
         let rast = &state.asesor.rastreador;
         if rast.deudas.is_empty() {
-            println!(
-                "  {} No hay deudas registradas en el rastreador.",
-                "📌".to_string()
-            );
-            println!(
-                "  {} Agrega tus deudas con saldo, tasa y pagos mensuales.",
-                "💡".to_string()
-            );
+            println!("  📌 No hay deudas registradas en el rastreador.");
+            println!("  💡 Agrega tus deudas con saldo, tasa y pagos mensuales.");
         } else {
             println!("  📊 Estado actual del portafolio de deudas:");
             println!();
@@ -10701,7 +10477,7 @@ fn menu_asesor_rastreador(state: &mut AppState) {
                 let status = if d.activa { "" } else { " ✅" };
                 if d.es_pago_corriente() {
                     println!(
-                        "  {:<25} {:>12} {:>8} {:>12} {:>6}{}",
+                        "  {:<25} {:>12} {:>8} {:>12} {:>6} 🔒",
                         if d.nombre.len() > 24 {
                             format!("{}…", &d.nombre[..23])
                         } else {
@@ -10710,8 +10486,7 @@ fn menu_asesor_rastreador(state: &mut AppState) {
                         "corriente",
                         "0.0%",
                         format!("${:.2}/mes", d.pago_minimo),
-                        d.historial.len(),
-                        " 🔒"
+                        d.historial.len()
                     );
                 } else {
                     let tipo = if d.obligatoria { " 🔒" } else { "" };
@@ -10763,7 +10538,9 @@ fn menu_asesor_rastreador(state: &mut AppState) {
                 }
                 println!(
                     "    Total mensual: {}",
-                    format!("${:.2}", rast.ingreso_mensual_total()).green().bold()
+                    format!("${:.2}", rast.ingreso_mensual_total())
+                        .green()
+                        .bold()
                 );
             }
         }
@@ -10847,14 +10624,14 @@ fn rastreador_revisar_deuda_individual(state: &AppState) {
 
         // Resumen rápido con indicadores
         println!(
-            "  {:<22} {:>11} {:>7} {:>9} {:>10} {:>10} {:>10} {}",
-            "Cuenta", "Saldo", "Tasa%", "Int/mes", "Pago mín", "Sugerido", "A capital", "Estado"
+            "  {:<22} {:>11} {:>7} {:>9} {:>10} {:>10} {:>10} Estado",
+            "Cuenta", "Saldo", "Tasa%", "Int/mes", "Pago mín", "Sugerido", "A capital"
         );
         println!("  {}", "─".repeat(100));
 
         let mut opciones_menu: Vec<String> = Vec::new();
         let mut total_sugerido: f64 = 0.0;
-        for (_, (_, d)) in deudas_con_interes.iter().enumerate() {
+        for (_, d) in deudas_con_interes.iter() {
             let saldo = d.saldo_actual();
             let tasa_mensual = d.tasa_efectiva() / 100.0 / 12.0;
             let interes_mensual = saldo * tasa_mensual;
@@ -10862,7 +10639,9 @@ fn rastreador_revisar_deuda_individual(state: &AppState) {
 
             // Regla: pagar el DOBLE del mínimo o al menos +75%, lo que sea mayor
             let pago_sugerido = if d.tasa_anual >= 20.0 {
-                (d.pago_minimo * 2.0).max(d.pago_minimo * 1.75).max(interes_mensual * 2.0)
+                (d.pago_minimo * 2.0)
+                    .max(d.pago_minimo * 1.75)
+                    .max(interes_mensual * 2.0)
             } else if d.tasa_anual > 0.01 {
                 d.pago_minimo * 1.75
             } else {
@@ -10921,7 +10700,10 @@ fn rastreador_revisar_deuda_individual(state: &AppState) {
         println!("  {}", "─".repeat(100));
 
         // Totales
-        let total_saldo: f64 = deudas_con_interes.iter().map(|(_, d)| d.saldo_actual()).sum();
+        let total_saldo: f64 = deudas_con_interes
+            .iter()
+            .map(|(_, d)| d.saldo_actual())
+            .sum();
         let total_interes: f64 = deudas_con_interes
             .iter()
             .map(|(_, d)| d.saldo_actual() * d.tasa_efectiva() / 100.0 / 12.0)
@@ -10964,8 +10746,14 @@ fn rastreador_revisar_deuda_individual(state: &AppState) {
         for (_, d) in &deudas_con_interes {
             if d.tasa_anual >= 20.0 {
                 let int_m = d.saldo_actual() * d.tasa_efectiva() / 100.0 / 12.0;
-                let sug = (d.pago_minimo * 2.0).max(d.pago_minimo * 1.75).max(int_m * 2.0);
-                let crece = if d.pago_minimo < int_m { " ⛔ CRECE" } else { "" };
+                let sug = (d.pago_minimo * 2.0)
+                    .max(d.pago_minimo * 1.75)
+                    .max(int_m * 2.0);
+                let crece = if d.pago_minimo < int_m {
+                    " ⛔ CRECE"
+                } else {
+                    ""
+                };
                 println!(
                     "  {} {:<20} mín: ${:<8.0} → sugerido: ${:<8.0} (int: ${:.0}/mes){}{}",
                     "│".yellow(),
@@ -10986,8 +10774,7 @@ fn rastreador_revisar_deuda_individual(state: &AppState) {
         if total_interes > total_minimos * 0.4 {
             println!();
             println!(
-                "  {} De los ${:.0} en pagos mínimos, ${:.0} ({:.0}%) se va SOLO a intereses.",
-                "🚨".to_string(),
+                "  🚨 De los ${:.0} en pagos mínimos, ${:.0} ({:.0}%) se va SOLO a intereses.",
                 total_minimos,
                 total_interes,
                 (total_interes / total_minimos) * 100.0
@@ -11020,7 +10807,9 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
     let pago_para_empatar = interes_mensual * 1.005;
     // Regla de oro: doble del mínimo o +75%, lo que sea mayor; nunca menos que 2x el interés
     let pago_sugerido = if d.tasa_anual >= 20.0 {
-        (d.pago_minimo * 2.0).max(d.pago_minimo * 1.75).max(interes_mensual * 2.0)
+        (d.pago_minimo * 2.0)
+            .max(d.pago_minimo * 1.75)
+            .max(interes_mensual * 2.0)
     } else if d.tasa_anual > 0.01 {
         d.pago_minimo * 1.75
     } else {
@@ -11034,52 +10823,40 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
         if es_predatoria {
             println!(
                 "{}",
-                "╔══════════════════════════════════════════════════════════════╗"
-                    .red()
+                "╔══════════════════════════════════════════════════════════════╗".red()
             );
             println!(
                 "{}",
-                format!(
-                    "║  ⛔ DEUDA PREDATORIA: {:<38}║",
-                    d.nombre
-                )
-                .red()
-                .bold()
+                format!("║  ⛔ DEUDA PREDATORIA: {:<38}║", d.nombre)
+                    .red()
+                    .bold()
             );
             println!(
                 "{}",
-                "║  El pago mínimo NO cubre los intereses — la deuda CRECE    ║"
-                    .red()
+                "║  El pago mínimo NO cubre los intereses — la deuda CRECE    ║".red()
             );
             println!(
                 "{}",
-                "╚══════════════════════════════════════════════════════════════╝"
-                    .red()
+                "╚══════════════════════════════════════════════════════════════╝".red()
             );
         } else if d.tasa_anual >= 20.0 {
             println!(
                 "{}",
-                "╔══════════════════════════════════════════════════════════════╗"
-                    .yellow()
+                "╔══════════════════════════════════════════════════════════════╗".yellow()
             );
             println!(
                 "{}",
-                format!(
-                    "║  ⚠️  TASA PREDATORIA: {:<37}║",
-                    d.nombre
-                )
-                .yellow()
-                .bold()
+                format!("║  ⚠️  TASA PREDATORIA: {:<37}║", d.nombre)
+                    .yellow()
+                    .bold()
             );
             println!(
                 "{}",
-                "║  Tasa ≥20% — cada mes que pase es dinero regalado al banco  ║"
-                    .yellow()
+                "║  Tasa ≥20% — cada mes que pase es dinero regalado al banco  ║".yellow()
             );
             println!(
                 "{}",
-                "╚══════════════════════════════════════════════════════════════╝"
-                    .yellow()
+                "╚══════════════════════════════════════════════════════════════╝".yellow()
             );
         } else {
             println!(
@@ -11088,12 +10865,7 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
             );
             println!(
                 "{}",
-                format!(
-                    "║  🔍 ANÁLISIS: {:<45}║",
-                    d.nombre
-                )
-                .cyan()
-                .bold()
+                format!("║  🔍 ANÁLISIS: {:<45}║", d.nombre).cyan().bold()
             );
             println!(
                 "{}",
@@ -11134,11 +10906,16 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
 
         // ── Sección 1: Radiografía ──
         println!();
-        println!("  {} RADIOGRAFÍA DE LA DEUDA", "📋".to_string());
+        println!("  📋 RADIOGRAFÍA DE LA DEUDA");
         println!("  {}", "─".repeat(60));
-        println!("  Saldo actual:           {}", format!("${:.2}", saldo).red().bold());
-        println!("  Tasa anual:             {}  (todas las tarjetas al 30% son predatorias)",
-            format!("{:.1}%", d.tasa_anual).red());
+        println!(
+            "  Saldo actual:           {}",
+            format!("${:.2}", saldo).red().bold()
+        );
+        println!(
+            "  Tasa anual:             {}  (todas las tarjetas al 30% son predatorias)",
+            format!("{:.1}%", d.tasa_anual).red()
+        );
         println!("  Tasa mensual:           {:.2}%", tasa_mensual * 100.0);
         println!(
             "  Intereses que genera:   {} cada mes",
@@ -11161,10 +10938,8 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
             let deficit = interes_mensual - d.pago_minimo;
             println!();
             println!(
-                "  {} ALERTA CRÍTICA: Pagando el mínimo de ${:.2}, la deuda SUBE ${:.2}/mes",
-                "⛔".to_string(),
-                d.pago_minimo,
-                deficit
+                "  ⛔ ALERTA CRÍTICA: Pagando el mínimo de ${:.2}, la deuda SUBE ${:.2}/mes",
+                d.pago_minimo, deficit
             );
             println!(
                 "    → En 12 meses habrás pagado ${:.2} y la deuda habrá SUBIDO",
@@ -11183,10 +10958,7 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
             let a_capital_sug = pago_sugerido - interes_mensual;
             let pct_interes = (interes_mensual / d.pago_minimo) * 100.0;
             println!();
-            println!(
-                "  Pagando el mínimo de ${:.2}:",
-                d.pago_minimo
-            );
+            println!("  Pagando el mínimo de ${:.2}:", d.pago_minimo);
             println!(
                 "    → ${:.2} ({:.0}%) se va a intereses (dinero regalado al banco)",
                 interes_mensual, pct_interes
@@ -11204,13 +10976,17 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
             println!(
                 "    → ${:.2} iría a capital — {:.1}× más rápido que con el mínimo",
                 a_capital_sug,
-                if a_capital_min > 0.01 { a_capital_sug / a_capital_min } else { 0.0 }
+                if a_capital_min > 0.01 {
+                    a_capital_sug / a_capital_min
+                } else {
+                    0.0
+                }
             );
         }
 
         // ── Sección 2: Tabla comparativa de pagos ──
         println!();
-        println!("  {} COMPARACIÓN DE PAGOS — ¿Cuánto debería pagar?", "💰".to_string());
+        println!("  💰 COMPARACIÓN DE PAGOS — ¿Cuánto debería pagar?");
         println!("  {}", "─".repeat(60));
 
         // Generar opciones: mínimo, empatar, sugerido, doble, triple, por meses
@@ -11219,18 +10995,21 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
         montos.push(("⛔ Pago mínimo (trampa)".to_string(), d.pago_minimo));
 
         if es_predatoria {
-            montos.push(("🛑 Para detener crecimiento".to_string(), pago_para_empatar.ceil()));
+            montos.push((
+                "🛑 Para detener crecimiento".to_string(),
+                pago_para_empatar.ceil(),
+            ));
         }
 
         // Pago sugerido (+75% / doble)
         montos.push(("💰 SUGERIDO (×2 / +75%)".to_string(), pago_sugerido));
 
         // Calcular montos estratégicos
-        let opciones_monto = [
-            ("Triple del mínimo", d.pago_minimo * 3.0),
-        ];
+        let opciones_monto = [("Triple del mínimo", d.pago_minimo * 3.0)];
         for (nombre, monto) in &opciones_monto {
-            if *monto > pago_sugerido + 10.0 && !montos.iter().any(|(_, m)| (*m - *monto).abs() < 10.0) {
+            if *monto > pago_sugerido + 10.0
+                && !montos.iter().any(|(_, m)| (*m - *monto).abs() < 10.0)
+            {
                 montos.push((nombre.to_string(), *monto));
             }
         }
@@ -11238,10 +11017,16 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
         // Pago para salir en X meses (búsqueda simple)
         for target_meses in [12u32, 24, 36, 48] {
             let pago_necesario = calcular_pago_para_meses(saldo, tasa_mensual, target_meses);
-            if pago_necesario > d.pago_minimo && pago_necesario < saldo
-                && !montos.iter().any(|(_, m)| (*m - pago_necesario).abs() < 10.0)
+            if pago_necesario > d.pago_minimo
+                && pago_necesario < saldo
+                && !montos
+                    .iter()
+                    .any(|(_, m)| (*m - pago_necesario).abs() < 10.0)
             {
-                montos.push((format!("Liquidar en {} meses", target_meses), pago_necesario));
+                montos.push((
+                    format!("Liquidar en {} meses", target_meses),
+                    pago_necesario,
+                ));
             }
         }
 
@@ -11269,7 +11054,10 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
             resultados.push((nombre.clone(), *monto, meses, total_int, total_pag));
         }
 
-        let costo_minimo = resultados.last().map(|(_, _, _, _, tp)| *tp).unwrap_or(saldo);
+        let costo_minimo = resultados
+            .last()
+            .map(|(_, _, _, _, tp)| *tp)
+            .unwrap_or(saldo);
 
         for (nombre, monto, meses, total_int, total_pag) in &resultados {
             let costo_extra = total_pag - costo_minimo;
@@ -11317,17 +11105,13 @@ fn mostrar_analisis_deuda_individual(d: &omniplanner::ml::advisor::DeudaRastread
         );
 
         println!();
-        println!(
-            "  💡 \"Costo extra\" = cuánto más pagas en total vs liquidar de inmediato."
-        );
-        println!(
-            "     Cada dólar en esa columna es dinero regalado al banco."
-        );
+        println!("  💡 \"Costo extra\" = cuánto más pagas en total vs liquidar de inmediato.");
+        println!("     Cada dólar en esa columna es dinero regalado al banco.");
 
         // ── Sección 3: Historial ──
         if !d.historial.is_empty() {
             println!();
-            println!("  {} HISTORIAL DE PAGOS REGISTRADOS", "📅".to_string());
+            println!("  📅 HISTORIAL DE PAGOS REGISTRADOS");
             println!("  {}", "─".repeat(60));
             println!(
                 "  {:<12} {:>12} {:>10} {:>10} {:>10} {:>12}",
@@ -11418,7 +11202,11 @@ fn simular_pagos_simple(saldo_inicial: f64, tasa_mensual: f64, monto: f64) -> (u
 }
 
 /// Muestra proyección mes a mes para una deuda con un monto de pago dado.
-fn mostrar_proyeccion_individual(d: &omniplanner::ml::advisor::DeudaRastreada, monto: f64, max_meses: u32) {
+fn mostrar_proyeccion_individual(
+    d: &omniplanner::ml::advisor::DeudaRastreada,
+    monto: f64,
+    max_meses: u32,
+) {
     let saldo_ini = d.saldo_actual();
     let tasa_mensual = d.tasa_efectiva() / 100.0 / 12.0;
     let interes_mes1 = saldo_ini * tasa_mensual;
@@ -11432,10 +11220,8 @@ fn mostrar_proyeccion_individual(d: &omniplanner::ml::advisor::DeudaRastreada, m
     if monto <= interes_mes1 && d.tasa_anual > 0.01 {
         println!();
         println!(
-            "  {} Con ${:.2}/mes NO cubres los intereses de ${:.2}/mes.",
-            "⛔".to_string(),
-            monto,
-            interes_mes1
+            "  ⛔ Con ${:.2}/mes NO cubres los intereses de ${:.2}/mes.",
+            monto, interes_mes1
         );
         println!("  La deuda crecerá indefinidamente. Necesitas pagar más.");
         println!();
@@ -11485,10 +11271,8 @@ fn mostrar_proyeccion_individual(d: &omniplanner::ml::advisor::DeudaRastreada, m
         if saldo < 0.01 {
             println!();
             println!(
-                "  {} ¡Deuda liquidada en {} meses! Total intereses: ${:.2}",
-                "🎉".to_string(),
-                mes,
-                int_acum
+                "  🎉 ¡Deuda liquidada en {} meses! Total intereses: ${:.2}",
+                mes, int_acum
             );
             break;
         }
@@ -11540,8 +11324,7 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
 
             println!();
             println!(
-                "    {} Pago corriente: ${:.2}/mes — sin intereses, se paga en su totalidad.",
-                "🔒".to_string(),
+                "    🔒 Pago corriente: ${:.2}/mes — sin intereses, se paga en su totalidad.",
                 pago_min
             );
         }
@@ -11573,21 +11356,17 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
 
             println!();
             println!(
-                "    {} {} meses restantes a 0% — después aplica {:.1}% anual.",
-                "🧊".to_string(),
-                meses_gracia,
-                tasa
+                "    🧊 {} meses restantes a 0% — después aplica {:.1}% anual.",
+                meses_gracia, tasa
             );
             if pago_min * meses_gracia as f64 >= saldo - 0.01 {
                 println!(
-                    "    {} Con ${:.2}/mes la liquidas antes de que empiecen intereses. ✓",
-                    "✅".to_string(),
+                    "    ✅ Con ${:.2}/mes la liquidas antes de que empiecen intereses. ✓",
                     pago_min
                 );
             } else {
                 println!(
-                    "    {} ¡Cuidado! Con ${:.2}/mes quedarán ${:.2} cuando empiecen intereses al {:.1}%.",
-                    "⚠️".to_string(),
+                    "    ⚠️ ¡Cuidado! Con ${:.2}/mes quedarán ${:.2} cuando empiecen intereses al {:.1}%.",
                     pago_min,
                     saldo - (pago_min * meses_gracia as f64),
                     tasa
@@ -11601,10 +11380,7 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
             tasa = pedir_f64("Tasa de interés ANUAL (%) (ej: 6.5)", 0.0);
             pago_min = pedir_f64("Pago mensual ($)", 0.0);
 
-            println!(
-                "    {} Préstamo fijo — el diagnóstico alertará si falla un pago.",
-                "🔒".to_string()
-            );
+            println!("    🔒 Préstamo fijo — el diagnóstico alertará si falla un pago.");
         }
         _ => {
             // Tarjeta de crédito — no obligatoria, con tasa y pago mínimo
@@ -11629,10 +11405,7 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
 
         if cargar_hist {
             println!();
-            println!(
-                "  {} Ingresa los datos mes por mes (vacío para terminar).",
-                "📅".to_string()
-            );
+            println!("  📅 Ingresa los datos mes por mes (vacío para terminar).");
             let mut saldo_actual = saldo;
 
             loop {
@@ -11736,16 +11509,10 @@ fn rastreador_registrar_mes(state: &mut AppState) {
             state.asesor.rastreador.deudas[idx].registrar_mes(&mes, pago_min, pago, 0.0);
             println!();
             if (pago - pago_min).abs() < 0.01 {
-                println!(
-                    "  {} {} — Pago corriente ${:.2} registrado ✓",
-                    "✅".to_string(),
-                    mes,
-                    pago
-                );
+                println!("  ✅ {} — Pago corriente ${:.2} registrado ✓", mes, pago);
             } else {
                 println!(
-                    "  {} {} — Pagaste ${:.2} de ${:.2} (faltaron ${:.2})",
-                    "⚠️".to_string(),
+                    "  ⚠️ {} — Pagaste ${:.2} de ${:.2} (faltaron ${:.2})",
                     mes,
                     pago,
                     pago_min,
@@ -11766,8 +11533,7 @@ fn rastreador_registrar_mes(state: &mut AppState) {
             println!();
             if nuevo_saldo < saldo_act {
                 println!(
-                    "  {} {} — Saldo: ${:.2} → ${:.2} (bajó ${:.2})",
-                    "✅".to_string(),
+                    "  ✅ {} — Saldo: ${:.2} → ${:.2} (bajó ${:.2})",
                     mes,
                     saldo_act,
                     nuevo_saldo,
@@ -11775,8 +11541,7 @@ fn rastreador_registrar_mes(state: &mut AppState) {
                 );
             } else {
                 println!(
-                    "  {} {} — Saldo: ${:.2} → ${:.2} (subió ${:.2})",
-                    "⚠️".to_string(),
+                    "  ⚠️ {} — Saldo: ${:.2} → ${:.2} (subió ${:.2})",
                     mes,
                     saldo_act,
                     nuevo_saldo,
@@ -11821,10 +11586,7 @@ fn rastreador_diagnostico(state: &AppState) {
     } else {
         "Sin cambio".to_string()
     };
-    println!(
-        "  │  Cambio neto:          {:>16}  │",
-        cambio_str
-    );
+    println!("  │  Cambio neto:          {:>16}  │", cambio_str);
     println!(
         "  │  Total pagado:         {:>16}  │",
         format!("${:.2}", diag.total_pagado)
@@ -11848,8 +11610,8 @@ fn rastreador_diagnostico(state: &AppState) {
     println!("  📋 Desglose por cuenta:");
     println!();
     println!(
-        "  {:<22} {:>10} {:>10} {:>10} {:>10} {}",
-        "Cuenta", "Inicio", "Actual", "Pagado", "Cargos", "Tendencia"
+        "  {:<22} {:>10} {:>10} {:>10} {:>10} Tendencia",
+        "Cuenta", "Inicio", "Actual", "Pagado", "Cargos"
     );
     println!("  {}", "─".repeat(85));
     for r in &diag.resumen_por_deuda {
@@ -11902,10 +11664,7 @@ fn rastreador_diagnostico(state: &AppState) {
             );
         }
         if errores_graves.len() > 15 {
-            println!(
-                "    ... y {} más",
-                errores_graves.len() - 15
-            );
+            println!("    ... y {} más", errores_graves.len() - 15);
         }
     }
 
@@ -11949,7 +11708,7 @@ fn rastreador_simulacion(state: &AppState) {
         limpiar();
         separador(&format!("📈 SIMULACIÓN: {}", d.nombre));
 
-        println!("  {} Real vs Alternativa", "🔄".to_string());
+        println!("  🔄 Real vs Alternativa");
         println!();
 
         let pago_alt = pedir_f64(
@@ -11976,12 +11735,10 @@ fn rastreador_simulacion(state: &AppState) {
                 real.map(|m| m.mes.as_str()).unwrap_or("-"),
                 real.map(|m| format!("${:.2}", m.saldo_final))
                     .unwrap_or_default(),
-                real.map(|m| format!("${:.2}", m.pago))
-                    .unwrap_or_default(),
+                real.map(|m| format!("${:.2}", m.pago)).unwrap_or_default(),
                 sim.map(|m| format!("${:.2}", m.saldo_final))
                     .unwrap_or_default(),
-                sim.map(|m| format!("${:.2}", m.pago))
-                    .unwrap_or_default(),
+                sim.map(|m| format!("${:.2}", m.pago)).unwrap_or_default(),
             );
         }
         println!("  {}", "─".repeat(60));
@@ -12058,10 +11815,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
     // Mostrar pagos corrientes (gastos fijos)
     if !pagos_corrientes.is_empty() {
         println!();
-        println!(
-            "  {} Pagos corrientes (se restan del presupuesto):",
-            "🔒".to_string()
-        );
+        println!("  🔒 Pagos corrientes (se restan del presupuesto):");
         for d in &pagos_corrientes {
             println!(
                 "     • {} — {}/mes",
@@ -12077,11 +11831,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
 
     // Mostrar deudas reales
     println!();
-    println!(
-        "  {} Deudas a liquidar: {}",
-        "📋".to_string(),
-        deudas_reales.len()
-    );
+    println!("  📋 Deudas a liquidar: {}", deudas_reales.len());
     for d in &deudas_reales {
         let tag = if d.obligatoria { " 🔒" } else { "" };
         let gracia_tag = if d.meses_gracia > 0 {
@@ -12150,8 +11900,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
     if presupuesto < minimo_necesario {
         println!();
         println!(
-            "  {} El presupuesto (${:.2}) es menor que lo necesario (${:.2} fijos + ${:.2} mínimos).",
-            "⚠️".to_string(),
+            "  ⚠️ El presupuesto (${:.2}) es menor que lo necesario (${:.2} fijos + ${:.2} mínimos).",
             presupuesto,
             total_corrientes,
             minimos_deudas
@@ -12191,11 +11940,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
         );
         println!(
             "  💰 Presupuesto efectivo para deudas: {}/mes",
-            format!(
-                "${:.2}",
-                sim.presupuesto_mensual - sim.total_gastos_fijos
-            )
-            .green()
+            format!("${:.2}", sim.presupuesto_mensual - sim.total_gastos_fijos).green()
         );
     }
 
@@ -12212,8 +11957,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
     println!();
     println!(
         "  {}",
-        "══════════════════════════════════════════════════════════════════════"
-            .cyan()
+        "══════════════════════════════════════════════════════════════════════".cyan()
     );
     println!(
         "  {}",
@@ -12223,8 +11967,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
     );
     println!(
         "  {}",
-        "══════════════════════════════════════════════════════════════════════"
-            .cyan()
+        "══════════════════════════════════════════════════════════════════════".cyan()
     );
 
     for mes in &sim.meses {
@@ -12264,21 +12007,20 @@ fn rastreador_simulacion_libertad(state: &AppState) {
                 format!("${:.2}", mes.deuda_total)
             },
             if mes.sobrante > 0.01 {
-                format!("  │  Sin asignar: {}", format!("${:.2}", mes.sobrante).yellow())
+                format!(
+                    "  │  Sin asignar: {}",
+                    format!("${:.2}", mes.sobrante).yellow()
+                )
             } else {
                 String::new()
             }
         );
-        println!(
-            "  ├──────────────────────┬────────────┬────────────┬──────────────┤"
-        );
+        println!("  ├──────────────────────┬────────────┬────────────┬──────────────┤");
         println!(
             "  │ {:<20} │ {:>10} │ {:>10} │ {:>12} │",
             "Deuda", "Pago", "Interés", "Saldo"
         );
-        println!(
-            "  ├──────────────────────┼────────────┼────────────┼──────────────┤"
-        );
+        println!("  ├──────────────────────┼────────────┼────────────┼──────────────┤");
 
         for (nombre, saldo) in &mes.saldos {
             let pago = mes
@@ -12313,11 +12055,13 @@ fn rastreador_simulacion_libertad(state: &AppState) {
                     format!("{:<20}", nombre_corto).green().bold(),
                     format!("{:>10}", format!("${:.2}", pago)).green().bold(),
                     if interes > 0.01 {
-                        format!("{:>10}", format!("${:.2}", interes)).red().to_string()
+                        format!("{:>10}", format!("${:.2}", interes))
+                            .red()
+                            .to_string()
                     } else {
                         format!("{:>10}", "$0.00")
                     },
-                    format!("{:>12}", "🎉 $0.00").green().bold().to_string()
+                    format!("{:>12}", "🎉 $0.00").green().bold()
                 );
             } else {
                 // Deuda activa con pago
@@ -12345,14 +12089,13 @@ fn rastreador_simulacion_libertad(state: &AppState) {
             }
         }
 
-        println!(
-            "  └──────────────────────┴────────────┴────────────┴──────────────┘"
-        );
+        println!("  └──────────────────────┴────────────┴────────────┴──────────────┘");
 
         // Evento de liquidación
         if !mes.liquidadas_este_mes.is_empty() {
             for nombre in &mes.liquidadas_este_mes {
-                let pago_final = mes.pagos
+                let pago_final = mes
+                    .pagos
                     .iter()
                     .find(|(n, _)| n == nombre)
                     .map(|(_, p)| *p)
@@ -12388,8 +12131,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
 
     println!(
         "  {}",
-        "══════════════════════════════════════════════════════════════════════"
-            .yellow()
+        "══════════════════════════════════════════════════════════════════════".yellow()
     );
     println!(
         "  {}",
@@ -12397,8 +12139,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
     );
     println!(
         "  {}",
-        "══════════════════════════════════════════════════════════════════════"
-            .yellow()
+        "══════════════════════════════════════════════════════════════════════".yellow()
     );
     println!();
     println!("  ⏱️  Tiempo total:        {}", tiempo.green().bold());
@@ -12417,20 +12158,13 @@ fn rastreador_simulacion_libertad(state: &AppState) {
 
     // Resumen por deuda: total pagado e intereses por cada una
     println!();
-    println!(
-        "  {}",
-        "  📋 RESUMEN POR DEUDA".cyan().bold()
-    );
-    println!(
-        "  ┌──────────────────────┬────────────┬────────────┬────────────┬──────────┐"
-    );
+    println!("  {}", "  📋 RESUMEN POR DEUDA".cyan().bold());
+    println!("  ┌──────────────────────┬────────────┬────────────┬────────────┬──────────┐");
     println!(
         "  │ {:<20} │ {:>10} │ {:>10} │ {:>10} │ {:>8} │",
         "Deuda", "Pagado", "Intereses", "Capital", "Mes liq."
     );
-    println!(
-        "  ├──────────────────────┼────────────┼────────────┼────────────┼──────────┤"
-    );
+    println!("  ├──────────────────────┼────────────┼────────────┼────────────┼──────────┤");
     for nombre in &nombres {
         let total_pago_deuda: f64 = sim
             .meses
@@ -12466,16 +12200,11 @@ fn rastreador_simulacion_libertad(state: &AppState) {
             mes_liq
         );
     }
-    println!(
-        "  └──────────────────────┴────────────┴────────────┴────────────┴──────────┘"
-    );
+    println!("  └──────────────────────┴────────────┴────────────┴────────────┴──────────┘");
 
     // Orden de liquidación
     println!();
-    println!(
-        "  {}",
-        "  🗺️  ORDEN DE LIQUIDACIÓN".cyan().bold()
-    );
+    println!("  {}", "  🗺️  ORDEN DE LIQUIDACIÓN".cyan().bold());
     for (i, (nombre, mes)) in sim.orden_liquidacion.iter().enumerate() {
         let emoji = if i == sim.orden_liquidacion.len() - 1 {
             "👑"
@@ -12508,16 +12237,12 @@ fn rastreador_simulacion_libertad(state: &AppState) {
         match exportar_simulacion_excel(&sim, &nombres) {
             Ok(ruta) => {
                 println!();
-                println!(
-                    "  {} Reporte exportado a: {}",
-                    "✅".to_string(),
-                    ruta.green().bold()
-                );
+                println!("  ✅ Reporte exportado a: {}", ruta.green().bold());
                 println!("  Puedes abrirlo en Excel e imprimirlo.");
             }
             Err(e) => {
                 println!();
-                println!("  {} Error al exportar: {}", "❌".to_string(), e);
+                println!("  ❌ Error al exportar: {}", e);
             }
         }
     }
@@ -12556,10 +12281,7 @@ fn rastreador_tabla_aporte_minimo(state: &AppState) {
         "  Ingreso mensual: {}",
         format!("${:.2}", ingreso_mensual).green()
     );
-    println!(
-        "  Mínimos deudas:  {}",
-        format!("${:.2}", minimos).yellow()
-    );
+    println!("  Mínimos deudas:  {}", format!("${:.2}", minimos).yellow());
     println!();
 
     // Elegir estrategia
@@ -12574,15 +12296,19 @@ fn rastreador_tabla_aporte_minimo(state: &AppState) {
     };
 
     // Calcular máximo de meses con pagos mínimos
-    let max_meses_default = match state
-        .asesor
-        .rastreador
-        .meses_para_salir(minimos + state.asesor.rastreador.deudas.iter()
-            .filter(|d| d.activa && d.es_pago_corriente())
-            .map(|d| d.pago_minimo)
-            .sum::<f64>(), bola_nieve)
-    {
-        Some(m) if m > 0 => (m as usize).min(120),
+    let max_meses_default = match state.asesor.rastreador.meses_para_salir(
+        minimos
+            + state
+                .asesor
+                .rastreador
+                .deudas
+                .iter()
+                .filter(|d| d.activa && d.es_pago_corriente())
+                .map(|d| d.pago_minimo)
+                .sum::<f64>(),
+        bola_nieve,
+    ) {
+        Some(m) if m > 0 => m.min(120),
         _ => 60,
     };
 
@@ -12615,22 +12341,20 @@ fn rastreador_tabla_aporte_minimo(state: &AppState) {
     }
 
     limpiar();
-    let nombre_est = if bola_nieve { "Bola de nieve" } else { "Avalancha" };
+    let nombre_est = if bola_nieve {
+        "Bola de nieve"
+    } else {
+        "Avalancha"
+    };
     separador(&format!(
         "📊 TABLA DE APORTE MÍNIMO — {} | Deuda: ${:.2}",
         nombre_est, deuda_total
     ));
 
     println!();
-    println!(
-        "  💡 Esta tabla muestra cuánto necesitas aportar como mínimo cada mes"
-    );
-    println!(
-        "     para salir de deudas en el número de meses indicado."
-    );
-    println!(
-        "     Úsala como referencia para saber cuánto debes ganar o destinar."
-    );
+    println!("  💡 Esta tabla muestra cuánto necesitas aportar como mínimo cada mes");
+    println!("     para salir de deudas en el número de meses indicado.");
+    println!("     Úsala como referencia para saber cuánto debes ganar o destinar.");
     println!();
 
     // Encabezados de la tabla
@@ -12646,10 +12370,7 @@ fn rastreador_tabla_aporte_minimo(state: &AppState) {
     );
 
     // El mayor total pagado (más meses = más intereses) para calcular ahorro
-    let max_total = tabla
-        .first()
-        .map(|(_, _, tp, _)| *tp)
-        .unwrap_or(0.0);
+    let max_total = tabla.first().map(|(_, _, tp, _)| *tp).unwrap_or(0.0);
 
     let mut prev_aporte = 0.0f64;
     for (meses, aporte, total_pagado, total_intereses) in &tabla {
@@ -12764,7 +12485,7 @@ fn exportar_simulacion_excel(
     nombres: &[String],
 ) -> Result<String, String> {
     let carpeta = dirs::document_dir()
-        .or_else(|| dirs::home_dir())
+        .or_else(dirs::home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("OmniPlanner");
     std::fs::create_dir_all(&carpeta).map_err(|e| format!("No se pudo crear carpeta: {}", e))?;
@@ -12800,11 +12521,8 @@ fn exportar_simulacion_excel(
     let fmt_celda = Format::new()
         .set_border(FormatBorder::Thin)
         .set_align(FormatAlign::Center);
-    let fmt_celda_izq = Format::new()
-        .set_border(FormatBorder::Thin);
-    let fmt_evento = Format::new()
-        .set_bold()
-        .set_font_color("008000");
+    let fmt_celda_izq = Format::new().set_border(FormatBorder::Thin);
+    let fmt_evento = Format::new().set_bold().set_font_color("008000");
     let fmt_seccion = Format::new()
         .set_bold()
         .set_font_size(12)
@@ -12817,62 +12535,120 @@ fn exportar_simulacion_excel(
     ws.set_name("Amortización").map_err(|e| e.to_string())?;
 
     // Título
-    ws.merge_range(0, 0, 0, 4, "", &fmt_titulo).map_err(|e| e.to_string())?;
-    ws.write_string_with_format(0, 0, &format!(
-        "Plan de Libertad Financiera — {} | ${:.2}/mes",
-        sim.estrategia, sim.presupuesto_mensual
-    ), &fmt_titulo).map_err(|e| e.to_string())?;
+    ws.merge_range(0, 0, 0, 4, "", &fmt_titulo)
+        .map_err(|e| e.to_string())?;
+    ws.write_string_with_format(
+        0,
+        0,
+        format!(
+            "Plan de Libertad Financiera — {} | ${:.2}/mes",
+            sim.estrategia, sim.presupuesto_mensual
+        ),
+        &fmt_titulo,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Info general
     let mut row = 2u32;
-    ws.write_string(row, 0, "Presupuesto mensual:").map_err(|e| e.to_string())?;
-    ws.write_number_with_format(row, 1, sim.presupuesto_mensual, &fmt_dinero).map_err(|e| e.to_string())?;
+    ws.write_string(row, 0, "Presupuesto mensual:")
+        .map_err(|e| e.to_string())?;
+    ws.write_number_with_format(row, 1, sim.presupuesto_mensual, &fmt_dinero)
+        .map_err(|e| e.to_string())?;
     row += 1;
-    ws.write_string(row, 0, "Gastos fijos:").map_err(|e| e.to_string())?;
-    ws.write_number_with_format(row, 1, sim.total_gastos_fijos, &fmt_dinero).map_err(|e| e.to_string())?;
+    ws.write_string(row, 0, "Gastos fijos:")
+        .map_err(|e| e.to_string())?;
+    ws.write_number_with_format(row, 1, sim.total_gastos_fijos, &fmt_dinero)
+        .map_err(|e| e.to_string())?;
     if !sim.gastos_fijos.is_empty() {
-        let detalle: String = sim.gastos_fijos.iter()
+        let detalle: String = sim
+            .gastos_fijos
+            .iter()
             .map(|(n, m)| format!("{} ${:.2}", n, m))
             .collect::<Vec<_>>()
             .join(", ");
-        ws.write_string(row, 2, &detalle).map_err(|e| e.to_string())?;
+        ws.write_string(row, 2, &detalle)
+            .map_err(|e| e.to_string())?;
     }
     row += 1;
-    ws.write_string(row, 0, "Disponible para deudas:").map_err(|e| e.to_string())?;
-    ws.write_number_with_format(row, 1, sim.presupuesto_mensual - sim.total_gastos_fijos, &fmt_dinero_verde).map_err(|e| e.to_string())?;
+    ws.write_string(row, 0, "Disponible para deudas:")
+        .map_err(|e| e.to_string())?;
+    ws.write_number_with_format(
+        row,
+        1,
+        sim.presupuesto_mensual - sim.total_gastos_fijos,
+        &fmt_dinero_verde,
+    )
+    .map_err(|e| e.to_string())?;
     row += 2;
 
     // Tabla de amortización
     for mes in &sim.meses {
-        ws.merge_range(row, 0, row, 4, "", &fmt_seccion).map_err(|e| e.to_string())?;
+        ws.merge_range(row, 0, row, 4, "", &fmt_seccion)
+            .map_err(|e| e.to_string())?;
         let pago_total: f64 = mes.pagos.iter().map(|(_, p)| *p).sum();
         let int_total: f64 = mes.intereses.iter().map(|(_, i)| *i).sum();
-        ws.write_string_with_format(row, 0, &format!(
-            "MES {}  |  Pagos: ${:.2}  |  Intereses: ${:.2}  |  Deuda restante: ${:.2}",
-            mes.mes_numero, pago_total, int_total, mes.deuda_total
-        ), &fmt_seccion).map_err(|e| e.to_string())?;
+        ws.write_string_with_format(
+            row,
+            0,
+            format!(
+                "MES {}  |  Pagos: ${:.2}  |  Intereses: ${:.2}  |  Deuda restante: ${:.2}",
+                mes.mes_numero, pago_total, int_total, mes.deuda_total
+            ),
+            &fmt_seccion,
+        )
+        .map_err(|e| e.to_string())?;
         row += 1;
 
-        ws.write_string_with_format(row, 0, "Deuda", &fmt_header).map_err(|e| e.to_string())?;
-        ws.write_string_with_format(row, 1, "Pago", &fmt_header).map_err(|e| e.to_string())?;
-        ws.write_string_with_format(row, 2, "Interés", &fmt_header).map_err(|e| e.to_string())?;
-        ws.write_string_with_format(row, 3, "Saldo", &fmt_header).map_err(|e| e.to_string())?;
-        ws.write_string_with_format(row, 4, "Evento", &fmt_header).map_err(|e| e.to_string())?;
+        ws.write_string_with_format(row, 0, "Deuda", &fmt_header)
+            .map_err(|e| e.to_string())?;
+        ws.write_string_with_format(row, 1, "Pago", &fmt_header)
+            .map_err(|e| e.to_string())?;
+        ws.write_string_with_format(row, 2, "Interés", &fmt_header)
+            .map_err(|e| e.to_string())?;
+        ws.write_string_with_format(row, 3, "Saldo", &fmt_header)
+            .map_err(|e| e.to_string())?;
+        ws.write_string_with_format(row, 4, "Evento", &fmt_header)
+            .map_err(|e| e.to_string())?;
         row += 1;
 
         for (nombre, saldo) in &mes.saldos {
-            let pago = mes.pagos.iter().find(|(n, _)| n == nombre).map(|(_, p)| *p).unwrap_or(0.0);
-            let interes = mes.intereses.iter().find(|(n, _)| n == nombre).map(|(_, i)| *i).unwrap_or(0.0);
+            let pago = mes
+                .pagos
+                .iter()
+                .find(|(n, _)| n == nombre)
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0);
+            let interes = mes
+                .intereses
+                .iter()
+                .find(|(n, _)| n == nombre)
+                .map(|(_, i)| *i)
+                .unwrap_or(0.0);
 
-            ws.write_string_with_format(row, 0, nombre, &fmt_celda_izq).map_err(|e| e.to_string())?;
-            ws.write_number_with_format(row, 1, pago, &fmt_dinero_verde).map_err(|e| e.to_string())?;
-            ws.write_number_with_format(row, 2, interes, if interes > 0.01 { &fmt_dinero_rojo } else { &fmt_dinero }).map_err(|e| e.to_string())?;
-            ws.write_number_with_format(row, 3, *saldo, &fmt_dinero).map_err(|e| e.to_string())?;
+            ws.write_string_with_format(row, 0, nombre, &fmt_celda_izq)
+                .map_err(|e| e.to_string())?;
+            ws.write_number_with_format(row, 1, pago, &fmt_dinero_verde)
+                .map_err(|e| e.to_string())?;
+            ws.write_number_with_format(
+                row,
+                2,
+                interes,
+                if interes > 0.01 {
+                    &fmt_dinero_rojo
+                } else {
+                    &fmt_dinero
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            ws.write_number_with_format(row, 3, *saldo, &fmt_dinero)
+                .map_err(|e| e.to_string())?;
 
             if mes.liquidadas_este_mes.contains(nombre) {
-                ws.write_string_with_format(row, 4, "LIQUIDADA", &fmt_evento).map_err(|e| e.to_string())?;
+                ws.write_string_with_format(row, 4, "LIQUIDADA", &fmt_evento)
+                    .map_err(|e| e.to_string())?;
             } else if *saldo < 0.01 && pago < 0.01 {
-                ws.write_string_with_format(row, 4, "ya liquidada", &fmt_celda).map_err(|e| e.to_string())?;
+                ws.write_string_with_format(row, 4, "ya liquidada", &fmt_celda)
+                    .map_err(|e| e.to_string())?;
             }
             row += 1;
         }
@@ -12891,66 +12667,103 @@ fn exportar_simulacion_excel(
     let ws2 = wb.add_worksheet();
     ws2.set_name("Resumen").map_err(|e| e.to_string())?;
 
-    ws2.merge_range(0, 0, 0, 4, "", &fmt_titulo).map_err(|e| e.to_string())?;
-    ws2.write_string_with_format(0, 0, "Resumen — Plan de Libertad Financiera", &fmt_titulo).map_err(|e| e.to_string())?;
+    ws2.merge_range(0, 0, 0, 4, "", &fmt_titulo)
+        .map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(0, 0, "Resumen — Plan de Libertad Financiera", &fmt_titulo)
+        .map_err(|e| e.to_string())?;
 
     let mut r = 2u32;
-    ws2.write_string(r, 0, "Estrategia:").map_err(|e| e.to_string())?;
-    ws2.write_string(r, 1, &sim.estrategia).map_err(|e| e.to_string())?;
+    ws2.write_string(r, 0, "Estrategia:")
+        .map_err(|e| e.to_string())?;
+    ws2.write_string(r, 1, &sim.estrategia)
+        .map_err(|e| e.to_string())?;
     r += 1;
-    ws2.write_string(r, 0, "Meses totales:").map_err(|e| e.to_string())?;
-    ws2.write_number_with_format(r, 1, sim.meses.len() as f64, &fmt_celda).map_err(|e| e.to_string())?;
+    ws2.write_string(r, 0, "Meses totales:")
+        .map_err(|e| e.to_string())?;
+    ws2.write_number_with_format(r, 1, sim.meses.len() as f64, &fmt_celda)
+        .map_err(|e| e.to_string())?;
     r += 1;
-    ws2.write_string(r, 0, "Total pagado:").map_err(|e| e.to_string())?;
-    ws2.write_number_with_format(r, 1, sim.total_pagado, &fmt_dinero).map_err(|e| e.to_string())?;
+    ws2.write_string(r, 0, "Total pagado:")
+        .map_err(|e| e.to_string())?;
+    ws2.write_number_with_format(r, 1, sim.total_pagado, &fmt_dinero)
+        .map_err(|e| e.to_string())?;
     r += 1;
-    ws2.write_string(r, 0, "Total intereses:").map_err(|e| e.to_string())?;
-    ws2.write_number_with_format(r, 1, sim.total_intereses, &fmt_dinero_rojo).map_err(|e| e.to_string())?;
+    ws2.write_string(r, 0, "Total intereses:")
+        .map_err(|e| e.to_string())?;
+    ws2.write_number_with_format(r, 1, sim.total_intereses, &fmt_dinero_rojo)
+        .map_err(|e| e.to_string())?;
     r += 1;
-    ws2.write_string(r, 0, "Capital pagado:").map_err(|e| e.to_string())?;
-    ws2.write_number_with_format(r, 1, sim.total_pagado - sim.total_intereses, &fmt_dinero_verde).map_err(|e| e.to_string())?;
+    ws2.write_string(r, 0, "Capital pagado:")
+        .map_err(|e| e.to_string())?;
+    ws2.write_number_with_format(
+        r,
+        1,
+        sim.total_pagado - sim.total_intereses,
+        &fmt_dinero_verde,
+    )
+    .map_err(|e| e.to_string())?;
     r += 2;
 
-    ws2.write_string_with_format(r, 0, "Deuda", &fmt_header).map_err(|e| e.to_string())?;
-    ws2.write_string_with_format(r, 1, "Total pagado", &fmt_header).map_err(|e| e.to_string())?;
-    ws2.write_string_with_format(r, 2, "Intereses", &fmt_header).map_err(|e| e.to_string())?;
-    ws2.write_string_with_format(r, 3, "Capital", &fmt_header).map_err(|e| e.to_string())?;
-    ws2.write_string_with_format(r, 4, "Mes liquidación", &fmt_header).map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(r, 0, "Deuda", &fmt_header)
+        .map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(r, 1, "Total pagado", &fmt_header)
+        .map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(r, 2, "Intereses", &fmt_header)
+        .map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(r, 3, "Capital", &fmt_header)
+        .map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(r, 4, "Mes liquidación", &fmt_header)
+        .map_err(|e| e.to_string())?;
     r += 1;
 
     for nombre in nombres {
-        let total_pago: f64 = sim.meses.iter()
+        let total_pago: f64 = sim
+            .meses
+            .iter()
             .flat_map(|m| m.pagos.iter())
             .filter(|(n, _)| n == nombre)
             .map(|(_, p)| *p)
             .sum();
-        let total_int: f64 = sim.meses.iter()
+        let total_int: f64 = sim
+            .meses
+            .iter()
             .flat_map(|m| m.intereses.iter())
             .filter(|(n, _)| n == nombre)
             .map(|(_, i)| *i)
             .sum();
-        let mes_liq = sim.orden_liquidacion.iter()
+        let mes_liq = sim
+            .orden_liquidacion
+            .iter()
             .find(|(n, _)| n == nombre)
             .map(|(_, m)| *m as f64);
 
-        ws2.write_string_with_format(r, 0, nombre, &fmt_celda_izq).map_err(|e| e.to_string())?;
-        ws2.write_number_with_format(r, 1, total_pago, &fmt_dinero).map_err(|e| e.to_string())?;
-        ws2.write_number_with_format(r, 2, total_int, &fmt_dinero_rojo).map_err(|e| e.to_string())?;
-        ws2.write_number_with_format(r, 3, total_pago - total_int, &fmt_dinero_verde).map_err(|e| e.to_string())?;
+        ws2.write_string_with_format(r, 0, nombre, &fmt_celda_izq)
+            .map_err(|e| e.to_string())?;
+        ws2.write_number_with_format(r, 1, total_pago, &fmt_dinero)
+            .map_err(|e| e.to_string())?;
+        ws2.write_number_with_format(r, 2, total_int, &fmt_dinero_rojo)
+            .map_err(|e| e.to_string())?;
+        ws2.write_number_with_format(r, 3, total_pago - total_int, &fmt_dinero_verde)
+            .map_err(|e| e.to_string())?;
         if let Some(m) = mes_liq {
-            ws2.write_number_with_format(r, 4, m, &fmt_celda).map_err(|e| e.to_string())?;
+            ws2.write_number_with_format(r, 4, m, &fmt_celda)
+                .map_err(|e| e.to_string())?;
         } else {
-            ws2.write_string_with_format(r, 4, "—", &fmt_celda).map_err(|e| e.to_string())?;
+            ws2.write_string_with_format(r, 4, "—", &fmt_celda)
+                .map_err(|e| e.to_string())?;
         }
         r += 1;
     }
 
     r += 1;
-    ws2.write_string_with_format(r, 0, "Orden de liquidación", &fmt_seccion).map_err(|e| e.to_string())?;
+    ws2.write_string_with_format(r, 0, "Orden de liquidación", &fmt_seccion)
+        .map_err(|e| e.to_string())?;
     r += 1;
     for (i, (nombre, mes)) in sim.orden_liquidacion.iter().enumerate() {
-        ws2.write_string_with_format(r, 0, &format!("{}. {}", i + 1, nombre), &fmt_celda_izq).map_err(|e| e.to_string())?;
-        ws2.write_string(r, 1, &format!("Mes {}", mes)).map_err(|e| e.to_string())?;
+        ws2.write_string_with_format(r, 0, format!("{}. {}", i + 1, nombre), &fmt_celda_izq)
+            .map_err(|e| e.to_string())?;
+        ws2.write_string(r, 1, format!("Mes {}", mes))
+            .map_err(|e| e.to_string())?;
         r += 1;
     }
 
@@ -12961,7 +12774,8 @@ fn exportar_simulacion_excel(
     ws2.set_column_width(4, 18).map_err(|e| e.to_string())?;
 
     // Guardar
-    wb.save(&archivo).map_err(|e| format!("Error guardando Excel: {}", e))?;
+    wb.save(&archivo)
+        .map_err(|e| format!("Error guardando Excel: {}", e))?;
 
     Ok(archivo.to_string_lossy().to_string())
 }
@@ -13074,12 +12888,7 @@ fn rastreador_ajustar_tasa(state: &mut AppState) {
         .rastreador
         .deudas
         .iter()
-        .map(|d| {
-            format!(
-                "{} — tasa actual: {:.1}% anual",
-                d.nombre, d.tasa_anual
-            )
-        })
+        .map(|d| format!("{} — tasa actual: {:.1}% anual", d.nombre, d.tasa_anual))
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
 
@@ -13127,7 +12936,9 @@ fn rastreador_ingreso(state: &mut AppState) {
             println!();
             println!(
                 "  Total mensual: {}",
-                format!("${:.2}", rast.ingreso_mensual_total()).green().bold()
+                format!("${:.2}", rast.ingreso_mensual_total())
+                    .green()
+                    .bold()
             );
         }
         println!();
@@ -13311,11 +13122,7 @@ fn rastreador_exportar(state: &AppState) {
             match std::fs::write(&ruta, &csv) {
                 Ok(()) => {
                     println!();
-                    println!(
-                        "  {} CSV exportado: {}",
-                        "✅".to_string(),
-                        ruta.display().to_string().green()
-                    );
+                    println!("  ✅ CSV exportado: {}", ruta.display().to_string().green());
                 }
                 Err(e) => println!("  {} Error: {}", "✗".red(), e),
             }
@@ -13347,11 +13154,7 @@ fn rastreador_exportar(state: &AppState) {
                 match std::fs::write(&ruta, &csv) {
                     Ok(()) => {
                         println!();
-                        println!(
-                            "  {} CSV exportado: {}",
-                            "✅".to_string(),
-                            ruta.display().to_string().green()
-                        );
+                        println!("  ✅ CSV exportado: {}", ruta.display().to_string().green());
                     }
                     Err(e) => println!("  {} Error: {}", "✗".red(), e),
                 }
@@ -13366,14 +13169,8 @@ fn rastreador_importar_csv(state: &mut AppState) {
     limpiar();
     separador("📂 IMPORTAR DEUDAS");
 
-    println!(
-        "  {} Arrastra tu archivo Excel (.xlsx) o CSV aquí:",
-        "📋".to_string()
-    );
-    println!(
-        "  {} También puedes escribir la ruta manualmente.",
-        "💡".to_string()
-    );
+    println!("  📋 Arrastra tu archivo Excel (.xlsx) o CSV aquí:");
+    println!("  💡 También puedes escribir la ruta manualmente.");
     println!();
 
     let ruta = match pedir_texto("Ruta del archivo (arrastra aquí)") {
@@ -13388,120 +13185,105 @@ fn rastreador_importar_csv(state: &mut AppState) {
     };
 
     // Si es Excel, convertir automáticamente con Python
-    let csv_path = if ruta.to_lowercase().ends_with(".xlsx")
-        || ruta.to_lowercase().ends_with(".xls")
-    {
-        println!();
-        println!(
-            "  {} Detectado archivo Excel. Convirtiendo a CSV...",
-            "🔄".to_string()
-        );
+    let csv_path =
+        if ruta.to_lowercase().ends_with(".xlsx") || ruta.to_lowercase().ends_with(".xls") {
+            println!();
+            println!("  🔄 Detectado archivo Excel. Convirtiendo a CSV...");
 
-        // Ruta temporal para el CSV generado
-        let csv_temp = std::env::temp_dir().join("omniplanner_import.csv");
+            // Ruta temporal para el CSV generado
+            let csv_temp = std::env::temp_dir().join("omniplanner_import.csv");
 
-        // Buscar el script de conversión
-        let script = if let Ok(exe) = std::env::current_exe() {
-            let base = exe
-                .parent()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-                .unwrap_or_else(|| std::path::Path::new("."));
-            let s = base.join("tools").join("excel_a_csv.py");
-            if s.exists() {
-                s
+            // Buscar el script de conversión
+            let script = if let Ok(exe) = std::env::current_exe() {
+                let base = exe
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let s = base.join("tools").join("excel_a_csv.py");
+                if s.exists() {
+                    s
+                } else {
+                    std::path::PathBuf::from("tools").join("excel_a_csv.py")
+                }
             } else {
                 std::path::PathBuf::from("tools").join("excel_a_csv.py")
-            }
-        } else {
-            std::path::PathBuf::from("tools").join("excel_a_csv.py")
-        };
+            };
 
-        // Intentar varias ubicaciones del script
-        let script_path = if script.exists() {
-            script
-        } else {
-            // Intentar relativo al directorio de trabajo
-            let cwd_script = std::path::PathBuf::from("tools").join("excel_a_csv.py");
-            if cwd_script.exists() {
-                cwd_script
+            // Intentar varias ubicaciones del script
+            let script_path = if script.exists() {
+                script
             } else {
-                // Ruta absoluta del proyecto
-                std::path::PathBuf::from(r"C:\Users\elxav\proyectos\omniplanner\tools\excel_a_csv.py")
-            }
-        };
-
-        if !script_path.exists() {
-            println!(
-                "  {} No se encontró el script de conversión: {}",
-                "✗".red(),
-                script_path.display()
-            );
-            println!("  Asegúrate de que existe: tools/excel_a_csv.py");
-            pausa();
-            return;
-        }
-
-        let resultado = std::process::Command::new("python")
-            .arg(&script_path)
-            .arg(&ruta)
-            .arg(csv_temp.to_str().unwrap_or("omniplanner_import.csv"))
-            .output();
-
-        match resultado {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-
-                if !stdout.is_empty() {
-                    for line in stdout.lines() {
-                        println!("    {}", line);
-                    }
+                // Intentar relativo al directorio de trabajo
+                let cwd_script = std::path::PathBuf::from("tools").join("excel_a_csv.py");
+                if cwd_script.exists() {
+                    cwd_script
+                } else {
+                    // Ruta absoluta del proyecto
+                    std::path::PathBuf::from(
+                        r"C:\Users\elxav\proyectos\omniplanner\tools\excel_a_csv.py",
+                    )
                 }
+            };
 
-                if !output.status.success() {
-                    println!(
-                        "  {} Error al convertir Excel:",
-                        "✗".red()
-                    );
-                    if !stderr.is_empty() {
-                        for line in stderr.lines() {
-                            println!("    {}", line);
-                        }
-                    }
-                    pausa();
-                    return;
-                }
-
-                if !csv_temp.exists() {
-                    println!(
-                        "  {} No se generó el archivo CSV.",
-                        "✗".red()
-                    );
-                    pausa();
-                    return;
-                }
-
+            if !script_path.exists() {
                 println!(
-                    "  {} Conversión exitosa.",
-                    "✅".to_string()
-                );
-                csv_temp.to_string_lossy().to_string()
-            }
-            Err(e) => {
-                println!(
-                    "  {} No se pudo ejecutar Python: {}",
+                    "  {} No se encontró el script de conversión: {}",
                     "✗".red(),
-                    e
+                    script_path.display()
                 );
-                println!("  Asegúrate de tener Python instalado con: pip install openpyxl");
+                println!("  Asegúrate de que existe: tools/excel_a_csv.py");
                 pausa();
                 return;
             }
-        }
-    } else {
-        ruta
-    };
+
+            let resultado = std::process::Command::new("python")
+                .arg(&script_path)
+                .arg(&ruta)
+                .arg(csv_temp.to_str().unwrap_or("omniplanner_import.csv"))
+                .output();
+
+            match resultado {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+
+                    if !stdout.is_empty() {
+                        for line in stdout.lines() {
+                            println!("    {}", line);
+                        }
+                    }
+
+                    if !output.status.success() {
+                        println!("  {} Error al convertir Excel:", "✗".red());
+                        if !stderr.is_empty() {
+                            for line in stderr.lines() {
+                                println!("    {}", line);
+                            }
+                        }
+                        pausa();
+                        return;
+                    }
+
+                    if !csv_temp.exists() {
+                        println!("  {} No se generó el archivo CSV.", "✗".red());
+                        pausa();
+                        return;
+                    }
+
+                    println!("  ✅ Conversión exitosa.");
+                    csv_temp.to_string_lossy().to_string()
+                }
+                Err(e) => {
+                    println!("  {} No se pudo ejecutar Python: {}", "✗".red(), e);
+                    println!("  Asegúrate de tener Python instalado con: pip install openpyxl");
+                    pausa();
+                    return;
+                }
+            }
+        } else {
+            ruta
+        };
 
     println!();
 
@@ -13512,10 +13294,8 @@ fn rastreador_importar_csv(state: &mut AppState) {
 
             println!();
             println!(
-                "  {} Importación exitosa: {} cuentas, {} registros",
-                "✅".to_string(),
-                n_deudas,
-                n_meses
+                "  ✅ Importación exitosa: {} cuentas, {} registros",
+                n_deudas, n_meses
             );
             println!();
 
@@ -13547,7 +13327,10 @@ fn rastreador_importar_csv(state: &mut AppState) {
                     "➕  Agregar a las existentes (merge)",
                     "❌  Cancelar",
                 ];
-                match menu("Ya tienes deudas en el rastreador. ¿Qué hacer?", opciones_merge) {
+                match menu(
+                    "Ya tienes deudas en el rastreador. ¿Qué hacer?",
+                    opciones_merge,
+                ) {
                     Some(0) => {
                         state.asesor.rastreador = importado;
                         println!("  {} Datos reemplazados.", "✓".green());
@@ -13579,10 +13362,7 @@ fn rastreador_importar_csv(state: &mut AppState) {
             }
 
             println!();
-            println!(
-                "  {} Tip: Ajusta las tasas de interés de cada cuenta",
-                "💡".to_string()
-            );
+            println!("  💡 Tip: Ajusta las tasas de interés de cada cuenta");
             println!("    para un diagnóstico más preciso.");
         }
         Err(e) => {
@@ -13606,8 +13386,8 @@ fn rastreador_gestionar_deudas(state: &mut AppState) {
 
         // Mostrar tabla con estado actual
         println!(
-            "  {:<4} {:<25} {:>10} {:>8} {:>10}  {}",
-            "#", "Deuda", "Saldo", "Tasa%", "Pago mín", "Estado"
+            "  {:<4} {:<25} {:>10} {:>8} {:>10}  Estado",
+            "#", "Deuda", "Saldo", "Tasa%", "Pago mín"
         );
         println!("  {}", "─".repeat(78));
 
@@ -13685,17 +13465,11 @@ fn rastreador_gestionar_deudas(state: &mut AppState) {
                     };
                     d.activa = nuevo_estado;
                     println!();
-                    println!(
-                        "  {} '{}' ahora está {}",
-                        "✓".green(),
-                        d.nombre,
-                        accion
-                    );
+                    println!("  {} '{}' ahora está {}", "✓".green(), d.nombre, accion);
                     if !nuevo_estado {
                         println!(
                             "  {}",
-                            "  → No aparecerá en simulaciones ni diagnósticos."
-                                .dimmed()
+                            "  → No aparecerá en simulaciones ni diagnósticos.".dimmed()
                         );
                     }
                     state.guardar().ok();
@@ -13719,12 +13493,7 @@ fn rastreador_gestionar_deudas(state: &mut AppState) {
                         };
                         (
                             i,
-                            format!(
-                                "{} — ${:.2} [{}]",
-                                d.nombre,
-                                d.saldo_actual(),
-                                tipo
-                            ),
+                            format!("{} — ${:.2} [{}]", d.nombre, d.saldo_actual(), tipo),
                         )
                     })
                     .collect();
@@ -13735,8 +13504,10 @@ fn rastreador_gestionar_deudas(state: &mut AppState) {
                     continue;
                 }
 
-                let labels: Vec<&str> =
-                    deudas_no_corrientes.iter().map(|(_, s)| s.as_str()).collect();
+                let labels: Vec<&str> = deudas_no_corrientes
+                    .iter()
+                    .map(|(_, s)| s.as_str())
+                    .collect();
 
                 if let Some(sel) = menu("¿Cuál deuda cambiar?", &labels) {
                     let real_idx = deudas_no_corrientes[sel].0;
@@ -13749,12 +13520,7 @@ fn rastreador_gestionar_deudas(state: &mut AppState) {
                     };
                     d.obligatoria = nueva_prioridad;
                     println!();
-                    println!(
-                        "  {} '{}' ahora es {}",
-                        "✓".green(),
-                        d.nombre,
-                        accion
-                    );
+                    println!("  {} '{}' ahora es {}", "✓".green(), d.nombre, accion);
                     state.guardar().ok();
                     pausa();
                 }
@@ -13783,7 +13549,10 @@ fn rastreador_eliminar(state: &mut AppState) {
     if let Some(idx) = menu("¿Cuál deuda eliminar?", &refs) {
         let nombre = state.asesor.rastreador.deudas[idx].nombre.clone();
         if Confirm::new()
-            .with_prompt(format!("  ¿Eliminar '{}'? Se perderá todo el historial.", nombre))
+            .with_prompt(format!(
+                "  ¿Eliminar '{}'? Se perderá todo el historial.",
+                nombre
+            ))
             .default(false)
             .interact()
             .unwrap_or(false)
@@ -13823,8 +13592,7 @@ fn menu_asesor_historial(state: &mut AppState) {
         let n = state.asesor.registros.len();
         if n == 0 {
             println!(
-                "  {} No hay registros aún. Cada análisis que hagas se guardará automáticamente.",
-                "📌".to_string()
+                "  📌 No hay registros aún. Cada análisis que hagas se guardará automáticamente."
             );
             println!();
 
@@ -13832,8 +13600,7 @@ fn menu_asesor_historial(state: &mut AppState) {
             let dic = &state.asesor.diccionario;
             if !dic.acciones.is_empty() {
                 println!(
-                    "  {} {} acciones registradas (historial previo):",
-                    "📝".to_string(),
+                    "  📝 {} acciones registradas (historial previo):",
                     dic.acciones.len()
                 );
                 let total = dic.acciones.len();
@@ -13853,7 +13620,8 @@ fn menu_asesor_historial(state: &mut AppState) {
         }
 
         // ── Resumen por tipo ──
-        let mut conteo_tipo: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut conteo_tipo: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for r in &state.asesor.registros {
             *conteo_tipo.entry(r.tipo_nombre.clone()).or_default() += 1;
         }
@@ -13917,8 +13685,8 @@ fn historial_ver_todos(state: &AppState) {
     }
 
     println!(
-        "  {:<5} {:<12} {:<6} {:<22} {:<30} {}",
-        "ID", "Fecha", "Hora", "Tipo", "Título", "Resumen"
+        "  {:<5} {:<12} {:<6} {:<22} {:<30} Resumen",
+        "ID", "Fecha", "Hora", "Tipo", "Título"
     );
     println!("  {}", "─".repeat(100));
 
@@ -13938,10 +13706,7 @@ fn historial_ver_todos(state: &AppState) {
         );
     }
     println!("  {}", "─".repeat(100));
-    println!(
-        "  Total: {} registros",
-        state.asesor.registros.len()
-    );
+    println!("  Total: {} registros", state.asesor.registros.len());
     pausa();
 }
 
@@ -13959,11 +13724,7 @@ fn historial_buscar(state: &AppState) {
     }
 
     println!();
-    println!(
-        "  🔍 {} resultado(s) para '{}':",
-        resultados.len(),
-        texto
-    );
+    println!("  🔍 {} resultado(s) para '{}':", resultados.len(), texto);
     println!();
     for r in &resultados {
         println!(
@@ -13989,12 +13750,7 @@ fn historial_ver_detalle(state: &AppState) {
         .asesor
         .registros
         .iter()
-        .map(|r| {
-            format!(
-                "#{} [{}] {} — {}",
-                r.id, r.fecha, r.tipo_nombre, r.titulo
-            )
-        })
+        .map(|r| format!("#{} [{}] {} — {}", r.id, r.fecha, r.tipo_nombre, r.titulo))
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
 
@@ -14054,15 +13810,8 @@ fn historial_exportar_csv_todo(state: &AppState) {
     match state.asesor.exportar_resumen_csv() {
         Ok(ruta) => {
             println!();
-            println!(
-                "  {} CSV exportado: {}",
-                "✅".to_string(),
-                ruta.display().to_string().green()
-            );
-            println!(
-                "  {} Ábrelo en Excel, Google Sheets o cualquier hoja de cálculo.",
-                "💡".to_string()
-            );
+            println!("  ✅ CSV exportado: {}", ruta.display().to_string().green());
+            println!("  💡 Ábrelo en Excel, Google Sheets o cualquier hoja de cálculo.");
         }
         Err(e) => println!("  {} {}", "✗".red(), e),
     }
@@ -14074,14 +13823,10 @@ fn historial_exportar_texto_todo(state: &AppState) {
         Ok(ruta) => {
             println!();
             println!(
-                "  {} Reporte exportado: {}",
-                "✅".to_string(),
+                "  ✅ Reporte exportado: {}",
                 ruta.display().to_string().green()
             );
-            println!(
-                "  {} Listo para imprimir o revisar en cualquier editor.",
-                "🖨️".to_string()
-            );
+            println!("  🖨️ Listo para imprimir o revisar en cualquier editor.");
         }
         Err(e) => println!("  {} {}", "✗".red(), e),
     }
@@ -14099,12 +13844,7 @@ fn historial_exportar_csv_uno(state: &AppState) {
         .asesor
         .registros
         .iter()
-        .map(|r| {
-            format!(
-                "#{} [{}] {} — {}",
-                r.id, r.fecha, r.tipo_nombre, r.titulo
-            )
-        })
+        .map(|r| format!("#{} [{}] {} — {}", r.id, r.fecha, r.tipo_nombre, r.titulo))
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
 
@@ -14114,8 +13854,7 @@ fn historial_exportar_csv_uno(state: &AppState) {
             Ok(ruta) => {
                 println!();
                 println!(
-                    "  {} CSV detallado exportado: {}",
-                    "✅".to_string(),
+                    "  ✅ CSV detallado exportado: {}",
                     ruta.display().to_string().green()
                 );
             }
@@ -14136,12 +13875,7 @@ fn historial_exportar_texto_uno(state: &AppState) {
         .asesor
         .registros
         .iter()
-        .map(|r| {
-            format!(
-                "#{} [{}] {} — {}",
-                r.id, r.fecha, r.tipo_nombre, r.titulo
-            )
-        })
+        .map(|r| format!("#{} [{}] {} — {}", r.id, r.fecha, r.tipo_nombre, r.titulo))
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
 
@@ -14151,8 +13885,7 @@ fn historial_exportar_texto_uno(state: &AppState) {
             Ok(ruta) => {
                 println!();
                 println!(
-                    "  {} Reporte exportado: {}",
-                    "✅".to_string(),
+                    "  ✅ Reporte exportado: {}",
                     ruta.display().to_string().green()
                 );
             }
@@ -14173,19 +13906,17 @@ fn historial_eliminar(state: &mut AppState) {
         .asesor
         .registros
         .iter()
-        .map(|r| {
-            format!(
-                "#{} [{}] {} — {}",
-                r.id, r.fecha, r.tipo_nombre, r.titulo
-            )
-        })
+        .map(|r| format!("#{} [{}] {} — {}", r.id, r.fecha, r.tipo_nombre, r.titulo))
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
 
     if let Some(idx) = menu("¿Cuál registro eliminar?", &refs) {
         let titulo = state.asesor.registros[idx].titulo.clone();
         if Confirm::new()
-            .with_prompt(format!("  ¿Eliminar #{}? '{}'", state.asesor.registros[idx].id, titulo))
+            .with_prompt(format!(
+                "  ¿Eliminar #{}? '{}'",
+                state.asesor.registros[idx].id, titulo
+            ))
             .default(false)
             .interact()
             .unwrap_or(false)

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use super::linalg::{Activacion, Matriz, Perdida, Rng};
 use super::optimizer::{
     BatchNorm, EarlyStopping, EstadoAdam, LRSchedule, LRScheduler, RegularizacionL2,

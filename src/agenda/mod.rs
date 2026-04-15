@@ -33,8 +33,9 @@ impl fmt::Display for TipoEvento {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum Frecuencia {
+    #[default]
     UnaVez,
     Semanal,
     Mensual,
@@ -53,12 +54,6 @@ impl fmt::Display for Frecuencia {
             Frecuencia::Semestral => write!(f, "Semestral"),
             Frecuencia::Anual => write!(f, "Anual"),
         }
-    }
-}
-
-impl Default for Frecuencia {
-    fn default() -> Self {
-        Frecuencia::UnaVez
     }
 }
 

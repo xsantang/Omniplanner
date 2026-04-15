@@ -279,11 +279,7 @@ impl CorteBancario {
 
         // Simular cada plan
         let plan_minimo = Self::simular_plan("Pago mínimo", self.pago_minimo, &deuda);
-        let plan_actual = Self::simular_plan(
-            "Estrategia actual",
-            self.pago_realizado,
-            &deuda,
-        );
+        let plan_actual = Self::simular_plan("Estrategia actual", self.pago_realizado, &deuda);
 
         // "Sin intereses": pagar pago_no_intereses este mes y luego solo las compras nuevas
         // Si la persona paga pago_no_intereses, en el siguiente corte no hay interés.
@@ -293,22 +289,28 @@ impl CorteBancario {
         } else {
             self.saldo_al_corte
         };
-        let plan_sin_intereses =
-            Self::simular_plan("Pagar para no generar intereses", monto_corta_intereses, &deuda);
+        let plan_sin_intereses = Self::simular_plan(
+            "Pagar para no generar intereses",
+            monto_corta_intereses,
+            &deuda,
+        );
 
         let plan_total = Self::simular_plan("Liquidar todo", self.saldo_al_corte, &deuda);
 
         // Interés residual: si decides pagar "sin intereses" ahora, puede que el siguiente
         // corte tenga un pequeño interés residual sobre los días entre la compra y el pago.
-        let interes_residual_estimado = if tiene_intereses && monto_corta_intereses < self.saldo_al_corte {
-            // Estimación: interés de 1 mes sobre la diferencia
-            (self.saldo_al_corte - monto_corta_intereses) * tasa_mensual
-        } else {
-            0.0
-        };
+        let interes_residual_estimado =
+            if tiene_intereses && monto_corta_intereses < self.saldo_al_corte {
+                // Estimación: interés de 1 mes sobre la diferencia
+                (self.saldo_al_corte - monto_corta_intereses) * tasa_mensual
+            } else {
+                0.0
+            };
 
-        let dinero_regalado_minimo = plan_minimo.total_intereses - plan_sin_intereses.total_intereses;
-        let dinero_regalado_actual = plan_actual.total_intereses - plan_sin_intereses.total_intereses;
+        let dinero_regalado_minimo =
+            plan_minimo.total_intereses - plan_sin_intereses.total_intereses;
+        let dinero_regalado_actual =
+            plan_actual.total_intereses - plan_sin_intereses.total_intereses;
 
         let estrategia = EstrategiaDeuda {
             tiene_intereses,
@@ -353,21 +355,16 @@ impl CorteBancario {
 //  Presupuesto Mensual
 // ══════════════════════════════════════════════════════════════
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum FrecuenciaPago {
     Semanal,
     Quincenal,
+    #[default]
     Mensual,
     Trimestral,
     Semestral,
     Anual,
     UnaVez,
-}
-
-impl Default for FrecuenciaPago {
-    fn default() -> Self {
-        FrecuenciaPago::Mensual
-    }
 }
 
 impl FrecuenciaPago {
@@ -396,7 +393,15 @@ impl FrecuenciaPago {
     }
 
     pub fn todas() -> &'static [&'static str] {
-        &["Semanal", "Quincenal", "Mensual", "Trimestral", "Semestral", "Anual", "Una vez"]
+        &[
+            "Semanal",
+            "Quincenal",
+            "Mensual",
+            "Trimestral",
+            "Semestral",
+            "Anual",
+            "Una vez",
+        ]
     }
 
     pub fn desde_indice(i: usize) -> Self {
@@ -672,7 +677,13 @@ impl ImpactoAccion {
     }
 
     pub fn todas() -> &'static [&'static str] {
-        &["🌟 Muy positivo", "✅ Positivo", "➖ Neutro", "⚠️ Negativo", "🔴 Muy negativo"]
+        &[
+            "🌟 Muy positivo",
+            "✅ Positivo",
+            "➖ Neutro",
+            "⚠️ Negativo",
+            "🔴 Muy negativo",
+        ]
     }
 
     pub fn desde_indice(i: usize) -> Self {
@@ -945,7 +956,11 @@ impl DeudaRastreada {
 
     /// Tasa efectiva actual: 0% si hay meses de gracia, tasa_anual si no.
     pub fn tasa_efectiva(&self) -> f64 {
-        if self.meses_gracia > 0 { 0.0 } else { self.tasa_anual }
+        if self.meses_gracia > 0 {
+            0.0
+        } else {
+            self.tasa_anual
+        }
     }
 
     /// ¿Es un pago corriente (renta, seguro, suscripción)?
@@ -974,19 +989,10 @@ impl DeudaRastreada {
     }
 
     pub fn saldo_actual(&self) -> f64 {
-        self.historial
-            .last()
-            .map(|m| m.saldo_final)
-            .unwrap_or(0.0)
+        self.historial.last().map(|m| m.saldo_final).unwrap_or(0.0)
     }
 
-    pub fn registrar_mes(
-        &mut self,
-        mes: &str,
-        saldo_inicio: f64,
-        pago: f64,
-        nuevos_cargos: f64,
-    ) {
+    pub fn registrar_mes(&mut self, mes: &str, saldo_inicio: f64, pago: f64, nuevos_cargos: f64) {
         let tasa_actual = self.tasa_efectiva();
         let tasa_mensual = tasa_actual / 100.0 / 12.0;
         let saldo_despues_pago = (saldo_inicio - pago).max(0.0);
@@ -1199,10 +1205,7 @@ impl RastreadorDeudas {
                         ),
                     )
                 } else if mp.saldo_final < 0.01 {
-                    (
-                        ErrorPago::PagoExcelente,
-                        "¡Deuda liquidada!".to_string(),
-                    )
+                    (ErrorPago::PagoExcelente, "¡Deuda liquidada!".to_string())
                 } else if mp.pago >= mp.saldo_inicio * 0.1 {
                     (
                         ErrorPago::PagoExcelente,
@@ -1245,10 +1248,14 @@ impl RastreadorDeudas {
         // Advertencia especial para deudas obligatorias con pagos fallidos
         for d in &self.deudas {
             if d.obligatoria && d.activa {
-                let meses_sin_pago = d.historial.iter()
+                let meses_sin_pago = d
+                    .historial
+                    .iter()
                     .filter(|m| m.pago < 0.01 && m.saldo_inicio > 0.01)
                     .count();
-                let meses_pago_parcial = d.historial.iter()
+                let meses_pago_parcial = d
+                    .historial
+                    .iter()
                     .filter(|m| m.pago > 0.0 && m.pago < d.pago_minimo * 0.95)
                     .count();
                 if meses_sin_pago > 0 {
@@ -1313,9 +1320,9 @@ impl RastreadorDeudas {
                 .collect();
             con_tasa.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-            recomendaciones.push(format!(
-                "💡 Orden de pago recomendado (avalancha — tasa más alta primero):"
-            ));
+            recomendaciones.push(
+                "💡 Orden de pago recomendado (avalancha — tasa más alta primero):".to_string(),
+            );
             for (i, (r, tasa)) in con_tasa.iter().enumerate() {
                 recomendaciones.push(format!(
                     "   {}. {} (saldo ${:.2}, tasa {:.1}%)",
@@ -1350,7 +1357,8 @@ impl RastreadorDeudas {
 
     /// Genera CSV del historial de una deuda.
     pub fn csv_historial_deuda(&self, nombre: &str) -> String {
-        let mut s = String::from("\u{FEFF}Mes,Saldo Inicio,Pago,Nuevos Cargos,Intereses,Saldo Final\n");
+        let mut s =
+            String::from("\u{FEFF}Mes,Saldo Inicio,Pago,Nuevos Cargos,Intereses,Saldo Final\n");
         if let Some(d) = self.deudas.iter().find(|d| d.nombre == nombre) {
             for m in &d.historial {
                 s.push_str(&format!(
@@ -1369,8 +1377,14 @@ impl RastreadorDeudas {
         for r in &diag.resumen_por_deuda {
             s.push_str(&format!(
                 "\"{}\",{:.2},{:.2},{:.2},{:.2},{:.2},{},\"{}\"\n",
-                r.nombre, r.saldo_inicial, r.saldo_final, r.total_pagado,
-                r.total_cargos, r.total_intereses, r.meses, r.tendencia
+                r.nombre,
+                r.saldo_inicial,
+                r.saldo_final,
+                r.total_pagado,
+                r.total_cargos,
+                r.total_intereses,
+                r.meses,
+                r.tendencia
             ));
         }
         s
@@ -1382,8 +1396,8 @@ impl RastreadorDeudas {
     /// El CSV puede tener varias cuentas mezcladas; se agrupan automáticamente.
     /// Se asume tasa_anual = 0 (se puede ajustar después).
     pub fn importar_csv(ruta: &str) -> Result<RastreadorDeudas, String> {
-        let contenido = fs::read_to_string(ruta)
-            .map_err(|e| format!("No se pudo leer '{}': {}", ruta, e))?;
+        let contenido =
+            fs::read_to_string(ruta).map_err(|e| format!("No se pudo leer '{}': {}", ruta, e))?;
 
         // Quitar BOM si existe
         let contenido = contenido.trim_start_matches('\u{FEFF}');
@@ -1391,9 +1405,7 @@ impl RastreadorDeudas {
         let mut lineas = contenido.lines();
 
         // Validar header
-        let header = lineas
-            .next()
-            .ok_or_else(|| "Archivo vacío".to_string())?;
+        let header = lineas.next().ok_or_else(|| "Archivo vacío".to_string())?;
         let cols: Vec<&str> = header.split(',').map(|s| s.trim()).collect();
         if cols.len() < 4
             || !cols[0].eq_ignore_ascii_case("cuenta")
@@ -1435,7 +1447,9 @@ impl RastreadorDeudas {
                 0.0
             };
 
-            mapa.entry(cuenta).or_default().push((mes, saldo, pago, cargos));
+            mapa.entry(cuenta)
+                .or_default()
+                .push((mes, saldo, pago, cargos));
         }
 
         if mapa.is_empty() {
@@ -1602,7 +1616,10 @@ impl RastreadorDeudas {
                     let max_extra = (d.saldo - ya_pagado).max(0.0);
                     let extra = max_extra.min(disponible);
                     if extra > 0.01 {
-                        if let Some(entry) = pagos_mes.iter_mut().find(|(nm, _)| *nm == deudas[idx].nombre) {
+                        if let Some(entry) = pagos_mes
+                            .iter_mut()
+                            .find(|(nm, _)| *nm == deudas[idx].nombre)
+                        {
                             entry.1 += extra;
                         }
                         disponible -= extra;
@@ -1637,7 +1654,10 @@ impl RastreadorDeudas {
                     let max_extra = (d.saldo - ya_pagado).max(0.0);
                     let extra = max_extra.min(disponible);
                     if extra > 0.01 {
-                        if let Some(entry) = pagos_mes.iter_mut().find(|(nm, _)| *nm == deudas[idx].nombre) {
+                        if let Some(entry) = pagos_mes
+                            .iter_mut()
+                            .find(|(nm, _)| *nm == deudas[idx].nombre)
+                        {
                             entry.1 += extra;
                         }
                         disponible -= extra;
@@ -1661,7 +1681,11 @@ impl RastreadorDeudas {
                     .map(|(_, p)| *p)
                     .unwrap_or(0.0);
                 let saldo_post_pago = (d.saldo - pago).max(0.0);
-                let tasa_efectiva = if d.meses_gracia > 0 { 0.0 } else { d.tasa_anual };
+                let tasa_efectiva = if d.meses_gracia > 0 {
+                    0.0
+                } else {
+                    d.tasa_anual
+                };
                 let tasa_mensual = tasa_efectiva / 100.0 / 12.0;
                 let interes = saldo_post_pago * tasa_mensual;
                 d.saldo = saldo_post_pago + interes;
@@ -1732,11 +1756,7 @@ impl RastreadorDeudas {
 
     /// Busca el aporte mínimo mensual para salir de deudas en exactamente `objetivo_meses`.
     /// Usa búsqueda binaria sobre el presupuesto. Retorna el monto redondeado al dólar.
-    fn aporte_minimo_para_meses(
-        &self,
-        objetivo_meses: usize,
-        bola_nieve: bool,
-    ) -> Option<f64> {
+    fn aporte_minimo_para_meses(&self, objetivo_meses: usize, bola_nieve: bool) -> Option<f64> {
         // Cotas: mínimo = suma de pagos mínimos + corrientes, máximo = deuda total
         let corrientes: f64 = self
             .deudas
@@ -1958,9 +1978,7 @@ impl RegistroAsesor {
     /// Detalle completo como texto legible (para imprimir / exportar).
     pub fn detalle_texto(&self) -> String {
         let mut s = String::new();
-        s.push_str(&format!(
-            "══════════════════════════════════════════════════════\n"
-        ));
+        s.push_str("══════════════════════════════════════════════════════\n");
         s.push_str(&format!(
             "  {} #{} — {} {}\n",
             self.datos.emoji(),
@@ -1969,9 +1987,7 @@ impl RegistroAsesor {
             self.fecha
         ));
         s.push_str(&format!("  {}\n", self.titulo));
-        s.push_str(&format!(
-            "──────────────────────────────────────────────────────\n"
-        ));
+        s.push_str("──────────────────────────────────────────────────────\n");
 
         match &self.datos {
             TipoRegistro::AnalisisDeuda {
@@ -2056,10 +2072,7 @@ impl RegistroAsesor {
                     "  B: {} — ${:.2}  ({})\n",
                     c.opcion_b, c.costo_b, c.beneficio_b
                 ));
-                s.push_str(&format!(
-                    "  Diferencia: ${:.2}\n",
-                    c.diferencia.abs()
-                ));
+                s.push_str(&format!("  Diferencia: ${:.2}\n", c.diferencia.abs()));
                 s.push_str(&format!("  📌 {}\n", c.recomendacion));
             }
             TipoRegistro::MatrizDecision(m) => {
@@ -2098,10 +2111,7 @@ impl RegistroAsesor {
                 s.push_str(&format!("  {:<10} {:>16}\n", "Mes", "Ahorro acumulado"));
                 s.push_str(&format!("  {}\n", "─".repeat(28)));
                 for (mes, acum) in proyeccion {
-                    s.push_str(&format!(
-                        "  Mes {:<5} ${:>14.2}\n",
-                        mes, acum
-                    ));
+                    s.push_str(&format!("  Mes {:<5} ${:>14.2}\n", mes, acum));
                 }
             }
             TipoRegistro::Accion(a) => {
@@ -2119,17 +2129,21 @@ impl RegistroAsesor {
                 }
             }
         }
-        s.push_str(&format!(
-            "══════════════════════════════════════════════════════\n"
-        ));
+        s.push_str("══════════════════════════════════════════════════════\n");
         s
     }
 
     /// Genera líneas CSV detalladas según el tipo de registro.
     pub fn csv_detalle(&self) -> String {
         match &self.datos {
-            TipoRegistro::AnalisisDeuda { deuda: _, opciones, mejor_opcion: _ } => {
-                let mut s = String::from("Opcion,Monto Mensual,Meses,Total Intereses,Total Pagado,Ahorro vs Minimo\n");
+            TipoRegistro::AnalisisDeuda {
+                deuda: _,
+                opciones,
+                mejor_opcion: _,
+            } => {
+                let mut s = String::from(
+                    "Opcion,Monto Mensual,Meses,Total Intereses,Total Pagado,Ahorro vs Minimo\n",
+                );
                 for op in opciones {
                     s.push_str(&format!(
                         "\"{}\",{:.2},{},{:.2},{:.2},{:.2}\n",
@@ -2143,14 +2157,22 @@ impl RegistroAsesor {
                 }
                 s
             }
-            TipoRegistro::CorteBancario { corte, tasa_mensual, tasa_anual, .. } => {
+            TipoRegistro::CorteBancario {
+                corte,
+                tasa_mensual,
+                tasa_anual,
+                ..
+            } => {
                 let mut s = String::from("Campo,Valor\n");
                 s.push_str(&format!("Tarjeta,\"{}\"\n", corte.nombre_tarjeta));
                 s.push_str(&format!("Fecha Corte,\"{}\"\n", corte.fecha_corte));
                 s.push_str(&format!("Saldo Anterior,{:.2}\n", corte.saldo_anterior));
                 s.push_str(&format!("Pago Realizado,{:.2}\n", corte.pago_realizado));
                 s.push_str(&format!("Compras Periodo,{:.2}\n", corte.compras_periodo));
-                s.push_str(&format!("Intereses Cobrados,{:.2}\n", corte.intereses_cobrados));
+                s.push_str(&format!(
+                    "Intereses Cobrados,{:.2}\n",
+                    corte.intereses_cobrados
+                ));
                 s.push_str(&format!("Otros Cargos,{:.2}\n", corte.otros_cargos));
                 s.push_str(&format!("Saldo al Corte,{:.2}\n", corte.saldo_al_corte));
                 s.push_str(&format!("Tasa Mensual,{:.4}\n", tasa_mensual));
@@ -2161,11 +2183,15 @@ impl RegistroAsesor {
                 let mut s = String::from("Opcion,Costo,Beneficio\n");
                 s.push_str(&format!(
                     "\"{}\",{:.2},\"{}\"\n",
-                    c.opcion_a.replace('"', "\"\""), c.costo_a, c.beneficio_a.replace('"', "\"\"")
+                    c.opcion_a.replace('"', "\"\""),
+                    c.costo_a,
+                    c.beneficio_a.replace('"', "\"\"")
                 ));
                 s.push_str(&format!(
                     "\"{}\",{:.2},\"{}\"\n",
-                    c.opcion_b.replace('"', "\"\""), c.costo_b, c.beneficio_b.replace('"', "\"\"")
+                    c.opcion_b.replace('"', "\"\""),
+                    c.costo_b,
+                    c.beneficio_b.replace('"', "\"\"")
                 ));
                 s
             }
@@ -2252,8 +2278,7 @@ impl AlmacenAsesor {
             contenido.push_str(&r.csv_resumen());
             contenido.push('\n');
         }
-        fs::write(&ruta, &contenido)
-            .map_err(|e| format!("Error escribiendo CSV: {}", e))?;
+        fs::write(&ruta, &contenido).map_err(|e| format!("Error escribiendo CSV: {}", e))?;
         Ok(ruta)
     }
 
@@ -2280,8 +2305,7 @@ impl AlmacenAsesor {
         let ruta = dir.join(nombre_archivo);
         let mut contenido = String::from("\u{FEFF}");
         contenido.push_str(&reg.csv_detalle());
-        fs::write(&ruta, &contenido)
-            .map_err(|e| format!("Error escribiendo CSV: {}", e))?;
+        fs::write(&ruta, &contenido).map_err(|e| format!("Error escribiendo CSV: {}", e))?;
         Ok(ruta)
     }
 
@@ -2293,14 +2317,16 @@ impl AlmacenAsesor {
         contenido.push_str("╔══════════════════════════════════════════════════════════╗\n");
         contenido.push_str("║         OMNIPLANNER — REPORTE ASESOR INTELIGENTE        ║\n");
         contenido.push_str("╚══════════════════════════════════════════════════════════╝\n");
-        contenido.push_str(&format!("  Total de registros: {}\n\n", self.registros.len()));
+        contenido.push_str(&format!(
+            "  Total de registros: {}\n\n",
+            self.registros.len()
+        ));
 
         for r in &self.registros {
             contenido.push_str(&r.detalle_texto());
             contenido.push('\n');
         }
-        fs::write(&ruta, &contenido)
-            .map_err(|e| format!("Error escribiendo reporte: {}", e))?;
+        fs::write(&ruta, &contenido).map_err(|e| format!("Error escribiendo reporte: {}", e))?;
         Ok(ruta)
     }
 
