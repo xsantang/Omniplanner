@@ -8,6 +8,7 @@
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use colored::Colorize;
 use dialoguer::{Confirm, Input, Select};
+use std::io::{self, BufRead, Write};
 
 use omniplanner::agenda::{
     DiaMarcado, Evento, Frecuencia, HorarioEscritura, TipoDiaMarcado, TipoEvento,
@@ -36,6 +37,79 @@ use rust_xlsxwriter::{Format, FormatAlign, FormatBorder, Workbook};
 // ══════════════════════════════════════════════════════════════
 //  Helpers de UI
 // ══════════════════════════════════════════════════════════════
+
+fn es_termux() -> bool {
+    std::env::var("TERMUX_VERSION").is_ok()
+        || std::env::var("PREFIX")
+            .map(|p| p.contains("com.termux"))
+            .unwrap_or(false)
+}
+
+fn leer_linea() -> String {
+    let mut buf = String::new();
+    let _ = io::stdout().flush();
+    let _ = io::stdin().lock().read_line(&mut buf);
+    buf.trim().to_string()
+}
+
+#[allow(dead_code)]
+fn confirmar(prompt: &str, default: bool) -> bool {
+    if es_termux() {
+        let def = if default { "S/n" } else { "s/N" };
+        print!("  {} [{}]: ", prompt, def);
+        let r = leer_linea().to_lowercase();
+        if r.is_empty() {
+            return default;
+        }
+        matches!(r.as_str(), "s" | "si" | "sí" | "y" | "yes")
+    } else {
+        Confirm::new()
+            .with_prompt(format!("  {}", prompt))
+            .default(default)
+            .interact()
+            .unwrap_or(default)
+    }
+}
+
+/// Wrapper de Confirm que en Termux usa stdin simple
+struct TermConfirm {
+    prompt: String,
+    default_val: bool,
+}
+
+impl TermConfirm {
+    fn new() -> Self {
+        Self {
+            prompt: String::new(),
+            default_val: true,
+        }
+    }
+    fn with_prompt(mut self, p: impl Into<String>) -> Self {
+        self.prompt = p.into();
+        self
+    }
+    fn default(mut self, d: bool) -> Self {
+        self.default_val = d;
+        self
+    }
+    fn interact(&self) -> Result<bool, io::Error> {
+        if es_termux() {
+            let def = if self.default_val { "S/n" } else { "s/N" };
+            print!("{} [{}]: ", self.prompt, def);
+            let r = leer_linea().to_lowercase();
+            if r.is_empty() {
+                return Ok(self.default_val);
+            }
+            Ok(matches!(r.as_str(), "s" | "si" | "sí" | "y" | "yes"))
+        } else {
+            Confirm::new()
+                .with_prompt(&self.prompt)
+                .default(self.default_val)
+                .interact()
+                .map_err(io::Error::other)
+        }
+    }
+}
 
 fn limpiar() {
     print!("\x1B[2J\x1B[H");
@@ -70,34 +144,54 @@ fn separador(titulo: &str) {
 }
 
 fn pausa() {
-    let _: String = Input::new()
-        .with_prompt("  Presiona Enter para continuar".to_string())
-        .default(String::new())
-        .allow_empty(true)
-        .interact_text()
-        .unwrap_or_default();
+    if es_termux() {
+        print!("  Presiona Enter para continuar...");
+        leer_linea();
+    } else {
+        let _: String = Input::new()
+            .with_prompt("  Presiona Enter para continuar".to_string())
+            .default(String::new())
+            .allow_empty(true)
+            .interact_text()
+            .unwrap_or_default();
+    }
 }
 
 fn pedir_texto(prompt: &str) -> Option<String> {
-    let s: String = Input::new()
-        .with_prompt(format!("  {} (vacío=cancelar)", prompt))
-        .allow_empty(true)
-        .interact_text()
-        .unwrap_or_default();
-    if s.trim().is_empty() {
-        None
+    if es_termux() {
+        print!("  {} (vacío=cancelar): ", prompt);
+        let s = leer_linea();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     } else {
-        Some(s)
+        let s: String = Input::new()
+            .with_prompt(format!("  {} (vacío=cancelar)", prompt))
+            .allow_empty(true)
+            .interact_text()
+            .unwrap_or_default();
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     }
 }
 
 fn pedir_texto_opcional(prompt: &str) -> String {
-    Input::new()
-        .with_prompt(format!("  {}", prompt))
-        .default(String::new())
-        .allow_empty(true)
-        .interact_text()
-        .unwrap_or_default()
+    if es_termux() {
+        print!("  {}: ", prompt);
+        leer_linea()
+    } else {
+        Input::new()
+            .with_prompt(format!("  {}", prompt))
+            .default(String::new())
+            .allow_empty(true)
+            .interact_text()
+            .unwrap_or_default()
+    }
 }
 
 fn formatear_fecha_es(f: NaiveDate) -> String {
@@ -169,11 +263,24 @@ fn pedir_fecha(prompt: &str) -> Option<NaiveDate> {
                         )
                     })
                     .collect();
-                let sel = Select::new()
-                    .items(&opciones)
-                    .default(0)
-                    .interact_opt()
-                    .unwrap_or(None);
+                let sel = if es_termux() {
+                    for (i, op) in opciones.iter().enumerate() {
+                        println!("  {}. {}", i + 1, op);
+                    }
+                    print!("  Opción (0=cancelar): ");
+                    let r = leer_linea();
+                    match r.parse::<usize>() {
+                        Ok(0) => None,
+                        Ok(n) if n <= opciones.len() => Some(n - 1),
+                        _ => None,
+                    }
+                } else {
+                    Select::new()
+                        .items(&opciones)
+                        .default(0)
+                        .interact_opt()
+                        .unwrap_or(None)
+                };
                 match sel {
                     Some(idx) => {
                         let f = candidatos[idx];
@@ -524,14 +631,32 @@ fn aplicar_ampm(t: NaiveTime, es_am: bool, es_pm: bool) -> NaiveTime {
 }
 
 fn menu(titulo: &str, opciones: &[&str]) -> Option<usize> {
-    println!();
-    println!("  {}", "↑↓ navegar, Enter seleccionar, Esc volver".dimmed());
-    Select::new()
-        .with_prompt(format!("  {}", titulo).bold().to_string())
-        .items(opciones)
-        .default(0)
-        .interact_opt()
-        .unwrap_or(None)
+    if es_termux() {
+        println!();
+        println!("  {}", titulo.bold());
+        println!();
+        for (i, op) in opciones.iter().enumerate() {
+            println!("  {}. {}", i + 1, op);
+        }
+        println!("  0. Volver");
+        println!();
+        print!("  Opción: ");
+        let input = leer_linea();
+        match input.parse::<usize>() {
+            Ok(0) => None,
+            Ok(n) if n <= opciones.len() => Some(n - 1),
+            _ => None,
+        }
+    } else {
+        println!();
+        println!("  {}", "↑↓ navegar, Enter seleccionar, Esc volver".dimmed());
+        Select::new()
+            .with_prompt(format!("  {}", titulo).bold().to_string())
+            .items(opciones)
+            .default(0)
+            .interact_opt()
+            .unwrap_or(None)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1032,7 +1157,7 @@ fn eliminar_tarea(state: &mut AppState) {
     };
     let nombre = state.tasks.tareas[idx].titulo.clone();
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt(format!("  ¿Eliminar '{}'?", nombre))
         .default(false)
         .interact()
@@ -1074,7 +1199,7 @@ fn finalizar_tarea(state: &mut AppState, idx: usize) {
     }
 
     // Preguntar si quiere conectar con palabras clave
-    let conectar = Confirm::new()
+    let conectar = TermConfirm::new()
         .with_prompt("  ¿Deseas conectar esta tarea con palabras clave en tu diccionario de ideas?")
         .default(true)
         .interact()
@@ -1180,7 +1305,7 @@ fn finalizar_tarea(state: &mut AppState, idx: usize) {
         }
 
         // Ofrecer enlazar con otro elemento
-        let enlazar = Confirm::new()
+        let enlazar = TermConfirm::new()
             .with_prompt("  ¿Enlazar esta tarea con otro elemento (evento, diagrama, canvas)?")
             .default(false)
             .interact()
@@ -1364,7 +1489,7 @@ fn nuevo_evento(state: &mut AppState) {
     let hora_fin = if es_cumple {
         None
     } else {
-        let tiene_fin = Confirm::new()
+        let tiene_fin = TermConfirm::new()
             .with_prompt("  ¿Tiene hora de fin?")
             .default(true)
             .interact()
@@ -1503,7 +1628,7 @@ fn eliminar_evento(state: &mut AppState) {
     };
     let nombre = state.agenda.eventos[idx].titulo.clone();
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt(format!("  ¿Eliminar '{}'?", nombre))
         .default(false)
         .interact()
@@ -2042,12 +2167,25 @@ fn ver_mes_detallado(state: &AppState) {
         "Diciembre",
     ];
     let default_mes = (hoy.month() - 1) as usize;
-    let mi = Select::new()
-        .with_prompt("  Mes")
-        .items(meses_nombres)
-        .default(default_mes)
-        .interact_opt()
-        .unwrap_or(None);
+    let mi = if es_termux() {
+        for (i, m) in meses_nombres.iter().enumerate() {
+            let marca = if i == default_mes { " ←" } else { "" };
+            println!("  {:>2}. {}{}", i + 1, m, marca);
+        }
+        print!("  Mes (0=cancelar): ");
+        match leer_linea().parse::<usize>() {
+            Ok(0) => None,
+            Ok(n) if n <= 12 => Some(n - 1),
+            _ => None,
+        }
+    } else {
+        Select::new()
+            .with_prompt("  Mes")
+            .items(meses_nombres)
+            .default(default_mes)
+            .interact_opt()
+            .unwrap_or(None)
+    };
     let mes = match mi {
         Some(i) => (i + 1) as u32,
         None => return,
@@ -2149,12 +2287,25 @@ fn ver_resumen_trimestral(state: &AppState) {
         "Q3 (Jul-Sep)",
         "Q4 (Oct-Dic)",
     ];
-    let qi = Select::new()
-        .with_prompt("  Trimestre")
-        .items(trimestres)
-        .default(trimestre_actual)
-        .interact_opt()
-        .unwrap_or(None);
+    let qi = if es_termux() {
+        for (i, t) in trimestres.iter().enumerate() {
+            let marca = if i == trimestre_actual { " ←" } else { "" };
+            println!("  {}. {}{}", i + 1, t, marca);
+        }
+        print!("  Trimestre (0=cancelar): ");
+        match leer_linea().parse::<usize>() {
+            Ok(0) => None,
+            Ok(n) if n <= 4 => Some(n - 1),
+            _ => None,
+        }
+    } else {
+        Select::new()
+            .with_prompt("  Trimestre")
+            .items(trimestres)
+            .default(trimestre_actual)
+            .interact_opt()
+            .unwrap_or(None)
+    };
     let q = match qi {
         Some(i) => i,
         None => return,
@@ -2419,7 +2570,7 @@ fn agregar_imagen_canvas(state: &mut AppState) {
             "  ⚠️ El archivo '{}' no existe. ¿Agregar de todos modos?",
             ruta
         );
-        if !Confirm::new()
+        if !TermConfirm::new()
             .with_prompt("  ¿Continuar?")
             .default(false)
             .interact()
@@ -2629,7 +2780,7 @@ fn exportar_canvas_html(state: &AppState) {
     match std::fs::write(&archivo, &html) {
         Ok(_) => {
             println!("  {} Exportado a '{}'", "✓".green(), archivo);
-            if Confirm::new()
+            if TermConfirm::new()
                 .with_prompt("  ¿Abrir en navegador?")
                 .default(true)
                 .interact()
@@ -2650,7 +2801,7 @@ fn eliminar_canvas(state: &mut AppState) {
     };
     let nombre = state.canvases[idx].nombre.clone();
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt(format!(
             "  ¿Eliminar canvas '{}'? Esto no se puede deshacer",
             nombre
@@ -2804,7 +2955,7 @@ fn agregar_nodo(state: &mut AppState) {
     println!("  {} Nodo [{}] '{}' agregado", "✓".green(), nid, etiqueta);
 
     // ¿Agregar otro?
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Agregar otro nodo?")
         .default(true)
         .interact()
@@ -2849,7 +3000,7 @@ fn agregar_nodo_al(state: &mut AppState, idx: usize) {
     let nid = state.diagramas[idx].agregar_nodo(nodo);
     println!("  {} Nodo [{}] '{}' agregado", "✓".green(), nid, etiqueta);
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Agregar otro nodo?")
         .default(true)
         .interact()
@@ -2902,7 +3053,7 @@ fn conectar_nodos(state: &mut AppState) {
     state.diagramas[idx].conectar(&origen_id, &destino_id, TipoConexion::Flecha, etiqueta);
     println!("  {} Conexión creada", "✓".green());
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Crear otra conexión?")
         .default(true)
         .interact()
@@ -2941,7 +3092,7 @@ fn conectar_nodos_en(state: &mut AppState, idx: usize) {
     state.diagramas[idx].conectar(&origen_id, &destino_id, TipoConexion::Flecha, etiqueta);
     println!("  {} Conexión creada", "✓".green());
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Otra conexión?")
         .default(false)
         .interact()
@@ -3554,7 +3705,7 @@ fn generar_contrasenia_menu() {
     };
     let longitud = longitud.clamp(8, 128);
 
-    let con_especiales = Confirm::new()
+    let con_especiales = TermConfirm::new()
         .with_prompt("  ¿Incluir caracteres especiales (!@#$%)?")
         .default(true)
         .interact()
@@ -3611,7 +3762,7 @@ fn generar_clave_cifrado_menu(state: &mut AppState) {
     println!("  {}", frase.green());
     println!();
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Guardar esta clave?")
         .default(true)
         .interact()
@@ -3722,7 +3873,7 @@ fn ver_contrasenias(state: &AppState) {
 
     // Opción para revelar
     println!();
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Revelar alguna clave completa?")
         .default(false)
         .interact()
@@ -3781,7 +3932,7 @@ fn buscar_contrasenia_menu(state: &AppState) {
             );
         }
         println!();
-        if Confirm::new()
+        if TermConfirm::new()
             .with_prompt("  ¿Revelar clave?")
             .default(false)
             .interact()
@@ -3914,7 +4065,7 @@ fn eliminar_entrada_menu(state: &mut AppState) {
     };
 
     let nombre = state.contrasenias.entradas[idx].nombre.clone();
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt(format!("  ¿Eliminar '{}'?", nombre))
         .default(false)
         .interact()
@@ -4704,7 +4855,7 @@ fn crear_recuerdo(state: &mut AppState) {
         }
     }
 
-    let vincular = Confirm::new()
+    let vincular = TermConfirm::new()
         .with_prompt("  ¿Vincular a una tarea, evento o diagrama existente?")
         .default(false)
         .interact()
@@ -4875,7 +5026,7 @@ fn editar_recuerdo(state: &mut AppState) {
                 };
                 let palabra = palabras[pi].clone();
 
-                if Confirm::new()
+                if TermConfirm::new()
                     .with_prompt(format!("  ¿Seguro que quieres quitar '{}'?", palabra))
                     .default(false)
                     .interact()
@@ -4971,7 +5122,7 @@ fn gestionar_palabras_clave(state: &mut AppState) {
                 );
                 println!("  Se eliminará de todos, pero los recuerdos se conservan.");
 
-                if Confirm::new()
+                if TermConfirm::new()
                     .with_prompt(format!("  ¿Estás seguro de eliminar '{}'?", palabra))
                     .default(false)
                     .interact()
@@ -5024,7 +5175,7 @@ fn gestionar_palabras_clave(state: &mut AppState) {
                 };
                 let rid = recuerdos_ids[ri].0.clone();
 
-                if Confirm::new()
+                if TermConfirm::new()
                     .with_prompt(format!("  ¿Quitar '{}' de este recuerdo?", palabra))
                     .default(false)
                     .interact()
@@ -5073,7 +5224,7 @@ fn eliminar_recuerdo(state: &mut AppState) {
     println!("  Contenido: \"{}\"", contenido.cyan());
     println!("  {} Esta acción no se puede deshacer.", "⚠".yellow());
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Estás seguro de eliminar este recuerdo?".to_string())
         .default(false)
         .interact()
@@ -5263,7 +5414,7 @@ fn configurar_gist(state: &mut AppState) {
         if !state.sync.gist_id.is_empty() {
             println!("  📎 Gist ID: {}", state.sync.gist_id.cyan());
         }
-        if !Confirm::new()
+        if !TermConfirm::new()
             .with_prompt("  ¿Reconfigurar?")
             .default(false)
             .interact()
@@ -5464,7 +5615,7 @@ fn gist_pull_datos(state: &mut AppState) {
         "⚠".yellow()
     );
 
-    let confirmar = Confirm::new()
+    let confirmar = TermConfirm::new()
         .with_prompt("  ¿Continuar?")
         .default(false)
         .interact()
@@ -5516,7 +5667,7 @@ fn gist_buscar_existente(state: &mut AppState) {
     match sync::gist::gist_buscar(&state.sync.gist_token) {
         Ok(Some(gist_id)) => {
             println!("  {} Gist encontrado: {}", "✓".green(), gist_id.cyan());
-            if Confirm::new()
+            if TermConfirm::new()
                 .with_prompt("  ¿Vincular este Gist para sincronizar?")
                 .default(true)
                 .interact()
@@ -5701,7 +5852,7 @@ fn drive_pull(state: &mut AppState) {
         "⚠".yellow()
     );
 
-    let confirmar = Confirm::new()
+    let confirmar = TermConfirm::new()
         .with_prompt("  ¿Continuar?")
         .default(false)
         .interact()
@@ -5761,7 +5912,7 @@ fn drive_buscar(state: &mut AppState) {
     match resultado {
         Ok(Some(file_id)) => {
             println!("  {} Archivo encontrado: {}", "✓".green(), file_id.cyan());
-            if Confirm::new()
+            if TermConfirm::new()
                 .with_prompt("  ¿Vincular este archivo para sincronizar?")
                 .default(true)
                 .interact()
@@ -5873,7 +6024,7 @@ fn importar_ics(state: &mut AppState) {
         );
     }
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Importar todos?")
         .default(true)
         .interact()
@@ -5917,7 +6068,7 @@ fn resync_google(state: &mut AppState) {
         state.sync.mapa_tareas.len()
     );
 
-    if !Confirm::new()
+    if !TermConfirm::new()
         .with_prompt("  ¿Continuar?")
         .default(false)
         .interact()
@@ -6049,7 +6200,7 @@ fn sync_pull_google(state: &mut AppState) {
                     );
                 }
 
-                if Confirm::new()
+                if TermConfirm::new()
                     .with_prompt("  ¿Importar a la agenda?")
                     .default(true)
                     .interact()
@@ -6355,7 +6506,7 @@ fn importar_estado(state: &mut AppState) {
 
     match menu("¿Cómo importar?", opciones) {
         Some(0) => {
-            if Confirm::new()
+            if TermConfirm::new()
                 .with_prompt("  ¿Estás seguro? Se perderán los datos actuales")
                 .default(false)
                 .interact()
@@ -6450,7 +6601,7 @@ fn configurar_google(state: &mut AppState) {
                 ""
             }
         );
-        if !Confirm::new()
+        if !TermConfirm::new()
             .with_prompt("  ¿Reconfigurar?")
             .default(false)
             .interact()
@@ -6483,7 +6634,7 @@ fn configurar_google(state: &mut AppState) {
 
     println!("  {} Credenciales guardadas", "✓".green());
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Autenticar ahora?")
         .default(true)
         .interact()
@@ -6579,7 +6730,7 @@ fn configurar_email(state: &mut AppState) {
 
     println!("  {} Configuración SMTP guardada", "✓".green());
 
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Enviar email de prueba?")
         .default(true)
         .interact()
@@ -8699,12 +8850,24 @@ fn menu_nlp_config(state: &mut AppState) {
 
 /// Menú compacto inline (sin limpiar pantalla)
 fn menu_compacto(opciones: &[&str]) -> Option<usize> {
-    Select::new()
-        .items(opciones)
-        .default(0)
-        .interact_opt()
-        .ok()
-        .flatten()
+    if es_termux() {
+        for (i, op) in opciones.iter().enumerate() {
+            println!("  {}. {}", i + 1, op);
+        }
+        print!("  Opción (0=cancelar): ");
+        match leer_linea().parse::<usize>() {
+            Ok(0) => None,
+            Ok(n) if n <= opciones.len() => Some(n - 1),
+            _ => None,
+        }
+    } else {
+        Select::new()
+            .items(opciones)
+            .default(0)
+            .interact_opt()
+            .ok()
+            .flatten()
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -8934,7 +9097,7 @@ fn menu_asesor_deuda(state: &mut AppState) {
 
     // Preguntar si quiere ver proyección detallada
     println!();
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("  ¿Ver proyección mes a mes de alguna opción?")
         .default(true)
         .interact()
@@ -9502,7 +9665,7 @@ fn menu_presupuesto_cero(state: &mut AppState) {
         println!("  👋 Vamos a configurar tu presupuesto por primera vez.");
         println!("  💡 Solo necesitas hacerlo una vez — después cada mes se genera solo.");
         println!();
-        if Confirm::new()
+        if TermConfirm::new()
             .with_prompt("  ¿Crear tu plantilla de presupuesto ahora?")
             .default(true)
             .interact()
@@ -9657,7 +9820,7 @@ fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual) {
 fn generar_presupuesto_mes(state: &mut AppState, mes: &str) {
     if state.presupuesto.mes_actual(mes).is_some() {
         println!("  ⚠️ Ya existe un presupuesto para {}. ¿Regenerar?", mes);
-        if !Confirm::new()
+        if !TermConfirm::new()
             .with_prompt("  Esto reemplazará el existente")
             .default(false)
             .interact()
@@ -10733,7 +10896,7 @@ fn agregar_movimiento(state: &mut AppState, es_ingreso: bool) {
         categoria
     };
 
-    let fijo = Confirm::new()
+    let fijo = TermConfirm::new()
         .with_prompt("  ¿Es un gasto/ingreso fijo?")
         .default(true)
         .interact()
@@ -12057,7 +12220,7 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
 
     // Solo ofrecer historial para deudas con saldo real (no pagos corrientes)
     if tipo != 3 {
-        let cargar_hist = Confirm::new()
+        let cargar_hist = TermConfirm::new()
             .with_prompt("  ¿Quieres cargar meses anteriores de pago?")
             .default(false)
             .interact()
@@ -12888,7 +13051,7 @@ fn rastreador_simulacion_libertad(state: &AppState) {
     println!();
 
     // Preguntar si desea exportar a Excel
-    if Confirm::new()
+    if TermConfirm::new()
         .with_prompt("¿Deseas exportar este reporte a Excel?")
         .default(true)
         .interact()
@@ -14208,7 +14371,7 @@ fn rastreador_eliminar(state: &mut AppState) {
 
     if let Some(idx) = menu("¿Cuál deuda eliminar?", &refs) {
         let nombre = state.asesor.rastreador.deudas[idx].nombre.clone();
-        if Confirm::new()
+        if TermConfirm::new()
             .with_prompt(format!(
                 "  ¿Eliminar '{}'? Se perderá todo el historial.",
                 nombre
@@ -14572,7 +14735,7 @@ fn historial_eliminar(state: &mut AppState) {
 
     if let Some(idx) = menu("¿Cuál registro eliminar?", &refs) {
         let titulo = state.asesor.registros[idx].titulo.clone();
-        if Confirm::new()
+        if TermConfirm::new()
             .with_prompt(format!(
                 "  ¿Eliminar #{}? '{}'",
                 state.asesor.registros[idx].id, titulo
