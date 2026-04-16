@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use crate::agenda::Agenda;
 use crate::canvas::Canvas;
+use crate::contrasenias::AlmacenContrasenias;
 use crate::diagrams::Diagrama;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
@@ -44,6 +45,8 @@ pub struct AppState {
     pub asesor: AlmacenAsesor,
     #[serde(default)]
     pub presupuesto: AlmacenPresupuesto,
+    #[serde(default)]
+    pub contrasenias: AlmacenContrasenias,
     /// Timestamp de última modificación (epoch secs)
     #[serde(default)]
     pub ultima_modificacion: i64,
@@ -64,6 +67,7 @@ impl AppState {
             nlp: AlmacenNLP::default(),
             asesor: AlmacenAsesor::default(),
             presupuesto: AlmacenPresupuesto::default(),
+            contrasenias: AlmacenContrasenias::default(),
             ultima_modificacion: 0,
         }
     }

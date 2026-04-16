@@ -13,6 +13,7 @@ use omniplanner::agenda::{
     DiaMarcado, Evento, Frecuencia, HorarioEscritura, TipoDiaMarcado, TipoEvento,
 };
 use omniplanner::canvas::{Canvas, Elemento};
+use omniplanner::contrasenias;
 use omniplanner::diagrams::{Diagrama, Nodo, TipoConexion, TipoDiagrama, TipoNodo};
 use omniplanner::mapper::{Codificacion, EsquemaMapa, Mapper};
 use omniplanner::memoria::Recuerdo;
@@ -3308,6 +3309,7 @@ fn menu_memoria(state: &mut AppState) {
             "🏷️  Gestionar palabras clave",
             "🔗 Enlazar dos elementos",
             "🗑️  Eliminar un recuerdo",
+            "🔐 Contraseñas y claves",
             "← Volver al menú",
         ];
 
@@ -3320,9 +3322,608 @@ fn menu_memoria(state: &mut AppState) {
             Some(5) => gestionar_palabras_clave(state),
             Some(6) => enlazar_elementos(state),
             Some(7) => eliminar_recuerdo(state),
+            Some(8) => menu_contrasenias(state),
             _ => return,
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Contraseñas y Claves de Cifrado
+// ══════════════════════════════════════════════════════════════
+
+fn menu_contrasenias(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("🔐 CONTRASEÑAS Y CLAVES");
+
+        let n_entradas = state.contrasenias.entradas.len();
+        let n_claves = state.contrasenias.claves_cifrado.len();
+        if n_entradas > 0 || n_claves > 0 {
+            println!(
+                "  📦 {} contraseñas guardadas, {} claves de cifrado",
+                n_entradas, n_claves
+            );
+        } else {
+            println!(
+                "  {}",
+                "(vacío — crea tu primera contraseña o clave)".dimmed()
+            );
+        }
+
+        let opciones = &[
+            "🔍 Verificar texto (comparar carácter por carácter)",
+            "🔑 Generar contraseña segura",
+            "🗝️  Generar clave de cifrado (20 palabras)",
+            "💾 Guardar contraseña / token",
+            "📋 Ver contraseñas guardadas",
+            "🔎 Buscar contraseña",
+            "📊 Evaluar fortaleza de contraseña",
+            "⚡ Mejorar contraseña existente",
+            "✏️  Editar una entrada",
+            "🗑️  Eliminar una entrada",
+            "← Volver",
+        ];
+
+        match menu("¿Qué deseas hacer?", opciones) {
+            Some(0) => verificar_texto_menu(state),
+            Some(1) => generar_contrasenia_menu(),
+            Some(2) => generar_clave_cifrado_menu(state),
+            Some(3) => guardar_contrasenia_menu(state),
+            Some(4) => ver_contrasenias(state),
+            Some(5) => buscar_contrasenia_menu(state),
+            Some(6) => evaluar_fortaleza_menu(),
+            Some(7) => mejorar_contrasenia_menu(),
+            Some(8) => editar_entrada_menu(state),
+            Some(9) => eliminar_entrada_menu(state),
+            _ => return,
+        }
+    }
+}
+
+fn verificar_texto_menu(state: &AppState) {
+    separador("🔍 Verificar texto — Comparación carácter por carácter");
+    println!("  Compara un texto que pegues contra un valor almacenado");
+    println!("  o contra otro texto que ingreses.");
+    println!();
+
+    let opciones_origen = &[
+        "Comparar contra una contraseña guardada",
+        "Comparar dos textos que yo ingrese",
+    ];
+
+    let original = match menu("¿Contra qué comparar?", opciones_origen) {
+        Some(0) => {
+            if state.contrasenias.entradas.is_empty() {
+                println!("  {} No hay contraseñas guardadas.", "✗".red());
+                pausa();
+                return;
+            }
+            let nombres: Vec<String> = state
+                .contrasenias
+                .entradas
+                .iter()
+                .map(|e| format!("{} ({})", e.nombre, e.usuario))
+                .collect();
+            let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+            match menu("¿Cuál entrada?", &refs) {
+                Some(i) => state.contrasenias.entradas[i].clave.clone(),
+                None => return,
+            }
+        }
+        Some(1) => match pedir_texto("Texto original (el correcto)") {
+            Some(t) => t,
+            None => return,
+        },
+        _ => return,
+    };
+
+    let input = match pedir_texto("Texto a verificar (el que quieres comprobar)") {
+        Some(t) => t,
+        None => return,
+    };
+
+    let resultado = contrasenias::verificar_texto(&original, &input);
+
+    println!();
+    if resultado.coincide {
+        println!(
+            "  {} ¡COINCIDENCIA PERFECTA! ({} caracteres)",
+            "✓".green().bold(),
+            resultado.total_chars
+        );
+    } else {
+        println!("  {} NO COINCIDE", "✗".red().bold());
+        println!();
+        println!(
+            "  Longitud original: {} | Tu input: {}",
+            resultado.total_chars,
+            input.len()
+        );
+
+        if resultado.diff_longitud != 0 {
+            if resultado.diff_longitud > 0 {
+                println!(
+                    "  {} Tu texto tiene {} caracteres DE MÁS",
+                    "⚠".yellow(),
+                    resultado.diff_longitud
+                );
+            } else {
+                println!(
+                    "  {} Tu texto tiene {} caracteres DE MENOS (¡se cortó!)",
+                    "⚠".yellow(),
+                    -resultado.diff_longitud
+                );
+            }
+        }
+
+        if !resultado.errores.is_empty() {
+            println!();
+            println!(
+                "  {} errores encontrados en estas posiciones:",
+                resultado.errores.len()
+            );
+            println!();
+            for err in &resultado.errores {
+                println!(
+                    "    Posición {}: esperado '{}' → recibido '{}'",
+                    err.posicion.to_string().cyan(),
+                    err.esperado.to_string().green(),
+                    err.recibido.to_string().red()
+                );
+            }
+
+            // Mostrar visual con marcas
+            println!();
+            println!("  📍 Vista visual:");
+            let chars_orig: Vec<char> = original.chars().collect();
+            let chars_input: Vec<char> = input.chars().collect();
+            let min_len = chars_orig.len().min(chars_input.len());
+
+            // Línea de marcadores
+            let mut marcador = String::new();
+            let mut linea_orig = String::new();
+            let mut linea_input = String::new();
+            for i in 0..min_len {
+                if chars_orig[i] != chars_input[i] {
+                    marcador.push('^');
+                    linea_orig.push(chars_orig[i]);
+                    linea_input.push(chars_input[i]);
+                } else {
+                    marcador.push(' ');
+                    linea_orig.push(chars_orig[i]);
+                    linea_input.push(chars_input[i]);
+                }
+            }
+
+            // Mostrar en bloques de 60 chars
+            let bloque = 60;
+            let total = min_len.max(chars_orig.len()).max(chars_input.len());
+            let mut pos = 0;
+            while pos < total {
+                let fin = (pos + bloque).min(total);
+                println!(
+                    "    {:>4} │{}│",
+                    pos + 1,
+                    if fin <= chars_orig.len() {
+                        chars_orig[pos..fin].iter().collect::<String>()
+                    } else {
+                        let mut s: String =
+                            chars_orig[pos..chars_orig.len().min(fin)].iter().collect();
+                        for _ in 0..(fin - chars_orig.len().min(fin)) {
+                            s.push('░');
+                        }
+                        s
+                    }
+                );
+                println!(
+                    "    {:>4} │{}│",
+                    "",
+                    if fin <= chars_input.len() {
+                        chars_input[pos..fin].iter().collect::<String>()
+                    } else {
+                        let mut s: String = chars_input[pos..chars_input.len().min(fin)]
+                            .iter()
+                            .collect();
+                        for _ in 0..(fin - chars_input.len().min(fin)) {
+                            s.push('░');
+                        }
+                        s
+                    }
+                );
+                if fin <= min_len {
+                    let m: String = marcador[pos..fin].to_string();
+                    if m.contains('^') {
+                        println!("         │{}│ ← errores", m.red());
+                    }
+                }
+                println!();
+                pos += bloque;
+            }
+        }
+    }
+    pausa();
+}
+
+fn generar_contrasenia_menu() {
+    separador("🔑 Generar Contraseña Segura");
+
+    let longitud: usize = match pedir_texto("Longitud (default 20)") {
+        Some(t) if !t.is_empty() => t.parse().unwrap_or(20),
+        _ => 20,
+    };
+    let longitud = longitud.clamp(8, 128);
+
+    let con_especiales = Confirm::new()
+        .with_prompt("  ¿Incluir caracteres especiales (!@#$%)?")
+        .default(true)
+        .interact()
+        .unwrap_or(true);
+
+    println!();
+    println!("  🔑 Contraseñas generadas:");
+    println!();
+    for i in 1..=5 {
+        let c = contrasenias::generar_contrasenia(longitud, con_especiales);
+        let (puntaje, _) = contrasenias::evaluar_fortaleza(&c);
+        let barra = match puntaje {
+            0..=40 => "🟠",
+            41..=70 => "🟡",
+            _ => "🟢",
+        };
+        println!("  {}  {} {}", format!("{}.", i).dimmed(), barra, c.cyan());
+    }
+    println!();
+    println!(
+        "  {}",
+        "Copia la que prefieras. Puedes guardarla con la opción 💾".dimmed()
+    );
+    pausa();
+}
+
+fn generar_clave_cifrado_menu(state: &mut AppState) {
+    separador("🗝️  Generar Clave de Cifrado");
+    println!("  Genera una frase semilla de 20 palabras únicas.");
+    println!("  Úsala como clave maestra, backup, o verificación.");
+    println!();
+
+    let nombre = match pedir_texto("Nombre para esta clave (ej: 'Backup principal')") {
+        Some(n) if !n.is_empty() => n,
+        _ => "Clave sin nombre".to_string(),
+    };
+
+    let palabras = contrasenias::generar_clave_cifrado(20);
+
+    println!();
+    println!("  🗝️  Clave de cifrado generada:");
+    println!();
+    for (i, palabra) in palabras.iter().enumerate() {
+        print!("  {:>2}. {:<12}", i + 1, palabra.cyan());
+        if (i + 1) % 4 == 0 {
+            println!();
+        }
+    }
+    println!();
+    println!();
+
+    let frase = palabras.join(" ");
+    println!("  Frase completa:");
+    println!("  {}", frase.green());
+    println!();
+
+    if Confirm::new()
+        .with_prompt("  ¿Guardar esta clave?")
+        .default(true)
+        .interact()
+        .unwrap_or(false)
+    {
+        let clave = contrasenias::ClaveCifrado {
+            id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
+            nombre,
+            palabras,
+            creado: chrono::Local::now().naive_local(),
+        };
+        state.contrasenias.claves_cifrado.push(clave);
+        println!("  {} Clave guardada.", "✓".green());
+    }
+    pausa();
+}
+
+fn guardar_contrasenia_menu(state: &mut AppState) {
+    separador("💾 Guardar Contraseña / Token");
+
+    let nombre = match pedir_texto("Nombre del servicio (ej: GitHub, Gmail, Banco)") {
+        Some(n) if !n.is_empty() => n,
+        _ => return,
+    };
+    let usuario = pedir_texto("Usuario / email").unwrap_or_default();
+    let clave = match pedir_texto("Contraseña / token / clave") {
+        Some(c) if !c.is_empty() => c,
+        _ => return,
+    };
+    let categoria = match pedir_texto("Categoría (web/api/crypto/banco/otro)") {
+        Some(c) if !c.is_empty() => c,
+        _ => "otro".to_string(),
+    };
+    let notas = pedir_texto("Notas adicionales (opcional)").unwrap_or_default();
+
+    let entrada = contrasenias::AlmacenContrasenias::nueva_entrada(
+        &nombre, &usuario, &clave, &notas, &categoria,
+    );
+
+    let (_, fortaleza) = contrasenias::evaluar_fortaleza(&clave);
+    println!();
+    println!("  Fortaleza: {}", fortaleza);
+
+    state.contrasenias.entradas.push(entrada);
+    println!("  {} Guardado: {}", "✓".green(), nombre.cyan());
+    pausa();
+}
+
+fn ver_contrasenias(state: &AppState) {
+    separador("📋 Contraseñas Guardadas");
+
+    if state.contrasenias.entradas.is_empty() && state.contrasenias.claves_cifrado.is_empty() {
+        println!("  {} No hay nada guardado aún.", "(vacío)".dimmed());
+        pausa();
+        return;
+    }
+
+    if !state.contrasenias.entradas.is_empty() {
+        println!("  🔑 Contraseñas:");
+        println!();
+        for (i, e) in state.contrasenias.entradas.iter().enumerate() {
+            let (puntaje, _) = contrasenias::evaluar_fortaleza(&e.clave);
+            let icono = match puntaje {
+                0..=40 => "🟠",
+                41..=70 => "🟡",
+                _ => "🟢",
+            };
+            println!(
+                "  {}  {} {} — {} [{}]",
+                format!("{}.", i + 1).dimmed(),
+                icono,
+                e.nombre.cyan().bold(),
+                e.usuario,
+                e.categoria.dimmed()
+            );
+            // Mostrar clave parcialmente oculta
+            let oculta = if e.clave.len() > 6 {
+                format!(
+                    "{}{}{}",
+                    &e.clave[..3],
+                    "•".repeat(e.clave.len() - 6),
+                    &e.clave[e.clave.len() - 3..]
+                )
+            } else {
+                "•".repeat(e.clave.len())
+            };
+            println!("       Clave: {}", oculta.dimmed());
+            if !e.notas.is_empty() {
+                println!("       Nota: {}", e.notas.dimmed());
+            }
+        }
+    }
+
+    if !state.contrasenias.claves_cifrado.is_empty() {
+        println!();
+        println!("  🗝️  Claves de cifrado:");
+        println!();
+        for (i, c) in state.contrasenias.claves_cifrado.iter().enumerate() {
+            println!(
+                "  {}  {} — {} palabras ({})",
+                format!("{}.", i + 1).dimmed(),
+                c.nombre.cyan().bold(),
+                c.palabras.len(),
+                c.creado.format("%d/%m/%Y")
+            );
+        }
+    }
+
+    // Opción para revelar
+    println!();
+    if Confirm::new()
+        .with_prompt("  ¿Revelar alguna clave completa?")
+        .default(false)
+        .interact()
+        .unwrap_or(false)
+    {
+        let mut nombres: Vec<String> = state
+            .contrasenias
+            .entradas
+            .iter()
+            .map(|e| format!("🔑 {}", e.nombre))
+            .collect();
+        for c in &state.contrasenias.claves_cifrado {
+            nombres.push(format!("🗝️  {}", c.nombre));
+        }
+        let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+
+        if let Some(idx) = menu("¿Cuál revelar?", &refs) {
+            println!();
+            if idx < state.contrasenias.entradas.len() {
+                let e = &state.contrasenias.entradas[idx];
+                println!("  {} {}", "Servicio:".bold(), e.nombre);
+                println!("  {} {}", "Usuario:".bold(), e.usuario);
+                println!("  {} {}", "Clave:".bold(), e.clave.green());
+                println!("  {} {} chars", "Longitud:".bold(), e.clave.len());
+            } else {
+                let ci = idx - state.contrasenias.entradas.len();
+                let c = &state.contrasenias.claves_cifrado[ci];
+                println!("  {} {}", "Nombre:".bold(), c.nombre);
+                println!("  {} {}", "Frase:".bold(), c.palabras.join(" ").green());
+            }
+        }
+    }
+    pausa();
+}
+
+fn buscar_contrasenia_menu(state: &AppState) {
+    separador("🔎 Buscar Contraseña");
+
+    let termino = match pedir_texto("Buscar (nombre, usuario o categoría)") {
+        Some(t) if !t.is_empty() => t,
+        _ => return,
+    };
+
+    let resultados = state.contrasenias.buscar(&termino);
+
+    if resultados.is_empty() {
+        println!("  {} Sin resultados para '{}'", "ℹ".dimmed(), termino);
+    } else {
+        println!("  {} {} resultado(s):", "✓".green(), resultados.len());
+        for e in &resultados {
+            println!(
+                "  • {} — {} [{}]",
+                e.nombre.cyan().bold(),
+                e.usuario,
+                e.categoria
+            );
+        }
+        println!();
+        if Confirm::new()
+            .with_prompt("  ¿Revelar clave?")
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+        {
+            for e in &resultados {
+                println!("  {} → {}", e.nombre.cyan(), e.clave.green());
+            }
+        }
+    }
+    pausa();
+}
+
+fn evaluar_fortaleza_menu() {
+    separador("📊 Evaluar Fortaleza de Contraseña");
+
+    let clave = match pedir_texto("Contraseña a evaluar") {
+        Some(c) if !c.is_empty() => c,
+        _ => return,
+    };
+
+    let (_, resumen) = contrasenias::evaluar_fortaleza(&clave);
+    println!();
+    println!("  {}", resumen);
+    println!("  Longitud: {} caracteres", clave.len());
+    pausa();
+}
+
+fn mejorar_contrasenia_menu() {
+    separador("⚡ Mejorar Contraseña");
+
+    let original = match pedir_texto("Contraseña actual") {
+        Some(c) if !c.is_empty() => c,
+        _ => return,
+    };
+
+    let (puntaje_orig, _) = contrasenias::evaluar_fortaleza(&original);
+    println!();
+    println!("  Original: {} (fuerza: {}/100)", original, puntaje_orig);
+    println!();
+    println!("  ⚡ Versiones mejoradas:");
+    println!();
+
+    for i in 1..=3 {
+        let mejorada = contrasenias::mejorar_contrasenia(&original);
+        let (puntaje, _) = contrasenias::evaluar_fortaleza(&mejorada);
+        println!(
+            "  {}  {} (fuerza: {}/100)",
+            format!("{}.", i).dimmed(),
+            mejorada.cyan(),
+            puntaje
+        );
+    }
+    println!();
+    println!("  💡 Copia la que prefieras.");
+    pausa();
+}
+
+fn editar_entrada_menu(state: &mut AppState) {
+    separador("✏️  Editar Entrada");
+
+    if state.contrasenias.entradas.is_empty() {
+        println!("  {} No hay entradas.", "(vacío)".dimmed());
+        pausa();
+        return;
+    }
+
+    let nombres: Vec<String> = state
+        .contrasenias
+        .entradas
+        .iter()
+        .map(|e| format!("{} ({})", e.nombre, e.usuario))
+        .collect();
+    let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+
+    let idx = match menu("¿Cuál editar?", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+
+    let campos = &["Nombre", "Usuario", "Clave", "Notas", "Categoría"];
+    let campo = match menu("¿Qué campo editar?", campos) {
+        Some(i) => i,
+        None => return,
+    };
+
+    let nuevo = match pedir_texto("Nuevo valor") {
+        Some(v) if !v.is_empty() => v,
+        _ => return,
+    };
+
+    let entrada = &mut state.contrasenias.entradas[idx];
+    match campo {
+        0 => entrada.nombre = nuevo,
+        1 => entrada.usuario = nuevo,
+        2 => {
+            entrada.clave = nuevo;
+            let (_, fortaleza) = contrasenias::evaluar_fortaleza(&entrada.clave);
+            println!("  Fortaleza: {}", fortaleza);
+        }
+        3 => entrada.notas = nuevo,
+        4 => entrada.categoria = nuevo,
+        _ => {}
+    }
+    entrada.modificado = chrono::Local::now().naive_local();
+    println!("  {} Actualizado.", "✓".green());
+    pausa();
+}
+
+fn eliminar_entrada_menu(state: &mut AppState) {
+    separador("🗑️  Eliminar Entrada");
+
+    if state.contrasenias.entradas.is_empty() {
+        println!("  {} No hay entradas.", "(vacío)".dimmed());
+        pausa();
+        return;
+    }
+
+    let nombres: Vec<String> = state
+        .contrasenias
+        .entradas
+        .iter()
+        .map(|e| format!("{} ({})", e.nombre, e.usuario))
+        .collect();
+    let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+
+    let idx = match menu("¿Cuál eliminar?", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+
+    let nombre = state.contrasenias.entradas[idx].nombre.clone();
+    if Confirm::new()
+        .with_prompt(format!("  ¿Eliminar '{}'?", nombre))
+        .default(false)
+        .interact()
+        .unwrap_or(false)
+    {
+        state.contrasenias.entradas.remove(idx);
+        println!("  {} Eliminado.", "✓".green());
+    }
+    pausa();
 }
 
 fn ver_diccionario(state: &mut AppState) {
