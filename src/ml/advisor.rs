@@ -770,7 +770,7 @@ impl DiccionarioAcciones {
                 }
             })
             .collect();
-        coincidencias.sort_by(|a, b| b.1.cmp(&a.1));
+        coincidencias.sort_by_key(|k| std::cmp::Reverse(k.1));
         coincidencias.into_iter().map(|(a, _)| a).collect()
     }
 }

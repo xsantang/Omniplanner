@@ -342,7 +342,7 @@ impl Diccionario {
                 resultado.push((otra.as_str(), c.fuerza));
             }
         }
-        resultado.sort_by(|a, b| b.1.cmp(&a.1)); // más fuertes primero
+        resultado.sort_by_key(|k| std::cmp::Reverse(k.1)); // más fuertes primero
         resultado
     }
 
@@ -358,7 +358,7 @@ impl Diccionario {
             }
         }
         let mut resultado: Vec<(String, u32)> = scores.into_iter().collect();
-        resultado.sort_by(|a, b| b.1.cmp(&a.1));
+        resultado.sort_by_key(|k| std::cmp::Reverse(k.1));
         resultado
     }
 

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Suite todo-en-uno: tareas, agenda, escritura a mano, diagramas, source control, mapeo y codificación"
 
+[lib]
+name = "omniplanner"
+crate-type = ["lib", "cdylib"]
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

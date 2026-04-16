@@ -30,3 +30,5 @@ pub mod storage;
 pub mod sync;
 pub mod tasks;
 pub mod vcs;
+
+pub mod ffi;

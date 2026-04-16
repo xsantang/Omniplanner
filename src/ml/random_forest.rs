@@ -111,7 +111,7 @@ impl BosqueAleatorio {
             }
         }
         let mut ranking: Vec<(usize, usize)> = conteo_total.into_iter().collect();
-        ranking.sort_by(|a, b| b.1.cmp(&a.1));
+        ranking.sort_by_key(|k| std::cmp::Reverse(k.1));
         ranking
     }
 

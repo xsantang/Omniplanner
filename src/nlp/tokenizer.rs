@@ -250,7 +250,7 @@ impl Tokenizer {
             *freq.entry(t).or_insert(0) += 1;
         }
         let mut ranking: Vec<(String, usize)> = freq.into_iter().collect();
-        ranking.sort_by(|a, b| b.1.cmp(&a.1));
+        ranking.sort_by_key(|k| std::cmp::Reverse(k.1));
         ranking.truncate(top_n);
         ranking
     }
