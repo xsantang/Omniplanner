@@ -4309,7 +4309,7 @@ fn ver_diccionario(state: &mut AppState) {
                     )
                 })
                 .collect();
-            conexiones_ord.sort_by(|a, b| b.2.cmp(&a.2));
+            conexiones_ord.sort_by_key(|b| std::cmp::Reverse(b.2));
 
             if !conexiones_ord.is_empty() {
                 println!("  🔥 Conexiones más fuertes:");
