@@ -340,10 +340,13 @@ impl AlmacenPresupuesto {
 
 // ─── Importar desde Excel con calamine ──────────────────────
 
+#[cfg(feature = "desktop")]
 use calamine::{open_workbook, Reader, Xlsx};
+#[cfg(feature = "desktop")]
 use std::path::Path;
 
 /// Resultado de importar un Excel de pagos
+#[cfg(feature = "desktop")]
 #[derive(Debug)]
 pub struct ImportacionExcel {
     pub meses_importados: Vec<PresupuestoMensual>,
@@ -351,6 +354,7 @@ pub struct ImportacionExcel {
 }
 
 /// Intenta reconocer la categoría por el nombre de la cuenta
+#[cfg(feature = "desktop")]
 fn categorizar(nombre: &str) -> Categoria {
     let n = nombre.to_lowercase();
     if n.contains("sueldo") || n.contains("salary") || n.contains("income") || n.contains("army") {
@@ -394,6 +398,7 @@ fn categorizar(nombre: &str) -> Categoria {
 
 /// Importa un archivo Excel con el formato del usuario
 /// (cada hoja = un mes, dos quincenas por hoja)
+#[cfg(feature = "desktop")]
 pub fn importar_excel(ruta: &Path) -> ImportacionExcel {
     let mut resultado = ImportacionExcel {
         meses_importados: Vec::new(),
@@ -480,6 +485,7 @@ pub fn importar_excel(ruta: &Path) -> ImportacionExcel {
 }
 
 /// Busca un par (nombre, monto) en el lado derecho de una fila
+#[cfg(feature = "desktop")]
 fn find_name_in_right_side(row: &[String], start_col: usize) -> Option<(String, f64)> {
     if row.len() <= start_col {
         return None;
@@ -514,6 +520,7 @@ fn find_name_in_right_side(row: &[String], start_col: usize) -> Option<(String, 
 }
 
 /// Genera una plantilla a partir de los datos importados (promedia los montos)
+#[cfg(feature = "desktop")]
 pub fn generar_plantilla_desde_importacion(meses: &[PresupuestoMensual]) -> PlantillaPresupuesto {
     use std::collections::HashMap;
 

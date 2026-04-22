@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.omniplanner.app-mergeDebugResources-50:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\elxav\\.gradle\\caches\\transforms-4\\3994b82a9f07c40fd6e1f18e9c2ebbc4\\transformed\\material3-release\\res\\values-v30\\values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}

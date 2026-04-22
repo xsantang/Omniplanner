@@ -6,7 +6,7 @@ description = "Suite todo-en-uno: tareas, agenda, escritura a mano, diagramas, s
 
 [lib]
 name = "omniplanner"
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
@@ -14,12 +14,22 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"
-colored = "2"
 sha2 = "0.10"
-dialoguer = "0.11"
-console = "0.15"
-ureq = { version = "2", features = ["json"] }
-lettre = "0.11"
-open = "5"
-calamine = "0.26"
-rust_xlsxwriter = "0.94.0"
+
+# CLI / Desktop (solo main.rs)
+colored = { version = "2", optional = true }
+dialoguer = { version = "0.11", optional = true }
+console = { version = "0.15", optional = true }
+ureq = { version = "2", default-features = false, features = ["json", "native-tls"], optional = true }
+lettre = { version = "0.11", optional = true }
+open = { version = "5", optional = true }
+calamine = { version = "0.26", optional = true }
+rust_xlsxwriter = { version = "0.94.0", optional = true }
+
+# Android
+jni = { version = "0.21", optional = true }
+
+[features]
+default = ["desktop"]
+desktop = ["dep:colored", "dep:dialoguer", "dep:console", "dep:ureq", "dep:lettre", "dep:open", "dep:calamine", "dep:rust_xlsxwriter"]
+android = ["dep:jni"]

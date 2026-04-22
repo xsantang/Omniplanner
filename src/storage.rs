@@ -73,6 +73,13 @@ impl AppState {
     }
 
     pub fn ruta_datos() -> PathBuf {
+        // En Android, DATA_DIR se configura vía FFI cmd_init
+        if let Ok(guard) = crate::ffi::data_dir() {
+            if let Some(dir) = guard.as_ref() {
+                fs::create_dir_all(dir).ok();
+                return dir.join("data.json");
+            }
+        }
         let dir = dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("omniplanner");
@@ -115,6 +122,7 @@ impl AppState {
             .map_err(|e| format!("Error escribiendo {}: {}", ruta.display(), e))?;
 
         // Auto-sync a Gist (silencioso, no bloquea en error)
+        #[cfg(feature = "desktop")]
         if self.sync.auto_sync && self.sync.gist_configurado() {
             match crate::sync::gist::gist_push(&self.sync, &json) {
                 Ok(gist_id) => {
@@ -158,6 +166,7 @@ impl AppState {
         };
 
         // Auto-pull desde Gist si está configurado
+        #[cfg(feature = "desktop")]
         if state.sync.auto_sync && state.sync.gist_configurado() && !state.sync.gist_id.is_empty() {
             if let Ok(contenido_remoto) = crate::sync::gist::gist_pull(&state.sync) {
                 if let Ok(remoto) = serde_json::from_str::<Self>(&contenido_remoto) {
@@ -210,27 +219,30 @@ impl AppState {
 
         // Último recurso: restaurar desde Gist
         // Crear un state temporal para leer sync config del backup más reciente
-        eprintln!("  ⚠ Sin backups locales válidos. Intentando restaurar desde Gist...");
+        #[cfg(feature = "desktop")]
+        {
+            eprintln!("  ⚠ Sin backups locales válidos. Intentando restaurar desde Gist...");
 
-        // Intentar leer al menos el token de algún backup parcial
-        for i in 1..=MAX_BACKUPS {
-            let backup = format!("{}.{}", ruta.display(), i);
-            if let Ok(contenido) = fs::read_to_string(&backup) {
-                // Intentar extraer al menos el token del JSON parcialmente corrupto
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&contenido) {
-                    let token = val["sync"]["gist_token"].as_str().unwrap_or("");
-                    let gist_id = val["sync"]["gist_id"].as_str().unwrap_or("");
-                    if !token.is_empty() && !gist_id.is_empty() {
-                        let cfg = SyncConfig {
-                            gist_token: token.to_string(),
-                            gist_id: gist_id.to_string(),
-                            ..SyncConfig::default()
-                        };
-                        if let Ok(contenido_remoto) = crate::sync::gist::gist_pull(&cfg) {
-                            if let Ok(state) = serde_json::from_str::<Self>(&contenido_remoto) {
-                                eprintln!("  ✓ Restaurado desde GitHub Gist.");
-                                fs::write(&ruta, &contenido_remoto).ok();
-                                return Ok(state);
+            // Intentar leer al menos el token de algún backup parcial
+            for i in 1..=MAX_BACKUPS {
+                let backup = format!("{}.{}", ruta.display(), i);
+                if let Ok(contenido) = fs::read_to_string(&backup) {
+                    // Intentar extraer al menos el token del JSON parcialmente corrupto
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&contenido) {
+                        let token = val["sync"]["gist_token"].as_str().unwrap_or("");
+                        let gist_id = val["sync"]["gist_id"].as_str().unwrap_or("");
+                        if !token.is_empty() && !gist_id.is_empty() {
+                            let cfg = SyncConfig {
+                                gist_token: token.to_string(),
+                                gist_id: gist_id.to_string(),
+                                ..SyncConfig::default()
+                            };
+                            if let Ok(contenido_remoto) = crate::sync::gist::gist_pull(&cfg) {
+                                if let Ok(state) = serde_json::from_str::<Self>(&contenido_remoto) {
+                                    eprintln!("  ✓ Restaurado desde GitHub Gist.");
+                                    fs::write(&ruta, &contenido_remoto).ok();
+                                    return Ok(state);
+                                }
                             }
                         }
                     }

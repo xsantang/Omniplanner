@@ -500,7 +500,10 @@ fn cmd_evento_actualizar(params: &Value) -> String {
     use chrono::{NaiveDate, NaiveTime};
 
     with_state(|state| {
-        let id = params.get("id").and_then(|v| v.as_str()).ok_or("Falta 'id'")?;
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'id'")?;
         let evento = state
             .agenda
             .eventos
@@ -625,9 +628,20 @@ fn cmd_presupuesto_agregar(params: &Value) -> String {
             .find(|m| m.mes == mes_str)
             .unwrap();
 
-        let pagado = params.get("pagado").and_then(|v| v.as_bool()).unwrap_or(false);
-        let fecha_limite = params.get("fecha_limite").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let notas = params.get("notas").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let pagado = params
+            .get("pagado")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let fecha_limite = params
+            .get("fecha_limite")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let notas = params
+            .get("notas")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let saldo_total_deuda = params.get("saldo_total_deuda").and_then(|v| v.as_f64());
 
         mes.lineas.push(LineaPresupuesto {
@@ -719,10 +733,20 @@ fn cmd_presupuesto_actualizar_linea(params: &Value) -> String {
     use crate::ml::presupuesto_cero::Categoria;
 
     with_state(|state| {
-        let mes_str = params.get("mes").and_then(|v| v.as_str()).ok_or("Falta 'mes'")?;
-        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let mes_str = params
+            .get("mes")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'mes'")?;
+        let indice = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
 
-        let mes = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes_str)
+        let mes = state
+            .presupuesto
+            .meses
+            .iter_mut()
+            .find(|m| m.mes == mes_str)
             .ok_or("Mes no encontrado")?;
         if indice >= mes.lineas.len() {
             return Err("Índice fuera de rango".to_string());
@@ -851,13 +875,34 @@ fn cmd_deuda_agregar(params: &Value) -> String {
     use crate::ml::advisor::DeudaRastreada;
 
     with_state(|state| {
-        let nombre = params.get("nombre").and_then(|v| v.as_str()).ok_or("Falta 'nombre'")?;
-        let tasa_anual = params.get("tasa_anual").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let pago_minimo = params.get("pago_minimo").and_then(|v| v.as_f64()).ok_or("Falta 'pago_minimo'")?;
-        let obligatoria = params.get("obligatoria").and_then(|v| v.as_bool()).unwrap_or(false);
-        let saldo_inicial = params.get("saldo_inicial").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let enganche = params.get("enganche").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let escrow_mensual = params.get("escrow_mensual").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let nombre = params
+            .get("nombre")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'nombre'")?;
+        let tasa_anual = params
+            .get("tasa_anual")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let pago_minimo = params
+            .get("pago_minimo")
+            .and_then(|v| v.as_f64())
+            .ok_or("Falta 'pago_minimo'")?;
+        let obligatoria = params
+            .get("obligatoria")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let saldo_inicial = params
+            .get("saldo_inicial")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let enganche = params
+            .get("enganche")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let escrow_mensual = params
+            .get("escrow_mensual")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let pago_pi_mensual = params
             .get("pago_pi_mensual")
             .and_then(|v| v.as_f64())
@@ -884,19 +929,36 @@ fn cmd_deuda_agregar(params: &Value) -> String {
 
 fn cmd_deuda_actualizar(params: &Value) -> String {
     with_state(|state| {
-        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let indice = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
         let deudas = &mut state.asesor.rastreador.deudas;
         if indice >= deudas.len() {
             return Err("Índice fuera de rango".to_string());
         }
         let d = &mut deudas[indice];
-        if let Some(n) = params.get("nombre").and_then(|v| v.as_str()) { d.nombre = n.to_string(); }
-        if let Some(t) = params.get("tasa_anual").and_then(|v| v.as_f64()) { d.tasa_anual = t; }
-        if let Some(p) = params.get("pago_minimo").and_then(|v| v.as_f64()) { d.pago_minimo = p; }
-        if let Some(p) = params.get("pago_pi_mensual").and_then(|v| v.as_f64()) { d.principal_interes_mensual = p; }
-        if let Some(e) = params.get("escrow_mensual").and_then(|v| v.as_f64()) { d.escrow_mensual = e.max(0.0); }
-        if let Some(o) = params.get("obligatoria").and_then(|v| v.as_bool()) { d.obligatoria = o; }
-        if let Some(a) = params.get("activa").and_then(|v| v.as_bool()) { d.activa = a; }
+        if let Some(n) = params.get("nombre").and_then(|v| v.as_str()) {
+            d.nombre = n.to_string();
+        }
+        if let Some(t) = params.get("tasa_anual").and_then(|v| v.as_f64()) {
+            d.tasa_anual = t;
+        }
+        if let Some(p) = params.get("pago_minimo").and_then(|v| v.as_f64()) {
+            d.pago_minimo = p;
+        }
+        if let Some(p) = params.get("pago_pi_mensual").and_then(|v| v.as_f64()) {
+            d.principal_interes_mensual = p;
+        }
+        if let Some(e) = params.get("escrow_mensual").and_then(|v| v.as_f64()) {
+            d.escrow_mensual = e.max(0.0);
+        }
+        if let Some(o) = params.get("obligatoria").and_then(|v| v.as_bool()) {
+            d.obligatoria = o;
+        }
+        if let Some(a) = params.get("activa").and_then(|v| v.as_bool()) {
+            d.activa = a;
+        }
         state.guardar()?;
         Ok("Deuda actualizada")
     })
@@ -904,7 +966,10 @@ fn cmd_deuda_actualizar(params: &Value) -> String {
 
 fn cmd_deuda_eliminar(params: &Value) -> String {
     with_state(|state| {
-        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let indice = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
         let deudas = &mut state.asesor.rastreador.deudas;
         if indice >= deudas.len() {
             return Err("Índice fuera de rango".to_string());
@@ -917,13 +982,22 @@ fn cmd_deuda_eliminar(params: &Value) -> String {
 
 fn cmd_deuda_registrar_pago(params: &Value) -> String {
     with_state(|state| {
-        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
-        let pago = params.get("pago").and_then(|v| v.as_f64()).ok_or("Falta 'pago'")?;
+        let indice = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let pago = params
+            .get("pago")
+            .and_then(|v| v.as_f64())
+            .ok_or("Falta 'pago'")?;
         let pago_escrow = params
             .get("pago_escrow")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-        let nuevos_cargos = params.get("nuevos_cargos").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let nuevos_cargos = params
+            .get("nuevos_cargos")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
 
         if indice >= state.asesor.rastreador.deudas.len() {
             return Err("Índice fuera de rango".to_string());
@@ -931,8 +1005,13 @@ fn cmd_deuda_registrar_pago(params: &Value) -> String {
 
         let saldo = state.asesor.rastreador.deudas[indice].saldo_actual();
         let mes = chrono::Local::now().format("%Y-%m").to_string();
-        state.asesor.rastreador.deudas[indice]
-            .registrar_mes_con_escrow(&mes, saldo, pago, pago_escrow, nuevos_cargos);
+        state.asesor.rastreador.deudas[indice].registrar_mes_con_escrow(
+            &mes,
+            saldo,
+            pago,
+            pago_escrow,
+            nuevos_cargos,
+        );
         let nuevo_saldo = state.asesor.rastreador.deudas[indice].saldo_actual();
 
         state.guardar()?;
@@ -949,14 +1028,32 @@ fn cmd_ingreso_agregar(params: &Value) -> String {
     use crate::ml::advisor::{FrecuenciaPago, IngresoRastreado};
 
     with_state(|state| {
-        let concepto = params.get("concepto").and_then(|v| v.as_str()).ok_or("Falta 'concepto'")?.to_string();
-        let monto = params.get("monto").and_then(|v| v.as_f64()).ok_or("Falta 'monto'")?;
-        let freq_str = params.get("frecuencia").and_then(|v| v.as_str()).unwrap_or("mensual");
-        let confirmado = params.get("confirmado").and_then(|v| v.as_bool()).unwrap_or(true);
+        let concepto = params
+            .get("concepto")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'concepto'")?
+            .to_string();
+        let monto = params
+            .get("monto")
+            .and_then(|v| v.as_f64())
+            .ok_or("Falta 'monto'")?;
+        let freq_str = params
+            .get("frecuencia")
+            .and_then(|v| v.as_str())
+            .unwrap_or("mensual");
+        let confirmado = params
+            .get("confirmado")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let impuesto_federal = params
             .get("impuesto_federal")
             .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| params.get("taxeable").and_then(|v| v.as_bool()).unwrap_or(false));
+            .unwrap_or_else(|| {
+                params
+                    .get("taxeable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            });
         let impuesto_estatal = params
             .get("impuesto_estatal")
             .and_then(|v| v.as_bool())
@@ -1028,7 +1125,10 @@ fn cmd_ingreso_agregar(params: &Value) -> String {
 
 fn cmd_ingreso_eliminar(params: &Value) -> String {
     with_state(|state| {
-        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let indice = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
         if indice >= state.asesor.rastreador.ingresos.len() {
             return Err("Índice fuera de rango".to_string());
         }
@@ -1089,7 +1189,10 @@ fn cmd_contras_guardar(params: &Value) -> String {
 
 fn cmd_contras_actualizar(params: &Value) -> String {
     with_state(|state| {
-        let id = params.get("id").and_then(|v| v.as_str()).ok_or("Falta 'id'")?;
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'id'")?;
         let entrada = state
             .contrasenias
             .entradas
@@ -1209,7 +1312,10 @@ fn cmd_memoria_agregar(params: &Value) -> String {
 
 fn cmd_memoria_eliminar(params: &Value) -> String {
     with_state(|state| {
-        let id = params.get("id").and_then(|v| v.as_str()).ok_or("Falta 'id'")?;
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'id'")?;
         let antes = state.memoria.recuerdos.len();
         state.memoria.recuerdos.retain(|r| r.id != id);
         if state.memoria.recuerdos.len() < antes {

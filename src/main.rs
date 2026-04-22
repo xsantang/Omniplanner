@@ -235,8 +235,8 @@ fn calcular_distribucion_flujo(
     .min(ingreso);
     let flujo_jugable = (ingreso - comprometido_objetivo).max(0.0);
 
-    let suma_pesos = (politica.peso_variable + politica.peso_ahorro + politica.peso_colocacion)
-        .max(0.0001);
+    let suma_pesos =
+        (politica.peso_variable + politica.peso_ahorro + politica.peso_colocacion).max(0.0001);
 
     let bolsa_variable = flujo_jugable * (politica.peso_variable / suma_pesos);
     let bolsa_ahorro = flujo_jugable * (politica.peso_ahorro / suma_pesos);
@@ -11094,9 +11094,7 @@ fn agregar_movimiento(state: &mut AppState, es_ingreso: bool) {
 
         if quiere_fijo {
             let necesario = TermConfirm::new()
-                .with_prompt(
-                    "  ¿Es absolutamente necesario? (vivienda, servicios, salud, trabajo)",
-                )
+                .with_prompt("  ¿Es absolutamente necesario? (vivienda, servicios, salud, trabajo)")
                 .default(false)
                 .interact()
                 .unwrap_or(false);
@@ -11329,7 +11327,9 @@ fn menu_asesor_proyecciones(state: &mut AppState) {
         );
         println!(
             "  Comprometido mensual: {}",
-            format!("${:.2}", dist.comprometido_objetivo).yellow().bold()
+            format!("${:.2}", dist.comprometido_objetivo)
+                .yellow()
+                .bold()
         );
         println!(
             "  Flujo jugable mensual: {}",
@@ -11531,7 +11531,9 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
         );
         println!(
             "     Comprometido plan : {} ({} del ingreso)",
-            format!("${:.2}", dist.comprometido_objetivo).yellow().bold(),
+            format!("${:.2}", dist.comprometido_objetivo)
+                .yellow()
+                .bold(),
             format!("{:.0}%", dist.ratio_comprometido_aplicado * 100.0).yellow()
         );
         println!(
@@ -11544,7 +11546,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                 .green()
                 .to_string()
         } else if disponible > -0.01 {
-            format!("$0.00  ⚠️ Sin margen jugable").yellow().to_string()
+            "$0.00  ⚠️ Sin margen jugable".yellow().to_string()
         } else {
             format!(
                 "-${:.2}  🔴 SIN LIQUIDEZ tras compromisos",
@@ -11654,9 +11656,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
         "suscripcion",
         "suscripción",
     ];
-    let es_vano = categorias_vanas
-        .iter()
-        .any(|v| cat_lower.contains(v));
+    let es_vano = categorias_vanas.iter().any(|v| cat_lower.contains(v));
 
     if tiene_deudas && es_vano {
         println!(
@@ -11732,10 +11732,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
 
             if montos_hist.len() >= 3 {
                 let promedio = montos_hist.iter().sum::<f64>() / montos_hist.len() as f64;
-                let min_m = montos_hist
-                    .iter()
-                    .cloned()
-                    .fold(f64::INFINITY, f64::min);
+                let min_m = montos_hist.iter().cloned().fold(f64::INFINITY, f64::min);
                 let max_m = montos_hist
                     .iter()
                     .cloned()
@@ -11778,11 +11775,9 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                             .unwrap_or(false);
 
                         if es_necesario {
-                            let mut monto_fijo = pedir_f64(
-                                "Monto mensual base para este gasto fijo ($)",
-                                promedio,
-                            )
-                            .max(0.0);
+                            let mut monto_fijo =
+                                pedir_f64("Monto mensual base para este gasto fijo ($)", promedio)
+                                    .max(0.0);
 
                             let evaluar_paquete = TermConfirm::new()
                                 .with_prompt("  ¿Quieres evaluar paquete/descuento ahora?")
@@ -11795,15 +11790,12 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                                     "📉 Descuento porcentual rápido",
                                     "📦 Paquete al por mayor (costo unitario y total)",
                                 ];
-                                let modo = menu("¿Cómo quieres evaluar el ahorro?", modos)
-                                    .unwrap_or(0);
+                                let modo =
+                                    menu("¿Cómo quieres evaluar el ahorro?", modos).unwrap_or(0);
 
-                                let monto_propuesto;
-
-                                if modo == 0 {
-                                    let desc =
-                                        pedir_f64("Descuento estimado del paquete (%)", 8.0)
-                                            .clamp(0.0, 60.0);
+                                let monto_propuesto = if modo == 0 {
+                                    let desc = pedir_f64("Descuento estimado del paquete (%)", 8.0)
+                                        .clamp(0.0, 60.0);
                                     let monto_desc = monto_fijo * (1.0 - desc / 100.0);
                                     let ahorro_mes = (monto_fijo - monto_desc).max(0.0);
                                     println!(
@@ -11811,21 +11803,21 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                                         format!("${:.2}", monto_desc).green(),
                                         format!("${:.2}", ahorro_mes).green().bold()
                                     );
-                                    monto_propuesto = monto_desc;
+                                    monto_desc
                                 } else {
-                                    let unidades_base = pedir_f64(
-                                        "Unidades de tu compra normal por ciclo",
-                                        1.0,
-                                    )
-                                    .max(1.0);
+                                    let unidades_base =
+                                        pedir_f64("Unidades de tu compra normal por ciclo", 1.0)
+                                            .max(1.0);
                                     let unidades_mayor = pedir_f64(
                                         "Unidades del paquete al por mayor",
                                         (unidades_base * 2.0).max(2.0),
                                     )
                                     .max(unidades_base);
-                                    let precio_mayor =
-                                        pedir_f64("Precio total del paquete al por mayor ($)", monto_fijo)
-                                            .max(0.0);
+                                    let precio_mayor = pedir_f64(
+                                        "Precio total del paquete al por mayor ($)",
+                                        monto_fijo,
+                                    )
+                                    .max(0.0);
 
                                     let costo_unit_base = monto_fijo / unidades_base;
                                     let costo_unit_mayor = if unidades_mayor > 0.0 {
@@ -11863,10 +11855,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                                         "       • Costo unitario normal: {}",
                                         format!("${:.4}", costo_unit_base).yellow()
                                     );
-                                    println!(
-                                        "       • Costo unitario mayor : {}",
-                                        unit_mayor_str
-                                    );
+                                    println!("       • Costo unitario mayor : {}", unit_mayor_str);
                                     println!(
                                         "       • Total normal equivalente: {}",
                                         format!("${:.2}", total_base_equiv).yellow()
@@ -11893,8 +11882,8 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                                         format!("${:.2}", monto_equiv_mensual).cyan()
                                     );
 
-                                    monto_propuesto = monto_equiv_mensual;
-                                }
+                                    monto_equiv_mensual
+                                };
 
                                 let usar_desc = TermConfirm::new()
                                     .with_prompt("  ¿Aplicar este monto propuesto al gasto fijo?")
@@ -11907,10 +11896,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                             }
 
                             let creado = registrar_o_actualizar_gasto_fijo_recurrente(
-                                state,
-                                &accion,
-                                &categoria,
-                                monto_fijo,
+                                state, &accion, &categoria, monto_fijo,
                             );
                             if creado {
                                 println!(
@@ -12004,10 +11990,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                 "⚠️".yellow(),
                 "Análisis de impacto financiero:".bold()
             );
-            println!(
-                "     La categoría '{}' es un gasto no esencial.",
-                categoria
-            );
+            println!("     La categoría '{}' es un gasto no esencial.", categoria);
             println!(
                 "     Con ${:.2} de deuda activa, cada gasto en ocio o caprichos",
                 deuda_total
@@ -12023,11 +12006,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
                 }
             }
             println!();
-            println!(
-                "  {} {}",
-                "🔴".red(),
-                "Sugerencia importante:".bold().red()
-            );
+            println!("  {} {}", "🔴".red(), "Sugerencia importante:".bold().red());
             println!("     Si continúas con este tipo de gastos, tu nivel de");
             println!("     endeudamiento seguirá creciendo y no lograrás saldar tus deudas.");
             if ratio_deuda > 6.0 {
@@ -12038,11 +12017,7 @@ fn menu_asesor_registrar_accion(state: &mut AppState) {
             }
         } else if impacto.valor() < 0.0 {
             println!();
-            println!(
-                "  {} {}",
-                "⚠️".yellow(),
-                "Impacto en tus finanzas:".bold()
-            );
+            println!("  {} {}", "⚠️".yellow(), "Impacto en tus finanzas:".bold());
             println!("     Esta decisión tuvo un resultado negativo mientras tienes deudas.");
             println!("     Cada acción con impacto negativo eleva tu riesgo financiero.");
             if disponible < 0.0 {
@@ -12123,7 +12098,11 @@ fn rastreador_actualizar_saldo(state: &mut AppState) {
             let flujo = ingreso - gastos - pagos_min;
             if ingreso > 0.01 {
                 println!();
-                println!("  {} Proyección con flujo libre ${:.2}/mes:", "📈".cyan(), flujo);
+                println!(
+                    "  {} Proyección con flujo libre ${:.2}/mes:",
+                    "📈".cyan(),
+                    flujo
+                );
                 for meses in [1u32, 3, 6, 12] {
                     let proyectado = v + flujo * meses as f64;
                     let tag = if proyectado >= 0.0 {
@@ -12214,7 +12193,10 @@ fn menu_asesor_rastreador(state: &mut AppState) {
                         String::new()
                     };
                     let vencida_display = if d.esta_vencida() {
-                        format!("${:.2} ⚠", d.deuda_vencida_total()).yellow().bold().to_string()
+                        format!("${:.2} ⚠", d.deuda_vencida_total())
+                            .yellow()
+                            .bold()
+                            .to_string()
                     } else {
                         "-".dimmed().to_string()
                     };
@@ -12396,9 +12378,15 @@ fn rastreador_ver_deudas_vencidas(state: &mut AppState) {
                 println!();
                 println!("  📌 {}", deuda.nombre.bold());
                 println!("    Saldo actual: ${:.2}", deuda.saldo_actual());
-                println!("    Pago normal del mes: ${:.2}", deuda.pago_total_mensual());
+                println!(
+                    "    Pago normal del mes: ${:.2}",
+                    deuda.pago_total_mensual()
+                );
                 println!("    Deuda vencida: ${:.2}", deuda.deuda_vencida_total());
-                println!("    Pago exigible para ponerte al día: ${:.2}", deuda.pago_exigible_total_proximo_mes());
+                println!(
+                    "    Pago exigible para ponerte al día: ${:.2}",
+                    deuda.pago_exigible_total_proximo_mes()
+                );
                 if deuda.tiene_escrow_configurado() {
                     println!("    P&I vencido: ${:.2}", vencida_pi);
                     println!("    Escrow vencido: ${:.2}", vencida_escrow);
@@ -13212,7 +13200,10 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
                 println!("    ⏳ Esta deuda quedará pendiente hasta registrar la primera cuota.");
             }
 
-            println!("    🔒 Préstamo fijo al {:.1}% — interés compuesto, no varía.", tasa);
+            println!(
+                "    🔒 Préstamo fijo al {:.1}% — interés compuesto, no varía.",
+                tasa
+            );
         }
         _ => {
             // Tarjeta de crédito — no obligatoria, con tasa y pago mínimo
@@ -13268,68 +13259,68 @@ fn rastreador_agregar_deuda(state: &mut AppState) {
                 nombre
             );
         } else {
-        let cargar_hist = TermConfirm::new()
-            .with_prompt("  ¿Quieres cargar meses anteriores de pago?")
-            .default(false)
-            .interact()
-            .unwrap_or(false);
+            let cargar_hist = TermConfirm::new()
+                .with_prompt("  ¿Quieres cargar meses anteriores de pago?")
+                .default(false)
+                .interact()
+                .unwrap_or(false);
 
-        if cargar_hist {
-            println!();
-            println!("  📅 Ingresa los datos mes por mes (vacío para terminar).");
-            let mut saldo_actual = saldo_efectivo;
+            if cargar_hist {
+                println!();
+                println!("  📅 Ingresa los datos mes por mes (vacío para terminar).");
+                let mut saldo_actual = saldo_efectivo;
 
-            loop {
-                let mes = pedir_texto_opcional(&format!(
-                    "Mes {} (ej: Ene 2021, vacío=terminar)",
-                    deuda.historial.len() + 1
-                ));
-                if mes.is_empty() {
-                    break;
+                loop {
+                    let mes = pedir_texto_opcional(&format!(
+                        "Mes {} (ej: Ene 2021, vacío=terminar)",
+                        deuda.historial.len() + 1
+                    ));
+                    if mes.is_empty() {
+                        break;
+                    }
+
+                    let saldo_inicio = pedir_f64(
+                        &format!("  Saldo al inicio del mes (${:.2} sugerido)", saldo_actual),
+                        saldo_actual,
+                    );
+                    let pago = if deuda.tiene_escrow_configurado() {
+                        pedir_f64(
+                            &format!(
+                                "  Pago P&I realizado (${:.2} sugerido)",
+                                deuda.pago_pi_mensual()
+                            ),
+                            deuda.pago_pi_mensual(),
+                        )
+                    } else {
+                        pedir_f64("  Pago realizado ($)", 0.0)
+                    };
+                    let pago_escrow = if deuda.tiene_escrow_configurado() {
+                        pedir_f64(
+                            &format!(
+                                "  Pago Escrow realizado (${:.2} sugerido)",
+                                deuda.escrow_mensual
+                            ),
+                            deuda.escrow_mensual,
+                        )
+                    } else {
+                        0.0
+                    };
+                    let cargos = pedir_f64("  Nuevos cargos/compras ($)", 0.0);
+
+                    deuda.registrar_mes_con_escrow(&mes, saldo_inicio, pago, pago_escrow, cargos);
+                    saldo_actual = deuda.saldo_actual();
+
+                    println!(
+                        "    {} {} — Saldo final: ${:.2}",
+                        "✓".green(),
+                        mes,
+                        saldo_actual
+                    );
                 }
-
-                let saldo_inicio = pedir_f64(
-                    &format!("  Saldo al inicio del mes (${:.2} sugerido)", saldo_actual),
-                    saldo_actual,
-                );
-                let pago = if deuda.tiene_escrow_configurado() {
-                    pedir_f64(
-                        &format!(
-                            "  Pago P&I realizado (${:.2} sugerido)",
-                            deuda.pago_pi_mensual()
-                        ),
-                        deuda.pago_pi_mensual(),
-                    )
-                } else {
-                    pedir_f64("  Pago realizado ($)", 0.0)
-                };
-                let pago_escrow = if deuda.tiene_escrow_configurado() {
-                    pedir_f64(
-                        &format!(
-                            "  Pago Escrow realizado (${:.2} sugerido)",
-                            deuda.escrow_mensual
-                        ),
-                        deuda.escrow_mensual,
-                    )
-                } else {
-                    0.0
-                };
-                let cargos = pedir_f64("  Nuevos cargos/compras ($)", 0.0);
-
-                deuda.registrar_mes_con_escrow(&mes, saldo_inicio, pago, pago_escrow, cargos);
-                saldo_actual = deuda.saldo_actual();
-
-                println!(
-                    "    {} {} — Saldo final: ${:.2}",
-                    "✓".green(),
-                    mes,
-                    saldo_actual
-                );
+            } else {
+                let hoy = Local::now().format("%b %Y").to_string();
+                deuda.registrar_mes(&hoy, saldo_efectivo, 0.0, 0.0);
             }
-        } else {
-            let hoy = Local::now().format("%b %Y").to_string();
-            deuda.registrar_mes(&hoy, saldo_efectivo, 0.0, 0.0);
-        }
         }
     } else {
         // Pago corriente: registrar un mes con su monto como saldo
@@ -13404,7 +13395,10 @@ fn rastreador_registrar_mes(state: &mut AppState) {
         if es_corriente {
             // Pago corriente: el saldo siempre es el monto fijo, se paga completo
             let pago = pedir_f64(
-                &format!("Pago realizado (${:.2} exigible)", pago_exigible_total.max(pago_min)),
+                &format!(
+                    "Pago realizado (${:.2} exigible)",
+                    pago_exigible_total.max(pago_min)
+                ),
                 pago_exigible_total.max(pago_min),
             );
             state.asesor.rastreador.deudas[idx].registrar_mes(&mes, pago_min, pago, 0.0);
@@ -13436,12 +13430,18 @@ fn rastreador_registrar_mes(state: &mut AppState) {
             let escrow_ref = d.escrow_mensual;
             let pago = if tiene_escrow {
                 pedir_f64(
-                    &format!("Pago P&I realizado (${:.2} exigible)", pago_exigible_pi.max(pago_pi_ref)),
+                    &format!(
+                        "Pago P&I realizado (${:.2} exigible)",
+                        pago_exigible_pi.max(pago_pi_ref)
+                    ),
                     pago_exigible_pi.max(pago_pi_ref),
                 )
             } else {
                 pedir_f64(
-                    &format!("Pago realizado (${:.2} exigible)", pago_exigible_pi.max(pago_pi_ref)),
+                    &format!(
+                        "Pago realizado (${:.2} exigible)",
+                        pago_exigible_pi.max(pago_pi_ref)
+                    ),
                     pago_exigible_pi.max(pago_pi_ref),
                 )
             };
@@ -14247,7 +14247,10 @@ fn rastreador_proyeccion_pagos_liquidez(state: &AppState) {
     println!("    • Meses siguientes: cubrir al menos el pago del mes");
     println!("    • No agregar cargos nuevos ni atrasos adicionales");
     println!();
-    println!("  Saldo disponible actual: {}", format!("${:.2}", saldo_banco).green());
+    println!(
+        "  Saldo disponible actual: {}",
+        format!("${:.2}", saldo_banco).green()
+    );
     println!(
         "  Ingreso mensual bruto confirmado: {}",
         format!("${:.2}", ingreso_mensual_bruto).green()
@@ -14292,7 +14295,8 @@ fn rastreador_proyeccion_pagos_liquidez(state: &AppState) {
             .iter()
             .map(|d| {
                 if mes_idx == 0 {
-                    d.pago_exigible_total_proximo_mes().max(d.pago_total_mensual())
+                    d.pago_exigible_total_proximo_mes()
+                        .max(d.pago_total_mensual())
                 } else {
                     d.pago_total_mensual()
                 }
@@ -14965,15 +14969,17 @@ fn rastreador_editar_pago(state: &mut AppState) {
             println!();
 
             let nuevo_pago = pedir_f64(
-                &format!("Nuevo pago P&I (actual ${:.2}, exigible ${:.2})", actual.pago, pago_exigible_pi),
+                &format!(
+                    "Nuevo pago P&I (actual ${:.2}, exigible ${:.2})",
+                    actual.pago, pago_exigible_pi
+                ),
                 pago_exigible_pi.max(actual.pago),
             );
             let nuevo_pago_escrow = if d.tiene_escrow_configurado() {
                 pedir_f64(
                     &format!(
                         "Nuevo pago Escrow (actual ${:.2}, exigible ${:.2})",
-                        actual.pago_escrow,
-                        pago_exigible_escrow
+                        actual.pago_escrow, pago_exigible_escrow
                     ),
                     pago_exigible_escrow.max(actual.pago_escrow),
                 )
@@ -15089,7 +15095,9 @@ fn rastreador_ingreso(state: &mut AppState) {
             println!(
                 "  Estado de residencia: {}{}",
                 rast.estado_residencia.to_uppercase().cyan().bold(),
-                if omniplanner::ml::advisor::RastreadorDeudas::estado_sin_impuesto(&rast.estado_residencia) {
+                if omniplanner::ml::advisor::RastreadorDeudas::estado_sin_impuesto(
+                    &rast.estado_residencia
+                ) {
                     format!(" {} sin impuesto estatal sobre ingresos", "(✓)".green())
                 } else {
                     String::new()
@@ -15144,7 +15152,9 @@ fn rastreador_ingreso(state: &mut AppState) {
             );
             println!(
                 "  Retención mensual estimada: {} (fed {} | est {} | SS {} | Med {})",
-                format!("${:.2}", rast.retencion_total_mensual_completa()).yellow().bold(),
+                format!("${:.2}", rast.retencion_total_mensual_completa())
+                    .yellow()
+                    .bold(),
                 format!("${:.2}", rast.retencion_federal_mensual_total()).magenta(),
                 format!("${:.2}", rast.retencion_estatal_mensual_total()).yellow(),
                 format!("${:.2}", rast.retencion_social_security_mensual_total()).cyan(),
@@ -15152,7 +15162,9 @@ fn rastreador_ingreso(state: &mut AppState) {
             );
             println!(
                 "  Total mensual confirmado neto: {}",
-                format!("${:.2}", rast.ingreso_mensual_confirmado_neto()).green().bold()
+                format!("${:.2}", rast.ingreso_mensual_confirmado_neto())
+                    .green()
+                    .bold()
             );
             println!(
                 "  Total mensual no confirmado: {}",
@@ -15172,8 +15184,8 @@ fn rastreador_ingreso(state: &mut AppState) {
                     !ing.permitir_allotment_cero
                         && ((ing.paga_impuesto_federal()
                             && ing.allotment_federal_pct_efectivo() <= 0.0)
-                        || (ing.paga_impuesto_estatal()
-                            && ing.allotment_estatal_pct_efectivo() <= 0.0))
+                            || (ing.paga_impuesto_estatal()
+                                && ing.allotment_estatal_pct_efectivo() <= 0.0))
                 })
                 .collect();
             if !ingresos_allotment_pendiente.is_empty() {
@@ -15283,7 +15295,11 @@ fn rastreador_configurar_estado_residencia(state: &mut AppState) {
         println!(
             "  Estado actual: {}{}",
             actual.to_uppercase().cyan().bold(),
-            if sin_impuesto { "  (sin impuesto estatal sobre ingresos)" } else { "" }
+            if sin_impuesto {
+                "  (sin impuesto estatal sobre ingresos)"
+            } else {
+                ""
+            }
         );
     }
     println!();
@@ -15321,7 +15337,9 @@ fn rastreador_calcular_aporte_minimo_allotment(state: &AppState) {
         .rastreador
         .ingresos
         .iter()
-        .filter(|ing| ing.confirmado && (ing.paga_impuesto_federal() || ing.paga_impuesto_estatal()))
+        .filter(|ing| {
+            ing.confirmado && (ing.paga_impuesto_federal() || ing.paga_impuesto_estatal())
+        })
         .collect();
 
     if ingresos_taxeables_confirmados.is_empty() {
@@ -15367,8 +15385,14 @@ fn rastreador_calcular_aporte_minimo_allotment(state: &AppState) {
     let brecha_mensual = (objetivo_total_mensual - actual_total_mensual).max(0.0);
 
     println!();
-    println!("  Base mensual taxeable federal: {}", format!("${:.2}", base_federal_mensual).magenta());
-    println!("  Base mensual taxeable estatal: {}", format!("${:.2}", base_estatal_mensual).yellow());
+    println!(
+        "  Base mensual taxeable federal: {}",
+        format!("${:.2}", base_federal_mensual).magenta()
+    );
+    println!(
+        "  Base mensual taxeable estatal: {}",
+        format!("${:.2}", base_estatal_mensual).yellow()
+    );
     println!();
     println!(
         "  Objetivo mínimo mensual: {} (fed {} + est {})",
@@ -15396,7 +15420,9 @@ fn rastreador_calcular_aporte_minimo_allotment(state: &AppState) {
     }
     println!(
         "  Objetivo mínimo anual: {}",
-        format!("${:.2}", objetivo_total_mensual * 12.0).yellow().bold()
+        format!("${:.2}", objetivo_total_mensual * 12.0)
+            .yellow()
+            .bold()
     );
 
     pausa();
@@ -15466,13 +15492,19 @@ fn rastreador_agregar_ingreso(state: &mut AppState) {
     let estado_residencia = state.asesor.rastreador.estado_residencia.clone();
     println!();
     if !estado_residencia.is_empty() {
-        println!("  Estado de residencia: {}", estado_residencia.to_uppercase().cyan());
+        println!(
+            "  Estado de residencia: {}",
+            estado_residencia.to_uppercase().cyan()
+        );
     }
-    let estado_trabajo = match pedir_texto("  Estado donde realizas este trabajo (siglas, vacío=mismo que residencia)") {
+    let estado_trabajo = match pedir_texto(
+        "  Estado donde realizas este trabajo (siglas, vacío=mismo que residencia)",
+    ) {
         Some(s) if !s.trim().is_empty() => s.trim().to_uppercase(),
         _ => estado_residencia.clone(),
     };
-    if !estado_trabajo.is_empty() && !estado_residencia.is_empty()
+    if !estado_trabajo.is_empty()
+        && !estado_residencia.is_empty()
         && estado_trabajo != estado_residencia.to_uppercase()
     {
         println!(
@@ -15538,12 +15570,15 @@ fn rastreador_agregar_ingreso(state: &mut AppState) {
     });
     println!(
         "  {} Ingreso agregado: {} — ${:.2} ({}) [{} | {}]",
-
         "✓".green(),
         concepto,
         monto,
         freq.nombre(),
-        if confirmado { "confirmado" } else { "no confirmado" },
+        if confirmado {
+            "confirmado"
+        } else {
+            "no confirmado"
+        },
         if impuesto_federal || impuesto_estatal {
             if impuesto_federal && impuesto_estatal {
                 "federal + estatal"
@@ -15559,8 +15594,7 @@ fn rastreador_agregar_ingreso(state: &mut AppState) {
     if impuesto_federal || impuesto_estatal {
         println!(
             "    Retención estimada: fed {:.2}% | est {:.2}%",
-            allotment_federal_pct,
-            allotment_estatal_pct
+            allotment_federal_pct, allotment_estatal_pct
         );
     }
     if retener_social_security || retener_medicare {
@@ -15636,7 +15670,11 @@ fn rastreador_editar_ingreso(state: &mut AppState) {
     let impuesto_federal = TermConfirm::new()
         .with_prompt(format!(
             "  ¿Paga impuesto federal? (actual: {})",
-            if ing.paga_impuesto_federal() { "sí" } else { "no" }
+            if ing.paga_impuesto_federal() {
+                "sí"
+            } else {
+                "no"
+            }
         ))
         .default(ing.paga_impuesto_federal())
         .interact()
@@ -15644,7 +15682,11 @@ fn rastreador_editar_ingreso(state: &mut AppState) {
     let impuesto_estatal = TermConfirm::new()
         .with_prompt(format!(
             "  ¿Paga impuesto estatal? (actual: {})",
-            if ing.paga_impuesto_estatal() { "sí" } else { "no" }
+            if ing.paga_impuesto_estatal() {
+                "sí"
+            } else {
+                "no"
+            }
         ))
         .default(ing.paga_impuesto_estatal())
         .interact()
@@ -15674,7 +15716,11 @@ fn rastreador_editar_ingreso(state: &mut AppState) {
     let retener_social_security = TermConfirm::new()
         .with_prompt(format!(
             "  ¿Retener Social Security? (actual: {})",
-            if ing.retener_social_security { "sí" } else { "no" }
+            if ing.retener_social_security {
+                "sí"
+            } else {
+                "no"
+            }
         ))
         .default(ing.retener_social_security)
         .interact()
@@ -15721,7 +15767,11 @@ fn rastreador_editar_ingreso(state: &mut AppState) {
         TermConfirm::new()
             .with_prompt(format!(
                 "  ¿Mantener 0% de impuestos/allotment intencionalmente? (actual: {})",
-                if ing.permitir_allotment_cero { "sí" } else { "no" }
+                if ing.permitir_allotment_cero {
+                    "sí"
+                } else {
+                    "no"
+                }
             ))
             .default(ing.permitir_allotment_cero)
             .interact()
@@ -15733,16 +15783,26 @@ fn rastreador_editar_ingreso(state: &mut AppState) {
     let estado_residencia = state.asesor.rastreador.estado_residencia.clone();
     let actual_estado_trabajo = state.asesor.rastreador.ingresos[idx].estado_trabajo.clone();
     let prompt_estado = if actual_estado_trabajo.is_empty() {
-        format!("  Estado donde realizas este trabajo (vacío=mismo que residencia {})",
-            if estado_residencia.is_empty() { "no configurado".to_string() } else { estado_residencia.to_uppercase() })
+        format!(
+            "  Estado donde realizas este trabajo (vacío=mismo que residencia {})",
+            if estado_residencia.is_empty() {
+                "no configurado".to_string()
+            } else {
+                estado_residencia.to_uppercase()
+            }
+        )
     } else {
-        format!("  Estado de trabajo (actual: {}, vacío=mantener)", actual_estado_trabajo.to_uppercase())
+        format!(
+            "  Estado de trabajo (actual: {}, vacío=mantener)",
+            actual_estado_trabajo.to_uppercase()
+        )
     };
     let estado_trabajo = match pedir_texto(&prompt_estado) {
         Some(s) if !s.trim().is_empty() => s.trim().to_uppercase(),
         _ => actual_estado_trabajo.clone(),
     };
-    if !estado_trabajo.is_empty() && !estado_residencia.is_empty()
+    if !estado_trabajo.is_empty()
+        && !estado_residencia.is_empty()
         && estado_trabajo != estado_residencia.trim().to_uppercase()
     {
         println!(

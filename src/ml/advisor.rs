@@ -1226,7 +1226,7 @@ impl IngresoRastreado {
     }
 
     pub fn paga_impuesto_federal(&self) -> bool {
-        self.impuesto_federal || (self.taxeable && !self.impuesto_federal && !self.impuesto_estatal)
+        self.impuesto_federal || self.taxeable && !self.impuesto_estatal
     }
 
     pub fn paga_impuesto_estatal(&self) -> bool {
@@ -1469,7 +1469,10 @@ impl RastreadorDeudas {
 
     /// Pagos mínimos mensuales totales de todas las deudas activas.
     pub fn pagos_minimos_mensuales(&self) -> f64 {
-        self.deudas_activas().iter().map(|d| d.pago_pi_mensual()).sum()
+        self.deudas_activas()
+            .iter()
+            .map(|d| d.pago_pi_mensual())
+            .sum()
     }
 
     /// Flujo de caja libre por mes: ingreso − pagos mínimos de deudas.

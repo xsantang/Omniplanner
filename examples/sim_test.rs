@@ -11,8 +11,6 @@ fn main() {
         }
         let tipo = if d.es_pago_corriente() {
             "CORRIENTE"
-        } else if d.es_pago_fijo() {
-            "FIJO"
         } else {
             "DEUDA"
         };

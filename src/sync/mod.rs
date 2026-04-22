@@ -3,9 +3,13 @@
 //! Submódulos: Google Calendar, Google Drive, GitHub Gist, Email SMTP
 //! y servidor web local para dashboard.
 
+#[cfg(feature = "desktop")]
 pub mod calendario;
+#[cfg(feature = "desktop")]
 pub mod correo;
+#[cfg(feature = "desktop")]
 pub mod drive;
+#[cfg(feature = "desktop")]
 pub mod gist;
 pub mod servidor;
 
