@@ -21,6 +21,11 @@ static APP: std::sync::LazyLock<Mutex<Option<AppState>>> =
 static DATA_DIR: std::sync::LazyLock<Mutex<Option<PathBuf>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+/// Permite a storage.rs consultar el data_dir configurado por Android
+pub fn data_dir() -> Result<std::sync::MutexGuard<'static, Option<PathBuf>>, String> {
+    DATA_DIR.lock().map_err(|e| format!("Lock error: {}", e))
+}
+
 // ── Helpers FFI ──────────────────────────────────────────────
 
 fn c_str_to_string(ptr: *const c_char) -> String {
@@ -109,15 +114,29 @@ fn process_command(input: &str) -> String {
         "agenda_hoy" => cmd_agenda_hoy(),
         "agenda_mes" => cmd_agenda_mes(&req.params),
         "evento_crear" => cmd_evento_crear(&req.params),
+        "evento_actualizar" => cmd_evento_actualizar(&req.params),
         "evento_eliminar" => cmd_evento_eliminar(&req.params),
 
         // ── Presupuesto ──
         "presupuesto_resumen" => cmd_presupuesto_resumen(),
+        "presupuesto_detalle" => cmd_presupuesto_detalle(&req.params),
         "presupuesto_agregar" => cmd_presupuesto_agregar(&req.params),
+        "presupuesto_actualizar_linea" => cmd_presupuesto_actualizar_linea(&req.params),
+        "presupuesto_eliminar_linea" => cmd_presupuesto_eliminar_linea(&req.params),
+
+        // ── Deudas ──
+        "deudas_listar" => cmd_deudas_listar(),
+        "deuda_agregar" => cmd_deuda_agregar(&req.params),
+        "deuda_actualizar" => cmd_deuda_actualizar(&req.params),
+        "deuda_eliminar" => cmd_deuda_eliminar(&req.params),
+        "deuda_registrar_pago" => cmd_deuda_registrar_pago(&req.params),
+        "ingreso_agregar" => cmd_ingreso_agregar(&req.params),
+        "ingreso_eliminar" => cmd_ingreso_eliminar(&req.params),
 
         // ── Contraseñas ──
         "contras_listar" => cmd_contras_listar(),
         "contras_guardar" => cmd_contras_guardar(&req.params),
+        "contras_actualizar" => cmd_contras_actualizar(&req.params),
         "contras_generar" => cmd_contras_generar(&req.params),
         "contras_verificar" => cmd_contras_verificar(&req.params),
         "contras_eliminar" => cmd_contras_eliminar(&req.params),
@@ -125,6 +144,7 @@ fn process_command(input: &str) -> String {
         // ── Memoria ──
         "memoria_listar" => cmd_memoria_listar(),
         "memoria_agregar" => cmd_memoria_agregar(&req.params),
+        "memoria_eliminar" => cmd_memoria_eliminar(&req.params),
 
         // ── Sync ──
         "sync_push" => cmd_sync_push(),
@@ -476,6 +496,39 @@ fn cmd_evento_crear(params: &Value) -> String {
     })
 }
 
+fn cmd_evento_actualizar(params: &Value) -> String {
+    use chrono::{NaiveDate, NaiveTime};
+
+    with_state(|state| {
+        let id = params.get("id").and_then(|v| v.as_str()).ok_or("Falta 'id'")?;
+        let evento = state
+            .agenda
+            .eventos
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or("Evento no encontrado")?;
+
+        if let Some(t) = params.get("titulo").and_then(|v| v.as_str()) {
+            evento.titulo = t.to_string();
+        }
+        if let Some(f) = params.get("fecha").and_then(|v| v.as_str()) {
+            if let Ok(fecha) = NaiveDate::parse_from_str(f, "%Y-%m-%d") {
+                evento.fecha = fecha;
+            }
+        }
+        if let Some(h) = params.get("hora").and_then(|v| v.as_str()) {
+            if let Ok(hora) = NaiveTime::parse_from_str(h, "%H:%M") {
+                evento.hora_inicio = hora;
+            }
+        }
+        if let Some(d) = params.get("descripcion").and_then(|v| v.as_str()) {
+            evento.descripcion = d.to_string();
+        }
+        state.guardar()?;
+        Ok("Evento actualizado")
+    })
+}
+
 fn cmd_evento_eliminar(params: &Value) -> String {
     with_state(|state| {
         let id = params
@@ -572,18 +625,416 @@ fn cmd_presupuesto_agregar(params: &Value) -> String {
             .find(|m| m.mes == mes_str)
             .unwrap();
 
+        let pagado = params.get("pagado").and_then(|v| v.as_bool()).unwrap_or(false);
+        let fecha_limite = params.get("fecha_limite").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let notas = params.get("notas").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let saldo_total_deuda = params.get("saldo_total_deuda").and_then(|v| v.as_f64());
+
         mes.lineas.push(LineaPresupuesto {
             nombre,
             categoria,
             monto,
-            pagado: true,
-            fecha_limite: String::new(),
-            notas: String::new(),
-            saldo_total_deuda: None,
+            pagado,
+            fecha_limite,
+            notas,
+            saldo_total_deuda,
         });
 
         state.guardar()?;
         Ok("Línea agregada al presupuesto")
+    })
+}
+
+fn cmd_presupuesto_detalle(params: &Value) -> String {
+    use crate::ml::presupuesto_cero::Categoria;
+
+    with_state(|state| {
+        let mes_str = params
+            .get("mes")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'mes'")?;
+        let mes = state
+            .presupuesto
+            .meses
+            .iter()
+            .find(|m| m.mes == mes_str)
+            .ok_or("Mes no encontrado")?;
+
+        let lineas: Vec<Value> = mes
+            .lineas
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let cat_str = match l.categoria {
+                    Categoria::Ingreso => "ingreso",
+                    Categoria::GastoFijo => "gasto_fijo",
+                    Categoria::GastoVariable => "gasto_variable",
+                    Categoria::PagoDeuda => "pago_deuda",
+                    Categoria::Ahorro => "ahorro",
+                };
+                serde_json::json!({
+                    "indice": i,
+                    "nombre": l.nombre,
+                    "monto": l.monto,
+                    "categoria": cat_str,
+                    "pagado": l.pagado,
+                    "fecha_limite": l.fecha_limite,
+                    "notas": l.notas,
+                    "saldo_total_deuda": l.saldo_total_deuda,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "mes": mes_str, "lineas": lineas }))
+    })
+}
+
+fn cmd_presupuesto_eliminar_linea(params: &Value) -> String {
+    with_state(|state| {
+        let mes_str = params
+            .get("mes")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'mes'")?;
+        let indice = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+
+        let mes = state
+            .presupuesto
+            .meses
+            .iter_mut()
+            .find(|m| m.mes == mes_str)
+            .ok_or("Mes no encontrado")?;
+
+        if indice >= mes.lineas.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        mes.lineas.remove(indice);
+        state.guardar()?;
+        Ok("Línea eliminada")
+    })
+}
+
+fn cmd_presupuesto_actualizar_linea(params: &Value) -> String {
+    use crate::ml::presupuesto_cero::Categoria;
+
+    with_state(|state| {
+        let mes_str = params.get("mes").and_then(|v| v.as_str()).ok_or("Falta 'mes'")?;
+        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+
+        let mes = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes_str)
+            .ok_or("Mes no encontrado")?;
+        if indice >= mes.lineas.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        let linea = &mut mes.lineas[indice];
+
+        if let Some(n) = params.get("nombre").and_then(|v| v.as_str()) {
+            linea.nombre = n.to_string();
+        }
+        if let Some(m) = params.get("monto").and_then(|v| v.as_f64()) {
+            linea.monto = m;
+        }
+        if let Some(cat) = params.get("categoria").and_then(|v| v.as_str()) {
+            linea.categoria = match cat {
+                "ingreso" => Categoria::Ingreso,
+                "gasto_fijo" => Categoria::GastoFijo,
+                "pago_deuda" => Categoria::PagoDeuda,
+                "ahorro" => Categoria::Ahorro,
+                _ => Categoria::GastoVariable,
+            };
+        }
+        if let Some(p) = params.get("pagado").and_then(|v| v.as_bool()) {
+            linea.pagado = p;
+        }
+        if let Some(f) = params.get("fecha_limite").and_then(|v| v.as_str()) {
+            linea.fecha_limite = f.to_string();
+        }
+        if let Some(n) = params.get("notas").and_then(|v| v.as_str()) {
+            linea.notas = n.to_string();
+        }
+        if let Some(s) = params.get("saldo_total_deuda").and_then(|v| v.as_f64()) {
+            linea.saldo_total_deuda = Some(s);
+        }
+        state.guardar()?;
+        Ok("Línea actualizada")
+    })
+}
+
+// ── Rastreador de Deudas ─────────────────────────────────────
+
+fn cmd_deudas_listar() -> String {
+    with_state(|state| {
+        state.asesor.rastreador.migrar_ingreso_legacy();
+        let lista: Vec<Value> = state
+            .asesor
+            .rastreador
+            .deudas
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                let tipo = if d.es_pago_corriente() {
+                    "pago_corriente"
+                } else if d.tasa_anual >= 0.01 {
+                    "deuda"
+                } else {
+                    "otro"
+                };
+                serde_json::json!({
+                    "indice": i,
+                    "nombre": d.nombre,
+                    "tasa_anual": d.tasa_anual,
+                    "pago_minimo": d.pago_minimo,
+                    "pago_pi_mensual": d.pago_pi_mensual(),
+                    "escrow_mensual": d.escrow_mensual,
+                    "pago_total_mensual": d.pago_total_mensual(),
+                    "activa": d.activa,
+                    "obligatoria": d.obligatoria,
+                    "saldo_actual": d.saldo_actual(),
+                    "enganche": d.enganche,
+                    "tipo": tipo,
+                })
+            })
+            .collect();
+        let ingresos: Vec<Value> = state
+            .asesor
+            .rastreador
+            .ingresos
+            .iter()
+            .enumerate()
+            .map(|(i, ing)| {
+                serde_json::json!({
+                    "indice": i,
+                    "concepto": ing.concepto,
+                    "monto": ing.monto,
+                    "frecuencia": ing.frecuencia.nombre(),
+                    "monto_mensual": ing.monto_mensual(),
+                    "monto_mensual_neto": ing.monto_mensual_neto(),
+                    "retencion_federal_mensual": ing.retencion_federal_mensual(),
+                    "retencion_estatal_mensual": ing.retencion_estatal_mensual(),
+                    "retencion_social_security_mensual": ing.retencion_social_security_mensual(),
+                    "retencion_medicare_mensual": ing.retencion_medicare_mensual(),
+                    "confirmado": ing.confirmado,
+                    "taxeable": ing.es_taxeable(),
+                    "impuesto_federal": ing.paga_impuesto_federal(),
+                    "impuesto_estatal": ing.paga_impuesto_estatal(),
+                    "allotment_federal_pct": ing.allotment_federal_pct_efectivo(),
+                    "allotment_estatal_pct": ing.allotment_estatal_pct_efectivo(),
+                    "retener_social_security": ing.retener_social_security,
+                    "retener_medicare": ing.retener_medicare,
+                    "permitir_allotment_cero": ing.permitir_allotment_cero,
+                    "es_beneficio_social_security": ing.es_beneficio_social_security,
+                    "beneficio_social_security_temprano": ing.beneficio_social_security_temprano,
+                    "estado_trabajo": ing.estado_trabajo,
+                })
+            })
+            .collect();
+        let ingreso = state.asesor.rastreador.ingreso_mensual_confirmado();
+        let ingreso_neto = state.asesor.rastreador.ingreso_mensual_confirmado_neto();
+        let ingreso_no_confirmado = state.asesor.rastreador.ingreso_mensual_no_confirmado();
+        let deuda_total = state.asesor.rastreador.deuda_total_actual();
+        Ok(serde_json::json!({
+            "deudas": lista,
+            "ingresos": ingresos,
+            "ingreso_mensual": ingreso,
+            "ingreso_mensual_confirmado": ingreso,
+            "ingreso_mensual_confirmado_neto": ingreso_neto,
+            "ingreso_mensual_no_confirmado": ingreso_no_confirmado,
+            "retencion_mensual_total": state.asesor.rastreador.retencion_total_mensual_completa(),
+            "deuda_total": deuda_total,
+            "estado_residencia": state.asesor.rastreador.estado_residencia,
+        }))
+    })
+}
+
+fn cmd_deuda_agregar(params: &Value) -> String {
+    use crate::ml::advisor::DeudaRastreada;
+
+    with_state(|state| {
+        let nombre = params.get("nombre").and_then(|v| v.as_str()).ok_or("Falta 'nombre'")?;
+        let tasa_anual = params.get("tasa_anual").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let pago_minimo = params.get("pago_minimo").and_then(|v| v.as_f64()).ok_or("Falta 'pago_minimo'")?;
+        let obligatoria = params.get("obligatoria").and_then(|v| v.as_bool()).unwrap_or(false);
+        let saldo_inicial = params.get("saldo_inicial").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let enganche = params.get("enganche").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let escrow_mensual = params.get("escrow_mensual").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let pago_pi_mensual = params
+            .get("pago_pi_mensual")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(pago_minimo);
+
+        let mut deuda = DeudaRastreada::nueva(nombre, tasa_anual, pago_minimo);
+        deuda.obligatoria = obligatoria;
+        deuda.enganche = enganche;
+        deuda.escrow_mensual = escrow_mensual.max(0.0);
+        deuda.principal_interes_mensual = pago_pi_mensual.max(0.0);
+
+        // Saldo efectivo = total - enganche ya pagado
+        let saldo_efectivo = (saldo_inicial - enganche).max(0.0);
+        if saldo_efectivo > 0.0 {
+            let mes = chrono::Local::now().format("%Y-%m").to_string();
+            deuda.registrar_mes(&mes, saldo_efectivo, 0.0, 0.0);
+        }
+
+        state.asesor.rastreador.agregar_deuda(deuda);
+        state.guardar()?;
+        Ok("Deuda agregada")
+    })
+}
+
+fn cmd_deuda_actualizar(params: &Value) -> String {
+    with_state(|state| {
+        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let deudas = &mut state.asesor.rastreador.deudas;
+        if indice >= deudas.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        let d = &mut deudas[indice];
+        if let Some(n) = params.get("nombre").and_then(|v| v.as_str()) { d.nombre = n.to_string(); }
+        if let Some(t) = params.get("tasa_anual").and_then(|v| v.as_f64()) { d.tasa_anual = t; }
+        if let Some(p) = params.get("pago_minimo").and_then(|v| v.as_f64()) { d.pago_minimo = p; }
+        if let Some(p) = params.get("pago_pi_mensual").and_then(|v| v.as_f64()) { d.principal_interes_mensual = p; }
+        if let Some(e) = params.get("escrow_mensual").and_then(|v| v.as_f64()) { d.escrow_mensual = e.max(0.0); }
+        if let Some(o) = params.get("obligatoria").and_then(|v| v.as_bool()) { d.obligatoria = o; }
+        if let Some(a) = params.get("activa").and_then(|v| v.as_bool()) { d.activa = a; }
+        state.guardar()?;
+        Ok("Deuda actualizada")
+    })
+}
+
+fn cmd_deuda_eliminar(params: &Value) -> String {
+    with_state(|state| {
+        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let deudas = &mut state.asesor.rastreador.deudas;
+        if indice >= deudas.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        deudas.remove(indice);
+        state.guardar()?;
+        Ok("Deuda eliminada")
+    })
+}
+
+fn cmd_deuda_registrar_pago(params: &Value) -> String {
+    with_state(|state| {
+        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        let pago = params.get("pago").and_then(|v| v.as_f64()).ok_or("Falta 'pago'")?;
+        let pago_escrow = params
+            .get("pago_escrow")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let nuevos_cargos = params.get("nuevos_cargos").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+        if indice >= state.asesor.rastreador.deudas.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+
+        let saldo = state.asesor.rastreador.deudas[indice].saldo_actual();
+        let mes = chrono::Local::now().format("%Y-%m").to_string();
+        state.asesor.rastreador.deudas[indice]
+            .registrar_mes_con_escrow(&mes, saldo, pago, pago_escrow, nuevos_cargos);
+        let nuevo_saldo = state.asesor.rastreador.deudas[indice].saldo_actual();
+
+        state.guardar()?;
+        Ok(serde_json::json!({
+            "saldo_anterior": saldo,
+            "pago": pago,
+            "pago_escrow": pago_escrow,
+            "saldo_nuevo": nuevo_saldo,
+        }))
+    })
+}
+
+fn cmd_ingreso_agregar(params: &Value) -> String {
+    use crate::ml::advisor::{FrecuenciaPago, IngresoRastreado};
+
+    with_state(|state| {
+        let concepto = params.get("concepto").and_then(|v| v.as_str()).ok_or("Falta 'concepto'")?.to_string();
+        let monto = params.get("monto").and_then(|v| v.as_f64()).ok_or("Falta 'monto'")?;
+        let freq_str = params.get("frecuencia").and_then(|v| v.as_str()).unwrap_or("mensual");
+        let confirmado = params.get("confirmado").and_then(|v| v.as_bool()).unwrap_or(true);
+        let impuesto_federal = params
+            .get("impuesto_federal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| params.get("taxeable").and_then(|v| v.as_bool()).unwrap_or(false));
+        let impuesto_estatal = params
+            .get("impuesto_estatal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let allotment_federal_pct = params
+            .get("allotment_federal_pct")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let allotment_estatal_pct = params
+            .get("allotment_estatal_pct")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let retener_social_security = params
+            .get("retener_social_security")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let retener_medicare = params
+            .get("retener_medicare")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let permitir_allotment_cero = params
+            .get("permitir_allotment_cero")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let es_beneficio_social_security = params
+            .get("es_beneficio_social_security")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let beneficio_social_security_temprano = params
+            .get("beneficio_social_security_temprano")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let estado_trabajo = params
+            .get("estado_trabajo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_uppercase();
+        let frecuencia = match freq_str {
+            "semanal" => FrecuenciaPago::Semanal,
+            "quincenal" => FrecuenciaPago::Quincenal,
+            "trimestral" => FrecuenciaPago::Trimestral,
+            "semestral" => FrecuenciaPago::Semestral,
+            "anual" => FrecuenciaPago::Anual,
+            "una_vez" => FrecuenciaPago::UnaVez,
+            _ => FrecuenciaPago::Mensual,
+        };
+        state.asesor.rastreador.ingresos.push(IngresoRastreado {
+            concepto,
+            monto,
+            frecuencia,
+            confirmado,
+            taxeable: impuesto_federal || impuesto_estatal,
+            impuesto_federal,
+            impuesto_estatal,
+            allotment_federal_pct,
+            allotment_estatal_pct,
+            retener_social_security,
+            retener_medicare,
+            permitir_allotment_cero,
+            es_beneficio_social_security,
+            beneficio_social_security_temprano,
+            estado_trabajo,
+        });
+        state.guardar()?;
+        Ok("Ingreso agregado")
+    })
+}
+
+fn cmd_ingreso_eliminar(params: &Value) -> String {
+    with_state(|state| {
+        let indice = params.get("indice").and_then(|v| v.as_u64()).ok_or("Falta 'indice'")? as usize;
+        if indice >= state.asesor.rastreador.ingresos.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        state.asesor.rastreador.ingresos.remove(indice);
+        state.guardar()?;
+        Ok("Ingreso eliminado")
     })
 }
 
@@ -633,6 +1084,30 @@ fn cmd_contras_guardar(params: &Value) -> String {
         state.contrasenias.entradas.push(entrada);
         state.guardar()?;
         Ok("Contraseña guardada")
+    })
+}
+
+fn cmd_contras_actualizar(params: &Value) -> String {
+    with_state(|state| {
+        let id = params.get("id").and_then(|v| v.as_str()).ok_or("Falta 'id'")?;
+        let entrada = state
+            .contrasenias
+            .entradas
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or("No encontrada")?;
+
+        if let Some(n) = params.get("nombre").and_then(|v| v.as_str()) {
+            entrada.nombre = n.to_string();
+        }
+        if let Some(u) = params.get("usuario").and_then(|v| v.as_str()) {
+            entrada.usuario = u.to_string();
+        }
+        if let Some(c) = params.get("clave").and_then(|v| v.as_str()) {
+            entrada.clave = c.to_string();
+        }
+        state.guardar()?;
+        Ok("Actualizada")
     })
 }
 
@@ -732,38 +1207,62 @@ fn cmd_memoria_agregar(params: &Value) -> String {
     })
 }
 
-// ── Sync ─────────────────────────────────────────────────────
-
-fn cmd_sync_push() -> String {
+fn cmd_memoria_eliminar(params: &Value) -> String {
     with_state(|state| {
-        if !state.sync.gist_configurado() {
-            return Err("Gist no configurado".to_string());
-        }
-        let json = serde_json::to_string_pretty(state).unwrap_or_default();
-        match crate::sync::gist::gist_push(&state.sync, &json) {
-            Ok(_) => Ok("Push exitoso"),
-            Err(e) => Err(format!("Error push: {}", e)),
+        let id = params.get("id").and_then(|v| v.as_str()).ok_or("Falta 'id'")?;
+        let antes = state.memoria.recuerdos.len();
+        state.memoria.recuerdos.retain(|r| r.id != id);
+        if state.memoria.recuerdos.len() < antes {
+            state.guardar()?;
+            Ok("Eliminado")
+        } else {
+            Err("Recuerdo no encontrado".to_string())
         }
     })
 }
 
+// ── Sync ─────────────────────────────────────────────────────
+
+fn cmd_sync_push() -> String {
+    #[cfg(feature = "desktop")]
+    {
+        with_state(|state| {
+            if !state.sync.gist_configurado() {
+                return Err("Gist no configurado".to_string());
+            }
+            let json = serde_json::to_string_pretty(state).unwrap_or_default();
+            match crate::sync::gist::gist_push(&state.sync, &json) {
+                Ok(_) => Ok("Push exitoso"),
+                Err(e) => Err(format!("Error push: {}", e)),
+            }
+        })
+    }
+    #[cfg(not(feature = "desktop"))]
+    err_json("Sync no disponible en esta plataforma")
+}
+
 fn cmd_sync_pull() -> String {
-    with_state(|state| {
-        if !state.sync.gist_configurado() {
-            return Err("Gist no configurado".to_string());
-        }
-        match crate::sync::gist::gist_pull(&state.sync) {
-            Ok(json) => match serde_json::from_str::<AppState>(&json) {
-                Ok(nuevo) => {
-                    *state = nuevo;
-                    state.guardar()?;
-                    Ok("Pull exitoso")
-                }
-                Err(e) => Err(format!("Error parseando datos remotos: {}", e)),
-            },
-            Err(e) => Err(format!("Error pull: {}", e)),
-        }
-    })
+    #[cfg(feature = "desktop")]
+    {
+        with_state(|state| {
+            if !state.sync.gist_configurado() {
+                return Err("Gist no configurado".to_string());
+            }
+            match crate::sync::gist::gist_pull(&state.sync) {
+                Ok(json) => match serde_json::from_str::<AppState>(&json) {
+                    Ok(nuevo) => {
+                        *state = nuevo;
+                        state.guardar()?;
+                        Ok("Pull exitoso")
+                    }
+                    Err(e) => Err(format!("Error parseando datos remotos: {}", e)),
+                },
+                Err(e) => Err(format!("Error pull: {}", e)),
+            }
+        })
+    }
+    #[cfg(not(feature = "desktop"))]
+    err_json("Sync no disponible en esta plataforma")
 }
 
 fn cmd_sync_config(params: &Value) -> String {
@@ -787,6 +1286,38 @@ fn cmd_sync_config(params: &Value) -> String {
 
 // ══════════════════════════════════════════════════════════════
 //  Tests
+// ══════════════════════════════════════════════════════════════
+//  JNI bindings para Android (feature "android")
+// ══════════════════════════════════════════════════════════════
+
+#[cfg(feature = "android")]
+mod jni_bridge {
+    use super::*;
+    use jni::objects::{JClass, JString};
+    use jni::sys::jstring;
+    use jni::JNIEnv;
+
+    /// # Safety
+    /// Llamada desde JNI — `jsonRequest` es un jstring válido.
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_omniplanner_app_OmniBridge_omni_1command(
+        mut env: JNIEnv,
+        _class: JClass,
+        json_request: JString,
+    ) -> jstring {
+        let input: String = env
+            .get_string(&json_request)
+            .map(|s| s.into())
+            .unwrap_or_default();
+
+        let result = process_command(&input);
+
+        env.new_string(result)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 
 #[cfg(test)]

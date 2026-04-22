@@ -850,10 +850,15 @@ pub struct DeudaRastreada {
     /// Pago fijo / contra entrega: no se puede fallar (renta, mortgage, carro, etc.)
     #[serde(default)]
     pub obligatoria: bool,
-    /// Meses restantes de tasa diferida (0% interés). Al llegar a 0, aplica tasa_anual.
-    /// Ejemplo: Dell a 12 meses sin intereses → meses_gracia = 6 si quedan 6 meses.
+    /// Enganche / pago inicial único (ej: 4000 de 10000 totales). Solo informativo.
     #[serde(default)]
-    pub meses_gracia: usize,
+    pub enganche: f64,
+    /// Componente mensual de escrow (seguros/impuestos). No reduce la deuda principal.
+    #[serde(default)]
+    pub escrow_mensual: f64,
+    /// Componente mensual de principal + intereses (P&I) aplicado a la deuda.
+    #[serde(default)]
+    pub principal_interes_mensual: f64,
 }
 
 /// Registro de un mes para una deuda.
@@ -862,6 +867,8 @@ pub struct MesPago {
     pub mes: String,
     pub saldo_inicio: f64,
     pub pago: f64,
+    #[serde(default)]
+    pub pago_escrow: f64,
     pub nuevos_cargos: f64,
     pub intereses: f64,
     pub saldo_final: f64,
@@ -945,22 +952,92 @@ impl DeudaRastreada {
             activa: true,
             historial: Vec::new(),
             obligatoria: false,
-            meses_gracia: 0,
+            enganche: 0.0,
+            escrow_mensual: 0.0,
+            principal_interes_mensual: pago_minimo,
         }
     }
 
-    /// ¿Está en periodo de gracia (tasa diferida a 0%)?
-    pub fn en_periodo_gracia(&self) -> bool {
-        self.meses_gracia > 0
-    }
-
-    /// Tasa efectiva actual: 0% si hay meses de gracia, tasa_anual si no.
-    pub fn tasa_efectiva(&self) -> f64 {
-        if self.meses_gracia > 0 {
-            0.0
+    /// Pago mensual que realmente ataca la deuda (principal + intereses).
+    pub fn pago_pi_mensual(&self) -> f64 {
+        if self.principal_interes_mensual > 0.01 {
+            self.principal_interes_mensual
         } else {
-            self.tasa_anual
+            self.pago_minimo.max(0.0)
         }
+    }
+
+    /// Pago total mensual (P&I + escrow), útil para flujo de caja.
+    pub fn pago_total_mensual(&self) -> f64 {
+        self.pago_pi_mensual() + self.escrow_mensual.max(0.0)
+    }
+
+    pub fn tiene_escrow_configurado(&self) -> bool {
+        self.escrow_mensual > 0.01
+    }
+
+    fn atraso_componentes_antes_de(&self, indice: usize) -> (f64, f64) {
+        let mut atraso_pi = 0.0;
+        let mut atraso_escrow = 0.0;
+
+        for mes in self.historial.iter().take(indice) {
+            if mes.saldo_inicio < 0.01 && !self.es_pago_corriente() {
+                continue;
+            }
+            atraso_pi = (atraso_pi + self.pago_pi_mensual() - mes.pago).max(0.0);
+            atraso_escrow = (atraso_escrow + self.escrow_mensual - mes.pago_escrow).max(0.0);
+        }
+
+        (atraso_pi, atraso_escrow)
+    }
+
+    pub fn pago_exigible_componentes_en_mes(&self, indice: usize) -> (f64, f64) {
+        let (atraso_pi, atraso_escrow) = self.atraso_componentes_antes_de(indice);
+        let debe_mes = self
+            .historial
+            .get(indice)
+            .map(|m| m.saldo_inicio > 0.01 || self.es_pago_corriente())
+            .unwrap_or(self.saldo_actual() > 0.01 || self.es_pago_corriente() || self.activa);
+
+        if !debe_mes {
+            return (atraso_pi, atraso_escrow);
+        }
+
+        (
+            atraso_pi + self.pago_pi_mensual(),
+            atraso_escrow + self.escrow_mensual,
+        )
+    }
+
+    pub fn pago_exigible_total_en_mes(&self, indice: usize) -> f64 {
+        let (pago_pi, pago_escrow) = self.pago_exigible_componentes_en_mes(indice);
+        pago_pi + pago_escrow
+    }
+
+    pub fn pago_exigible_componentes_proximo_mes(&self) -> (f64, f64) {
+        self.pago_exigible_componentes_en_mes(self.historial.len())
+    }
+
+    pub fn pago_exigible_total_proximo_mes(&self) -> f64 {
+        let (pago_pi, pago_escrow) = self.pago_exigible_componentes_proximo_mes();
+        pago_pi + pago_escrow
+    }
+
+    pub fn deuda_vencida_componentes(&self) -> (f64, f64) {
+        let (pago_pi, pago_escrow) = self.pago_exigible_componentes_proximo_mes();
+        (
+            (pago_pi - self.pago_pi_mensual()).max(0.0),
+            (pago_escrow - self.escrow_mensual).max(0.0),
+        )
+    }
+
+    pub fn deuda_vencida_total(&self) -> f64 {
+        let (vencido_pi, vencido_escrow) = self.deuda_vencida_componentes();
+        vencido_pi + vencido_escrow
+    }
+
+    pub fn esta_vencida(&self) -> bool {
+        self.deuda_vencida_total() > 0.01
     }
 
     /// ¿Es un pago corriente (renta, seguro, suscripción)?
@@ -975,17 +1052,11 @@ impl DeudaRastreada {
         // (ej: Navy Federal $1396 con pago $500 → deuda, no corriente)
         // Un corriente tiene saldo ≈ pago_minimo o 0 (renta, celular, etc.)
         let saldo = self.saldo_actual();
-        if self.pago_minimo > 0.01 && saldo > self.pago_minimo * 1.5 {
+        let pago_ref = self.pago_pi_mensual();
+        if pago_ref > 0.01 && saldo > pago_ref * 1.5 {
             return false;
         }
         true
-    }
-
-    /// ¿Es un pago fijo a cuotas? (préstamo a cuotas fijas, ej: Navy Federal, Unit Con Fin)
-    /// Se paga exactamente pago_minimo cada mes, sin intereses extra,
-    /// no participa en avalancha/bola de nieve.
-    pub fn es_pago_fijo(&self) -> bool {
-        self.tasa_anual < 0.01 && self.saldo_actual() > 0.01 && !self.es_pago_corriente()
     }
 
     pub fn saldo_actual(&self) -> f64 {
@@ -993,29 +1064,33 @@ impl DeudaRastreada {
     }
 
     pub fn registrar_mes(&mut self, mes: &str, saldo_inicio: f64, pago: f64, nuevos_cargos: f64) {
-        let tasa_actual = self.tasa_efectiva();
-        let tasa_mensual = tasa_actual / 100.0 / 12.0;
-        let saldo_despues_pago = (saldo_inicio - pago).max(0.0);
-        let intereses = saldo_despues_pago * tasa_mensual;
+        self.registrar_mes_con_escrow(mes, saldo_inicio, pago, 0.0, nuevos_cargos);
+    }
 
-        // Consumir un mes de gracia si aplica
-        if self.meses_gracia > 0 {
-            self.meses_gracia -= 1;
-        }
+    pub fn registrar_mes_con_escrow(
+        &mut self,
+        mes: &str,
+        saldo_inicio: f64,
+        pago_pi: f64,
+        pago_escrow: f64,
+        nuevos_cargos: f64,
+    ) {
+        let tasa_mensual = self.tasa_anual / 100.0 / 12.0;
+        let saldo_despues_pago = (saldo_inicio - pago_pi).max(0.0);
+        let intereses = saldo_despues_pago * tasa_mensual;
         let saldo_final = saldo_despues_pago + intereses + nuevos_cargos;
 
         self.historial.push(MesPago {
             mes: mes.to_string(),
             saldo_inicio,
-            pago,
+            pago: pago_pi,
+            pago_escrow: pago_escrow.max(0.0),
             nuevos_cargos,
             intereses,
             saldo_final: if saldo_final < 0.01 { 0.0 } else { saldo_final },
         });
 
-        if saldo_final < 0.01 {
-            self.activa = false;
-        }
+        self.activa = saldo_final >= 0.01;
     }
 
     /// Simula qué hubiera pasado si se hubiera pagado un monto diferente.
@@ -1043,6 +1118,7 @@ impl DeudaRastreada {
                 mes: orig.mes.clone(),
                 saldo_inicio: saldo,
                 pago,
+                pago_escrow: orig.pago_escrow,
                 nuevos_cargos: orig.nuevos_cargos,
                 intereses,
                 saldo_final: if saldo_final < 0.01 { 0.0 } else { saldo_final },
@@ -1059,13 +1135,144 @@ pub struct IngresoRastreado {
     pub concepto: String,
     pub monto: f64,
     pub frecuencia: FrecuenciaPago,
+    #[serde(default = "ingreso_confirmado_default")]
+    pub confirmado: bool,
+    #[serde(default)]
+    pub taxeable: bool,
+    #[serde(default)]
+    pub impuesto_federal: bool,
+    #[serde(default)]
+    pub impuesto_estatal: bool,
+    #[serde(default)]
+    pub allotment_federal_pct: f64,
+    #[serde(default)]
+    pub allotment_estatal_pct: f64,
+    #[serde(default)]
+    pub retener_social_security: bool,
+    #[serde(default)]
+    pub retener_medicare: bool,
+    #[serde(default)]
+    pub permitir_allotment_cero: bool,
+    #[serde(default)]
+    pub es_beneficio_social_security: bool,
+    #[serde(default)]
+    pub beneficio_social_security_temprano: bool,
+    /// Estado/territorio donde se realiza este trabajo (ej: "TX", "FL", "NY")
+    #[serde(default)]
+    pub estado_trabajo: String,
+}
+
+fn ingreso_confirmado_default() -> bool {
+    true
 }
 
 impl IngresoRastreado {
+    pub const SOCIAL_SECURITY_PCT: f64 = 6.2;
+    pub const MEDICARE_PCT: f64 = 1.45;
+
     pub fn monto_mensual(&self) -> f64 {
         self.frecuencia.a_mensual(self.monto)
     }
+
+    pub fn allotment_federal_pct_efectivo(&self) -> f64 {
+        if self.paga_impuesto_federal() {
+            self.allotment_federal_pct.max(0.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn allotment_estatal_pct_efectivo(&self) -> f64 {
+        if self.paga_impuesto_estatal() {
+            self.allotment_estatal_pct.max(0.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn retencion_federal_mensual(&self) -> f64 {
+        self.monto_mensual() * (self.allotment_federal_pct_efectivo() / 100.0)
+    }
+
+    pub fn retencion_estatal_mensual(&self) -> f64 {
+        self.monto_mensual() * (self.allotment_estatal_pct_efectivo() / 100.0)
+    }
+
+    pub fn retencion_total_mensual(&self) -> f64 {
+        self.retencion_federal_mensual()
+            + self.retencion_estatal_mensual()
+            + self.retencion_social_security_mensual()
+            + self.retencion_medicare_mensual()
+    }
+
+    pub fn monto_mensual_neto(&self) -> f64 {
+        (self.monto_mensual() - self.retencion_total_mensual()).max(0.0)
+    }
+
+    pub fn retencion_social_security_mensual(&self) -> f64 {
+        if self.retener_social_security {
+            self.monto_mensual() * (Self::SOCIAL_SECURITY_PCT / 100.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn retencion_medicare_mensual(&self) -> f64 {
+        if self.retener_medicare {
+            self.monto_mensual() * (Self::MEDICARE_PCT / 100.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn paga_impuesto_federal(&self) -> bool {
+        self.impuesto_federal || (self.taxeable && !self.impuesto_federal && !self.impuesto_estatal)
+    }
+
+    pub fn paga_impuesto_estatal(&self) -> bool {
+        self.impuesto_estatal
+    }
+
+    pub fn es_no_taxeable(&self) -> bool {
+        !self.paga_impuesto_federal() && !self.paga_impuesto_estatal()
+    }
+
+    pub fn etiqueta_confirmacion(&self) -> &'static str {
+        if self.confirmado {
+            "confirmado"
+        } else {
+            "no confirmado"
+        }
+    }
+
+    pub fn etiqueta_taxes(&self) -> &'static str {
+        match (self.paga_impuesto_federal(), self.paga_impuesto_estatal()) {
+            (true, true) => "federal + estatal",
+            (true, false) => "federal",
+            (false, true) => "estatal",
+            (false, false) => "no taxeable",
+        }
+    }
+
+    pub fn es_taxeable(&self) -> bool {
+        !self.es_no_taxeable()
+    }
+
+    pub fn normalizar_impuestos_legacy(&mut self) {
+        if self.taxeable && !self.impuesto_federal && !self.impuesto_estatal {
+            self.impuesto_federal = true;
+        }
+        if !self.paga_impuesto_federal() {
+            self.allotment_federal_pct = 0.0;
+        }
+        if !self.paga_impuesto_estatal() {
+            self.allotment_estatal_pct = 0.0;
+        }
+    }
 }
+
+/// Lista de estados de EE.UU. sin impuesto estatal sobre ingresos.
+pub const ESTADOS_SIN_IMPUESTO: &[&str] = &["AK", "FL", "NV", "SD", "TN", "TX", "WA", "WY"];
 
 /// Rastreador global de todas las deudas.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1074,6 +1281,12 @@ pub struct RastreadorDeudas {
     /// Lista de ingresos del usuario (múltiples fuentes).
     #[serde(default)]
     pub ingresos: Vec<IngresoRastreado>,
+    /// Saldo actual en banco / efectivo disponible (actualizable por el usuario).
+    #[serde(default)]
+    pub saldo_disponible: f64,
+    /// Estado/territorio de residencia del usuario (ej: "TX", "FL", "NY")
+    #[serde(default)]
+    pub estado_residencia: String,
     // ── Campos legacy para compatibilidad con datos guardados ──
     #[serde(default, alias = "ingreso_quincenal")]
     ingreso: f64,
@@ -1086,6 +1299,33 @@ fn frecuencia_ingreso_default() -> FrecuenciaPago {
 }
 
 impl RastreadorDeudas {
+    /// Retorna true si el estado dado no tiene impuesto sobre ingresos.
+    pub fn estado_sin_impuesto(estado: &str) -> bool {
+        let upper = estado.trim().to_uppercase();
+        ESTADOS_SIN_IMPUESTO.contains(&upper.as_str())
+    }
+
+    /// Retorna ingresos donde estado_trabajo difiere del estado_residencia.
+    pub fn ingresos_estado_dual(&self) -> Vec<&IngresoRastreado> {
+        if self.estado_residencia.is_empty() {
+            return vec![];
+        }
+        self.ingresos
+            .iter()
+            .filter(|ing| {
+                !ing.estado_trabajo.is_empty()
+                    && ing.estado_trabajo.trim().to_uppercase()
+                        != self.estado_residencia.trim().to_uppercase()
+            })
+            .collect()
+    }
+
+    pub fn migrar_impuestos_legacy(&mut self) {
+        for ingreso in &mut self.ingresos {
+            ingreso.normalizar_impuestos_legacy();
+        }
+    }
+
     /// Migra el ingreso legacy (campo único) a la nueva lista, si aplica.
     pub fn migrar_ingreso_legacy(&mut self) {
         if self.ingreso > 0.0 && self.ingresos.is_empty() {
@@ -1093,14 +1333,126 @@ impl RastreadorDeudas {
                 concepto: "Ingreso principal".to_string(),
                 monto: self.ingreso,
                 frecuencia: self.frecuencia_ingreso.clone(),
+                confirmado: true,
+                taxeable: false,
+                impuesto_federal: false,
+                impuesto_estatal: false,
+                allotment_federal_pct: 0.0,
+                allotment_estatal_pct: 0.0,
+                retener_social_security: false,
+                retener_medicare: false,
+                permitir_allotment_cero: false,
+                es_beneficio_social_security: false,
+                beneficio_social_security_temprano: false,
+                estado_trabajo: String::new(),
             });
             self.ingreso = 0.0;
         }
+        self.migrar_impuestos_legacy();
     }
 
     /// Total de ingresos normalizado a monto mensual.
     pub fn ingreso_mensual_total(&self) -> f64 {
-        self.ingresos.iter().map(|i| i.monto_mensual()).sum()
+        self.ingreso_mensual_confirmado()
+    }
+
+    pub fn ingreso_mensual_confirmado(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado)
+            .map(|i| i.monto_mensual())
+            .sum()
+    }
+
+    pub fn ingreso_mensual_confirmado_neto(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado)
+            .map(|i| i.monto_mensual_neto())
+            .sum()
+    }
+
+    pub fn ingreso_mensual_no_confirmado(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| !i.confirmado)
+            .map(|i| i.monto_mensual())
+            .sum()
+    }
+
+    pub fn ingreso_mensual_taxeable(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado && i.es_taxeable())
+            .map(|i| i.monto_mensual())
+            .sum()
+    }
+
+    pub fn ingreso_mensual_no_taxeable(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado && i.es_no_taxeable())
+            .map(|i| i.monto_mensual())
+            .sum()
+    }
+
+    pub fn ingreso_mensual_impuesto_federal(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado && i.paga_impuesto_federal())
+            .map(|i| i.monto_mensual())
+            .sum()
+    }
+
+    pub fn ingreso_mensual_impuesto_estatal(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado && i.paga_impuesto_estatal())
+            .map(|i| i.monto_mensual())
+            .sum()
+    }
+
+    pub fn retencion_federal_mensual_total(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado)
+            .map(|i| i.retencion_federal_mensual())
+            .sum()
+    }
+
+    pub fn retencion_estatal_mensual_total(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado)
+            .map(|i| i.retencion_estatal_mensual())
+            .sum()
+    }
+
+    pub fn retencion_total_mensual(&self) -> f64 {
+        self.retencion_federal_mensual_total() + self.retencion_estatal_mensual_total()
+    }
+
+    pub fn retencion_social_security_mensual_total(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado)
+            .map(|i| i.retencion_social_security_mensual())
+            .sum()
+    }
+
+    pub fn retencion_medicare_mensual_total(&self) -> f64 {
+        self.ingresos
+            .iter()
+            .filter(|i| i.confirmado)
+            .map(|i| i.retencion_medicare_mensual())
+            .sum()
+    }
+
+    pub fn retencion_total_mensual_completa(&self) -> f64 {
+        self.retencion_federal_mensual_total()
+            + self.retencion_estatal_mensual_total()
+            + self.retencion_social_security_mensual_total()
+            + self.retencion_medicare_mensual_total()
     }
 
     pub fn agregar_deuda(&mut self, deuda: DeudaRastreada) {
@@ -1113,6 +1465,59 @@ impl RastreadorDeudas {
 
     pub fn deudas_activas(&self) -> Vec<&DeudaRastreada> {
         self.deudas.iter().filter(|d| d.activa).collect()
+    }
+
+    /// Pagos mínimos mensuales totales de todas las deudas activas.
+    pub fn pagos_minimos_mensuales(&self) -> f64 {
+        self.deudas_activas().iter().map(|d| d.pago_pi_mensual()).sum()
+    }
+
+    /// Flujo de caja libre por mes: ingreso − pagos mínimos de deudas.
+    /// Nota: no descuenta gastos del presupuesto (esos se calculan por separado).
+    pub fn flujo_libre_mensual(&self) -> f64 {
+        self.ingreso_mensual_total() - self.pagos_minimos_mensuales()
+    }
+
+    /// Proyecta el saldo disponible en banco/efectivo en `meses` meses,
+    /// dado un flujo_extra_mensual (ingreso − gastos − pagos mínimos).
+    pub fn proyectar_saldo(&self, flujo_mensual: f64, meses: u32) -> f64 {
+        self.saldo_disponible + flujo_mensual * meses as f64
+    }
+
+    /// Meses aproximados para liquidar todas las deudas activas
+    /// dado un monto mensual de abono `abono_mensual`.
+    /// Retorna None si no es posible (abono <= intereses promedio).
+    pub fn meses_para_libertad(&self, abono_mensual: f64) -> Option<u32> {
+        let deuda = self.deuda_total_actual();
+        if deuda < 0.01 {
+            return Some(0);
+        }
+        if abono_mensual <= 0.01 {
+            return None;
+        }
+        // Estimación lineal simple (conservadora, sin interés compuesto extra)
+        let tasa_promedio: f64 = {
+            let activas = self.deudas_activas();
+            if activas.is_empty() {
+                0.0
+            } else {
+                activas.iter().map(|d| d.tasa_anual).sum::<f64>() / activas.len() as f64
+            }
+        };
+        let tasa_mensual = tasa_promedio / 100.0 / 12.0;
+        if abono_mensual <= deuda * tasa_mensual {
+            return None; // El abono no alcanza ni para cubrir intereses
+        }
+        // Fórmula de amortización: n = -ln(1 - (r*PV)/PMT) / ln(1+r)
+        if tasa_mensual < 1e-9 {
+            return Some((deuda / abono_mensual).ceil() as u32);
+        }
+        let n = -(1.0 - (tasa_mensual * deuda) / abono_mensual).ln() / (1.0 + tasa_mensual).ln();
+        if n.is_finite() && n > 0.0 {
+            Some(n.ceil() as u32)
+        } else {
+            None
+        }
     }
 
     /// Diagnóstico completo: analiza todos los meses de todas las deudas.
@@ -1132,7 +1537,7 @@ impl RastreadorDeudas {
             }
             let si = d.historial.first().unwrap().saldo_inicio;
             let sf = d.historial.last().unwrap().saldo_final;
-            let tp: f64 = d.historial.iter().map(|m| m.pago).sum();
+            let tp: f64 = d.historial.iter().map(|m| m.pago + m.pago_escrow).sum();
             let tc: f64 = d.historial.iter().map(|m| m.nuevos_cargos).sum();
             let ti: f64 = d.historial.iter().map(|m| m.intereses).sum();
 
@@ -1223,7 +1628,7 @@ impl RastreadorDeudas {
                 };
 
                 // Solo registrar errores y pagos excelentes significativos
-                let recomendado = (interes_del_saldo * 2.0).max(d.pago_minimo);
+                let recomendado = (interes_del_saldo * 2.0).max(d.pago_pi_mensual());
                 match &error {
                     ErrorPago::PagoCorrecto => {}
                     _ => {
@@ -1256,7 +1661,7 @@ impl RastreadorDeudas {
                 let meses_pago_parcial = d
                     .historial
                     .iter()
-                    .filter(|m| m.pago > 0.0 && m.pago < d.pago_minimo * 0.95)
+                    .filter(|m| m.pago > 0.0 && m.pago < d.pago_pi_mensual() * 0.95)
                     .count();
                 if meses_sin_pago > 0 {
                     recomendaciones.push(format!(
@@ -1266,8 +1671,8 @@ impl RastreadorDeudas {
                 }
                 if meses_pago_parcial > 0 {
                     recomendaciones.push(format!(
-                        "⚠️  '{}' es PAGO FIJO y tuvo {} mes(es) con pago parcial. Debe pagarse en su totalidad (${:.2}).",
-                        d.nombre, meses_pago_parcial, d.pago_minimo
+                        "⚠️  '{}' es PAGO FIJO y tuvo {} mes(es) con pago parcial. Debe cubrir al menos P&I (${:.2}).",
+                        d.nombre, meses_pago_parcial, d.pago_pi_mensual()
                     ));
                 }
             }
@@ -1495,7 +1900,7 @@ impl RastreadorDeudas {
             .deudas
             .iter()
             .filter(|d| d.activa && d.es_pago_corriente())
-            .map(|d| (d.nombre.clone(), d.pago_minimo))
+            .map(|d| (d.nombre.clone(), d.pago_total_mensual()))
             .collect();
         let total_gastos_fijos: f64 = gastos_fijos.iter().map(|(_, m)| *m).sum();
 
@@ -1508,10 +1913,8 @@ impl RastreadorDeudas {
                 nombre: d.nombre.clone(),
                 saldo: d.saldo_actual(),
                 tasa_anual: d.tasa_anual,
-                pago_minimo: d.pago_minimo,
+                pago_minimo: d.pago_pi_mensual(),
                 liquidada_mes: None,
-                meses_gracia: d.meses_gracia,
-                pago_fijo: d.es_pago_fijo(),
                 obligatoria: d.obligatoria,
             })
             .collect();
@@ -1579,12 +1982,10 @@ impl RastreadorDeudas {
                 }
             }
 
-            // Paso 2: Distribuir sobrante según estrategia
-            // Primero a deudas con interés (avalancha/bola de nieve),
-            // luego si sobra, a pagos fijos (tasa 0) para liquidarlos antes.
+            // Paso 2: Distribuir sobrante según estrategia (avalancha/bola de nieve)
             if disponible > 0.01 {
                 let mut indices_vivas: Vec<usize> = (0..n)
-                    .filter(|&i| deudas[i].liquidada_mes.is_none() && !deudas[i].pago_fijo)
+                    .filter(|&i| deudas[i].liquidada_mes.is_none())
                     .collect();
 
                 if estrategia_bola_nieve {
@@ -1627,44 +2028,6 @@ impl RastreadorDeudas {
                 }
             }
 
-            // Paso 2b: Si aún sobra dinero, pagar extra a pagos fijos (tasa 0%)
-            // para liquidarlos más rápido en vez de dejar dinero inerte.
-            if disponible > 0.01 {
-                let mut indices_fijos: Vec<usize> = (0..n)
-                    .filter(|&i| deudas[i].liquidada_mes.is_none() && deudas[i].pago_fijo)
-                    .collect();
-                // Bola de nieve: menor saldo primero
-                indices_fijos.sort_by(|&a, &b| {
-                    deudas[a]
-                        .saldo
-                        .partial_cmp(&deudas[b].saldo)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                for &idx in &indices_fijos {
-                    if disponible < 0.01 {
-                        break;
-                    }
-                    let d = &deudas[idx];
-                    let ya_pagado = pagos_mes
-                        .iter()
-                        .find(|(nm, _)| *nm == d.nombre)
-                        .map(|(_, p)| *p)
-                        .unwrap_or(0.0);
-                    let max_extra = (d.saldo - ya_pagado).max(0.0);
-                    let extra = max_extra.min(disponible);
-                    if extra > 0.01 {
-                        if let Some(entry) = pagos_mes
-                            .iter_mut()
-                            .find(|(nm, _)| *nm == deudas[idx].nombre)
-                        {
-                            entry.1 += extra;
-                        }
-                        disponible -= extra;
-                    }
-                }
-            }
-
             // Paso 3: Aplicar pagos e intereses
             let mut saldos_mes: Vec<(String, f64)> = Vec::new();
             let mut liquidadas_este_mes: Vec<String> = Vec::new();
@@ -1681,19 +2044,9 @@ impl RastreadorDeudas {
                     .map(|(_, p)| *p)
                     .unwrap_or(0.0);
                 let saldo_post_pago = (d.saldo - pago).max(0.0);
-                let tasa_efectiva = if d.meses_gracia > 0 {
-                    0.0
-                } else {
-                    d.tasa_anual
-                };
-                let tasa_mensual = tasa_efectiva / 100.0 / 12.0;
+                let tasa_mensual = d.tasa_anual / 100.0 / 12.0;
                 let interes = saldo_post_pago * tasa_mensual;
                 d.saldo = saldo_post_pago + interes;
-
-                // Consumir mes de gracia
-                if d.meses_gracia > 0 {
-                    d.meses_gracia -= 1;
-                }
 
                 total_pagado += pago;
                 total_intereses += interes;
@@ -1762,13 +2115,13 @@ impl RastreadorDeudas {
             .deudas
             .iter()
             .filter(|d| d.activa && d.es_pago_corriente())
-            .map(|d| d.pago_minimo)
+            .map(|d| d.pago_total_mensual())
             .sum();
         let min_deudas: f64 = self
             .deudas
             .iter()
             .filter(|d| d.activa && !d.es_pago_corriente() && d.saldo_actual() > 0.01)
-            .map(|d| d.pago_minimo)
+            .map(|d| d.pago_pi_mensual())
             .sum();
         let deuda_total: f64 = self
             .deudas
@@ -1840,9 +2193,6 @@ struct DeudaSimulada {
     tasa_anual: f64,
     pago_minimo: f64,
     liquidada_mes: Option<usize>,
-    meses_gracia: usize,
-    /// Pago fijo obligatorio: no participa en avalancha/bola de nieve.
-    pago_fijo: bool,
     /// Deuda obligatoria (hipoteca, carro, etc.) — se paga primero.
     obligatoria: bool,
 }
