@@ -1788,11 +1788,21 @@ pub fn rastreador_simulacion_libertad(state: &AppState) {
     println!("  📋 Deudas a liquidar: {}", deudas_reales.len());
     for d in &deudas_reales {
         let tag = if d.obligatoria { " 🔒" } else { "" };
+        let pago_str = if d.tiene_escrow_configurado() {
+            format!(
+                "${:.2} (P&I ${:.2} + Escrow ${:.2})",
+                d.pago_total_mensual(),
+                d.pago_pi_mensual(),
+                d.escrow_mensual
+            )
+        } else {
+            format!("${:.2}", d.pago_pi_mensual())
+        };
         println!(
-            "     • {} — Saldo: {} | Pago: ${:.2} | Tasa: {:.1}%{}",
+            "     • {} — Saldo: {} | Pago: {} | Tasa: {:.1}%{}",
             d.nombre,
             format!("${:.2}", d.saldo_actual()).red(),
-            d.pago_minimo,
+            pago_str,
             d.tasa_anual,
             tag,
         );
