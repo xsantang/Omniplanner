@@ -1,9 +1,22 @@
 /target
 *.o
 *.pdb
+*.rcgu.o
+test_load*
 hoy
 client_secret*.json
 credentials.json
 token.json
 29032026
 hoy
+
+# Android build artifacts
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/build/
+android/local.properties
+android/app/src/main/jniLibs/
+
+# Web build artifacts (generados por wasm-bindgen)
+web/pkg/

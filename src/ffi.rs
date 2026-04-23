@@ -3,7 +3,9 @@
 //  Toda la comunicación es JSON string in → JSON string out
 // ══════════════════════════════════════════════════════════════
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::ffi::{CStr, CString};
+#[cfg(not(target_arch = "wasm32"))]
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -26,8 +28,15 @@ pub fn data_dir() -> Result<std::sync::MutexGuard<'static, Option<PathBuf>>, Str
     DATA_DIR.lock().map_err(|e| format!("Lock error: {}", e))
 }
 
+/// Expone el slot global del estado para otros módulos (p.ej. `wasm.rs`).
+#[cfg(feature = "web")]
+pub(crate) fn app_slot() -> Option<&'static Mutex<Option<AppState>>> {
+    Some(&APP)
+}
+
 // ── Helpers FFI ──────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn c_str_to_string(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -38,6 +47,7 @@ fn c_str_to_string(ptr: *const c_char) -> String {
         .to_string()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn string_to_c(s: String) -> *mut c_char {
     CString::new(s).unwrap_or_default().into_raw()
 }
@@ -76,6 +86,7 @@ struct Request {
 
 /// # Safety
 /// `json_request` debe ser un puntero válido a C string UTF-8.
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn omni_command(json_request: *const c_char) -> *mut c_char {
     let input = c_str_to_string(json_request);
@@ -85,6 +96,7 @@ pub unsafe extern "C" fn omni_command(json_request: *const c_char) -> *mut c_cha
 
 /// # Safety
 /// Libera la memoria de un string devuelto por omni_command.
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub unsafe extern "C" fn omni_free(ptr: *mut c_char) {
     if !ptr.is_null() {
@@ -92,7 +104,7 @@ pub unsafe extern "C" fn omni_free(ptr: *mut c_char) {
     }
 }
 
-fn process_command(input: &str) -> String {
+pub(crate) fn process_command(input: &str) -> String {
     let req: Request = match serde_json::from_str(input) {
         Ok(r) => r,
         Err(e) => return err_json(&format!("JSON inválido: {}", e)),
@@ -103,6 +115,8 @@ fn process_command(input: &str) -> String {
         "init" => cmd_init(&req.params),
         "guardar" => cmd_guardar(),
         "dashboard" => cmd_dashboard(),
+        "version" => cmd_version(),
+        "buscar" => cmd_buscar(&req.params),
 
         // ── Tareas ──
         "tareas_listar" => cmd_tareas_listar(),
@@ -146,6 +160,32 @@ fn process_command(input: &str) -> String {
         "memoria_agregar" => cmd_memoria_agregar(&req.params),
         "memoria_eliminar" => cmd_memoria_eliminar(&req.params),
 
+        // ── Canvas (board de ideas) ──
+        "canvas_listar" => cmd_canvas_listar(),
+        "canvas_crear" => cmd_canvas_crear(&req.params),
+        "canvas_detalle" => cmd_canvas_detalle(&req.params),
+        "canvas_agregar_nota" => cmd_canvas_agregar_nota(&req.params),
+        "canvas_agregar_lista" => cmd_canvas_agregar_lista(&req.params),
+        "canvas_eliminar_elemento" => cmd_canvas_eliminar_elemento(&req.params),
+        "canvas_eliminar" => cmd_canvas_eliminar(&req.params),
+
+        // ── Diagramas ──
+        "diagrama_listar" => cmd_diagrama_listar(),
+        "diagrama_crear" => cmd_diagrama_crear(&req.params),
+        "diagrama_detalle" => cmd_diagrama_detalle(&req.params),
+        "diagrama_agregar_nodo" => cmd_diagrama_agregar_nodo(&req.params),
+        "diagrama_conectar" => cmd_diagrama_conectar(&req.params),
+        "diagrama_eliminar" => cmd_diagrama_eliminar(&req.params),
+        "diagrama_exportar_mermaid" => cmd_diagrama_exportar_mermaid(&req.params),
+
+        // ── Mapper (codificación) ──
+        "mapper_codificar" => cmd_mapper_codificar(&req.params),
+        "mapper_decodificar" => cmd_mapper_decodificar(&req.params),
+
+        // ── VCS (snapshots del estado) ──
+        "vcs_commit" => cmd_vcs_commit(&req.params),
+        "vcs_log" => cmd_vcs_log(),
+
         // ── Sync ──
         "sync_push" => cmd_sync_push(),
         "sync_pull" => cmd_sync_pull(),
@@ -160,32 +200,50 @@ fn process_command(input: &str) -> String {
 // ══════════════════════════════════════════════════════════════
 
 fn cmd_init(params: &Value) -> String {
-    let ruta = params
-        .get("data_dir")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let dir = if ruta.is_empty() {
-        dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("omniplanner")
-    } else {
-        PathBuf::from(ruta)
-    };
-
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return err_json(&format!("No se pudo crear directorio: {}", e));
+    #[cfg(target_arch = "wasm32")]
+    {
+        // En WASM no hay filesystem: si `params.data` trae un JSON, lo cargamos.
+        let estado_inicial = params.get("data").and_then(|v| v.as_str()).unwrap_or("");
+        let state = if estado_inicial.is_empty() {
+            AppState::new()
+        } else {
+            match AppState::cargar_desde_json(estado_inicial) {
+                Ok(s) => s,
+                Err(e) => return err_json(&format!("Error cargando datos: {}", e)),
+            }
+        };
+        *APP.lock().unwrap() = Some(state);
+        ok_json("Omniplanner inicializado (web)")
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ruta = params
+            .get("data_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
-    *DATA_DIR.lock().unwrap() = Some(dir);
+        let dir = if ruta.is_empty() {
+            dirs::data_local_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("omniplanner")
+        } else {
+            PathBuf::from(ruta)
+        };
 
-    let state = match AppState::cargar() {
-        Ok(s) => s,
-        Err(e) => return err_json(&format!("Error cargando datos: {}", e)),
-    };
-    *APP.lock().unwrap() = Some(state);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return err_json(&format!("No se pudo crear directorio: {}", e));
+        }
 
-    ok_json("Omniplanner inicializado")
+        *DATA_DIR.lock().unwrap() = Some(dir);
+
+        let state = match AppState::cargar() {
+            Ok(s) => s,
+            Err(e) => return err_json(&format!("Error cargando datos: {}", e)),
+        };
+        *APP.lock().unwrap() = Some(state);
+
+        ok_json("Omniplanner inicializado")
+    }
 }
 
 fn cmd_guardar() -> String {
@@ -1386,6 +1444,501 @@ fn cmd_sync_config(params: &Value) -> String {
         Ok(serde_json::json!({
             "gist_configurado": state.sync.gist_configurado(),
             "auto_sync": state.sync.auto_sync,
+        }))
+    })
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Sistema — versión / búsqueda global
+// ══════════════════════════════════════════════════════════════
+
+fn cmd_version() -> String {
+    let plataforma = if cfg!(feature = "android") {
+        "android"
+    } else if cfg!(feature = "desktop") {
+        "desktop"
+    } else {
+        "lib"
+    };
+    ok_json(serde_json::json!({
+        "nombre": "omniplanner",
+        "version": env!("CARGO_PKG_VERSION"),
+        "plataforma": plataforma,
+    }))
+}
+
+fn cmd_buscar(params: &Value) -> String {
+    with_state(|state| {
+        let q = params
+            .get("q")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'q'")?
+            .to_lowercase();
+        if q.trim().is_empty() {
+            return Err("Consulta vacía".to_string());
+        }
+        let contiene = |s: &str| s.to_lowercase().contains(&q);
+
+        let tareas: Vec<Value> = state
+            .tasks
+            .tareas
+            .iter()
+            .filter(|t| contiene(&t.titulo) || contiene(&t.descripcion))
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id,
+                    "titulo": t.titulo,
+                    "fecha": t.fecha.to_string(),
+                })
+            })
+            .collect();
+
+        let eventos: Vec<Value> = state
+            .agenda
+            .eventos
+            .iter()
+            .filter(|e| contiene(&e.titulo) || contiene(&e.descripcion))
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "titulo": e.titulo,
+                    "fecha": e.fecha.to_string(),
+                })
+            })
+            .collect();
+
+        let recuerdos: Vec<Value> = state
+            .memoria
+            .recuerdos
+            .iter()
+            .filter(|r| contiene(&r.contenido))
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.id,
+                    "contenido": r.contenido,
+                })
+            })
+            .collect();
+
+        let contrasenias: Vec<Value> = state
+            .contrasenias
+            .entradas
+            .iter()
+            .filter(|e| contiene(&e.nombre) || contiene(&e.usuario))
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "nombre": e.nombre,
+                    "usuario": e.usuario,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "q": q,
+            "tareas": tareas,
+            "eventos": eventos,
+            "recuerdos": recuerdos,
+            "contrasenias": contrasenias,
+        }))
+    })
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Canvas — board de ideas
+// ══════════════════════════════════════════════════════════════
+
+fn cmd_canvas_listar() -> String {
+    with_state(|state| {
+        let lista: Vec<Value> = state
+            .canvases
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                serde_json::json!({
+                    "indice": i,
+                    "nombre": c.nombre,
+                    "ancho": c.ancho,
+                    "alto": c.alto,
+                    "elementos": c.total_elementos(),
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "canvases": lista }))
+    })
+}
+
+fn cmd_canvas_crear(params: &Value) -> String {
+    use crate::canvas::Canvas;
+    with_state(|state| {
+        let nombre = params
+            .get("nombre")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'nombre'")?
+            .to_string();
+        let ancho = params.get("ancho").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+        let alto = params.get("alto").and_then(|v| v.as_u64()).unwrap_or(768) as u32;
+        state.canvases.push(Canvas::new(nombre, ancho, alto));
+        state.guardar()?;
+        Ok(serde_json::json!({ "indice": state.canvases.len() - 1 }))
+    })
+}
+
+fn cmd_canvas_detalle(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let c = state.canvases.get(idx).ok_or("Canvas no encontrado")?;
+        Ok(serde_json::to_value(c).unwrap())
+    })
+}
+
+fn cmd_canvas_agregar_nota(params: &Value) -> String {
+    use crate::canvas::Elemento;
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let contenido = params
+            .get("contenido")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'contenido'")?
+            .to_string();
+        let color = params
+            .get("color")
+            .and_then(|v| v.as_str())
+            .unwrap_or("amarillo")
+            .to_string();
+        let c = state.canvases.get_mut(idx).ok_or("Canvas no encontrado")?;
+        let elem = Elemento::nota(contenido, color);
+        let id = elem.id.clone();
+        c.agregar_elemento(elem);
+        state.guardar()?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+fn cmd_canvas_agregar_lista(params: &Value) -> String {
+    use crate::canvas::Elemento;
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let contenido = params
+            .get("contenido")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'contenido'")?
+            .to_string();
+        let color = params
+            .get("color")
+            .and_then(|v| v.as_str())
+            .unwrap_or("azul")
+            .to_string();
+        let c = state.canvases.get_mut(idx).ok_or("Canvas no encontrado")?;
+        let elem = Elemento::lista(contenido, color);
+        let id = elem.id.clone();
+        c.agregar_elemento(elem);
+        state.guardar()?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+fn cmd_canvas_eliminar_elemento(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'id'")?;
+        let c = state.canvases.get_mut(idx).ok_or("Canvas no encontrado")?;
+        if c.eliminar_elemento(id) {
+            state.guardar()?;
+            Ok("Elemento eliminado")
+        } else {
+            Err("Elemento no encontrado".to_string())
+        }
+    })
+}
+
+fn cmd_canvas_eliminar(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        if idx >= state.canvases.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        state.canvases.remove(idx);
+        state.guardar()?;
+        Ok("Canvas eliminado")
+    })
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Diagramas
+// ══════════════════════════════════════════════════════════════
+
+fn tipo_diagrama_from_str(s: &str) -> crate::diagrams::TipoDiagrama {
+    use crate::diagrams::TipoDiagrama;
+    match s {
+        "algoritmo" => TipoDiagrama::Algoritmo,
+        "proceso" => TipoDiagrama::Proceso,
+        "datos_flujo" | "datos" => TipoDiagrama::DatosFlujo,
+        "libre" => TipoDiagrama::Libre,
+        _ => TipoDiagrama::Flujo,
+    }
+}
+
+fn tipo_nodo_from_str(s: &str) -> crate::diagrams::TipoNodo {
+    use crate::diagrams::TipoNodo;
+    match s {
+        "inicio" => TipoNodo::Inicio,
+        "fin" => TipoNodo::Fin,
+        "decision" => TipoNodo::Decision,
+        "entrada_salida" | "es" => TipoNodo::EntradaSalida,
+        "conector" => TipoNodo::Conector,
+        "subproceso" => TipoNodo::Subproceso,
+        "dato" => TipoNodo::Dato,
+        _ => TipoNodo::Proceso,
+    }
+}
+
+fn cmd_diagrama_listar() -> String {
+    with_state(|state| {
+        let lista: Vec<Value> = state
+            .diagramas
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                serde_json::json!({
+                    "indice": i,
+                    "nombre": d.nombre,
+                    "nodos": d.nodos.len(),
+                    "conexiones": d.conexiones.len(),
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "diagramas": lista }))
+    })
+}
+
+fn cmd_diagrama_crear(params: &Value) -> String {
+    use crate::diagrams::Diagrama;
+    with_state(|state| {
+        let nombre = params
+            .get("nombre")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'nombre'")?
+            .to_string();
+        let tipo = params
+            .get("tipo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("flujo");
+        state
+            .diagramas
+            .push(Diagrama::new(nombre, tipo_diagrama_from_str(tipo)));
+        state.guardar()?;
+        Ok(serde_json::json!({ "indice": state.diagramas.len() - 1 }))
+    })
+}
+
+fn cmd_diagrama_detalle(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let d = state.diagramas.get(idx).ok_or("Diagrama no encontrado")?;
+        Ok(serde_json::to_value(d).unwrap())
+    })
+}
+
+fn cmd_diagrama_agregar_nodo(params: &Value) -> String {
+    use crate::diagrams::Nodo;
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let tipo = params
+            .get("tipo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("proceso");
+        let etiqueta = params
+            .get("etiqueta")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'etiqueta'")?
+            .to_string();
+        let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let y = params.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let d = state.diagramas.get_mut(idx).ok_or("Diagrama no encontrado")?;
+        let id = d.agregar_nodo(Nodo::new(tipo_nodo_from_str(tipo), etiqueta, x, y));
+        state.guardar()?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+fn cmd_diagrama_conectar(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let origen = params
+            .get("origen")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'origen'")?
+            .to_string();
+        let destino = params
+            .get("destino")
+            .and_then(|v| v.as_str())
+            .ok_or("Falta 'destino'")?
+            .to_string();
+        let etiqueta = params
+            .get("etiqueta")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let tipo_con = match params.get("tipo").and_then(|v| v.as_str()).unwrap_or("linea") {
+            "flecha" => crate::diagrams::TipoConexion::Flecha,
+            "condicional" => crate::diagrams::TipoConexion::Condicional(
+                etiqueta.clone().unwrap_or_default(),
+            ),
+            _ => crate::diagrams::TipoConexion::LineaRecta,
+        };
+        let d = state.diagramas.get_mut(idx).ok_or("Diagrama no encontrado")?;
+        d.conectar(&origen, &destino, tipo_con, etiqueta);
+        state.guardar()?;
+        Ok("Conexión creada")
+    })
+}
+
+fn cmd_diagrama_eliminar(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        if idx >= state.diagramas.len() {
+            return Err("Índice fuera de rango".to_string());
+        }
+        state.diagramas.remove(idx);
+        state.guardar()?;
+        Ok("Diagrama eliminado")
+    })
+}
+
+fn cmd_diagrama_exportar_mermaid(params: &Value) -> String {
+    with_state(|state| {
+        let idx = params
+            .get("indice")
+            .and_then(|v| v.as_u64())
+            .ok_or("Falta 'indice'")? as usize;
+        let d = state.diagramas.get(idx).ok_or("Diagrama no encontrado")?;
+        Ok(serde_json::json!({ "mermaid": d.exportar_mermaid() }))
+    })
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Mapper — codificar / decodificar
+// ══════════════════════════════════════════════════════════════
+
+fn cmd_mapper_codificar(params: &Value) -> String {
+    use crate::mapper::{Codificacion, Mapper};
+    let datos = match params.get("datos").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return err_json("Falta 'datos'"),
+    };
+    let formato = params
+        .get("formato")
+        .and_then(|v| v.as_str())
+        .unwrap_or("base64");
+    let cod = match formato {
+        "hex" => Codificacion::Hex,
+        "binario" => Codificacion::Binario,
+        "utf8" => Codificacion::Utf8,
+        "json" => Codificacion::Json,
+        "csv" => Codificacion::Csv,
+        _ => Codificacion::Base64,
+    };
+    ok_json(serde_json::json!({
+        "formato": formato,
+        "resultado": Mapper::codificar(datos, &cod),
+    }))
+}
+
+fn cmd_mapper_decodificar(params: &Value) -> String {
+    use crate::mapper::Mapper;
+    let datos = match params.get("datos").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return err_json("Falta 'datos'"),
+    };
+    let formato = params
+        .get("formato")
+        .and_then(|v| v.as_str())
+        .unwrap_or("hex");
+    let resultado = match formato {
+        "hex" => Mapper::decodificar_hex(datos),
+        _ => return err_json("Formato de decodificación no soportado (use 'hex')"),
+    };
+    match resultado {
+        Some(texto) => ok_json(serde_json::json!({
+            "formato": formato,
+            "resultado": texto,
+        })),
+        None => err_json("No se pudo decodificar"),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  VCS — snapshots del estado
+// ══════════════════════════════════════════════════════════════
+
+fn cmd_vcs_commit(params: &Value) -> String {
+    with_state(|state| {
+        let mensaje = params
+            .get("mensaje")
+            .and_then(|v| v.as_str())
+            .unwrap_or("commit")
+            .to_string();
+        let autor = params
+            .get("autor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("omniplanner")
+            .to_string();
+        let datos = serde_json::to_string(&*state).map_err(|e| e.to_string())?;
+        let id = state.vcs.commit(datos, mensaje, autor);
+        state.guardar()?;
+        Ok(serde_json::json!({ "id": id }))
+    })
+}
+
+fn cmd_vcs_log() -> String {
+    with_state(|state| {
+        let log: Vec<Value> = state
+            .vcs
+            .log()
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "hash": s.hash,
+                    "mensaje": s.mensaje,
+                    "autor": s.autor,
+                    "timestamp": s.timestamp.to_string(),
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "rama_actual": state.vcs.rama_actual,
+            "snapshots": log,
         }))
     })
 }

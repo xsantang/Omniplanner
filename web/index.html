@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Omniplanner · Web</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #1e293b;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --ok: #4ade80;
+            --err: #f87171;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        header {
+            padding: 16px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        header h1 { font-size: 1.2rem; margin: 0; }
+        header .pill {
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #334155;
+            color: var(--muted);
+        }
+        main {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 16px;
+            display: grid;
+            gap: 16px;
+        }
+        .card {
+            background: var(--panel);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid #334155;
+        }
+        .card h2 {
+            margin: 0 0 12px;
+            font-size: 1rem;
+            color: var(--accent);
+        }
+        textarea, input, button {
+            font: inherit;
+            background: #0b1220;
+            color: var(--text);
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 8px 10px;
+            width: 100%;
+        }
+        textarea { min-height: 120px; font-family: ui-monospace, monospace; }
+        button {
+            cursor: pointer;
+            background: var(--accent);
+            color: #0b1220;
+            border: none;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+        button.secondary { background: #334155; color: var(--text); }
+        pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+        .status { font-size: 0.85rem; color: var(--muted); }
+        .status.ok { color: var(--ok); }
+        .status.err { color: var(--err); }
+        @media (min-width: 640px) {
+            main { grid-template-columns: 1fr 1fr; }
+            .full { grid-column: 1 / -1; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Omniplanner</h1>
+        <span class="pill" id="version">cargando…</span>
+    </header>
+
+    <main>
+        <section class="card full">
+            <h2>Consola de acciones</h2>
+            <p class="status">
+                Mismo contrato que el FFI nativo: JSON <code>{action, params}</code>.
+                El estado se persiste automáticamente en <code>localStorage</code>.
+            </p>
+            <textarea id="req">{
+  "action": "dashboard"
+}</textarea>
+            <button id="run">Enviar</button>
+            <button id="clear" class="secondary">Limpiar estado local</button>
+        </section>
+
+        <section class="card full">
+            <h2>Respuesta</h2>
+            <pre id="res">—</pre>
+        </section>
+
+        <section class="card">
+            <h2>Acciones rápidas</h2>
+            <button class="secondary" data-action='{"action":"dashboard"}'>dashboard</button>
+            <button class="secondary" data-action='{"action":"tareas_listar"}'>tareas_listar</button>
+            <button class="secondary" data-action='{"action":"agenda_hoy"}'>agenda_hoy</button>
+            <button class="secondary" data-action='{"action":"deudas_listar"}'>deudas_listar</button>
+            <button class="secondary" data-action='{"action":"canvas_listar"}'>canvas_listar</button>
+            <button class="secondary" data-action='{"action":"diagrama_listar"}'>diagrama_listar</button>
+            <button class="secondary" data-action='{"action":"mapper_codificar","params":{"datos":"hola","formato":"base64"}}'>mapper base64</button>
+        </section>
+
+        <section class="card">
+            <h2>Crear tarea</h2>
+            <input id="t-titulo" placeholder="Título de la tarea" />
+            <button id="t-crear">Crear tarea</button>
+        </section>
+    </main>
+
+    <script type="module">
+        import init, { omni_command, omni_import_state, omni_export_state, omni_version }
+            from "./pkg/omniplanner.js";
+
+        const STORE_KEY = "omniplanner_state";
+        const $ = (id) => document.getElementById(id);
+
+        function run(obj) {
+            const req = typeof obj === "string" ? obj : JSON.stringify(obj);
+            const raw = omni_command(req);
+            try {
+                return JSON.parse(raw);
+            } catch {
+                return { ok: false, error: "Respuesta no-JSON", raw };
+            }
+        }
+
+        function persistir() {
+            const json = omni_export_state();
+            if (json) localStorage.setItem(STORE_KEY, json);
+        }
+
+        async function main() {
+            await init();
+            $("version").textContent = "v" + omni_version();
+
+            // Inicializar con estado previo si existe
+            const previo = localStorage.getItem(STORE_KEY);
+            run({ action: "init", params: previo ? { data: previo } : {} });
+
+            $("run").addEventListener("click", () => {
+                const raw = $("req").value;
+                const res = run(raw);
+                $("res").textContent = JSON.stringify(res, null, 2);
+                persistir();
+            });
+
+            $("clear").addEventListener("click", () => {
+                localStorage.removeItem(STORE_KEY);
+                run({ action: "init", params: {} });
+                $("res").textContent = "Estado local borrado.";
+            });
+
+            document.querySelectorAll("button[data-action]").forEach((b) => {
+                b.addEventListener("click", () => {
+                    $("req").value = JSON.stringify(JSON.parse(b.dataset.action), null, 2);
+                    $("run").click();
+                });
+            });
+
+            $("t-crear").addEventListener("click", () => {
+                const titulo = $("t-titulo").value.trim();
+                if (!titulo) return;
+                const res = run({ action: "tarea_crear", params: { titulo } });
+                $("res").textContent = JSON.stringify(res, null, 2);
+                $("t-titulo").value = "";
+                persistir();
+            });
+        }
+
+        main().catch((e) => {
+            $("res").textContent = "Error inicializando WASM: " + e;
+        });
+    </script>
+</body>
+</html>

@@ -1,7 +1,15 @@
 //! Control de versiones tipo Git — commits, ramas e historial.
 //!
+//! Expone dos APIs:
+//!
+//! - [`DataVcs`] — historial en memoria sobre *strings* (útil para snapshots
+//!   serializados del estado de omniplanner). Rápido, sin E/S.
+//! - [`repo::Repo`] — source control real sobre archivos, persistido en
+//!   `.omnivcs/` dentro del directorio de trabajo (estilo Git minimalista).
+//!
 //! Cada [`Snapshot`] almacena el estado serializado con hash SHA-256.
-//! [`DataVcs`] gestiona ramas y permite checkout entre ellas.
+
+pub mod repo;
 
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};

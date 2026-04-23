@@ -6,15 +6,40 @@ description = "Suite todo-en-uno: tareas, agenda, escritura a mano, diagramas, s
 
 [lib]
 name = "omniplanner"
-crate-type = ["lib"]
+# "lib" para uso nativo (tests, desktop) y "cdylib" para que Android pueda
+# cargar libomniplanner.so vía JNI. Ambos conviven sin problema.
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "omniplanner"
+path = "src/main.rs"
+# El binario CLI solo tiene sentido en escritorio; en Android usamos la lib.
+required-features = ["desktop"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
-dirs = "5"
 sha2 = "0.10"
+# CSPRNG portable (desktop, android y wasm vía feature "js").
+getrandom = "0.2"
+
+# Criptografía: simétrica autenticada, derivación de clave desde contraseña,
+# firma Ed25519, intercambio X25519 y RSA-4096 (OAEP + PSS).
+aes-gcm = "0.10"
+argon2 = "0.5"
+ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+hkdf = "0.12"
+pkcs8 = { version = "0.10", features = ["pem"] }
+zeroize = { version = "1", features = ["derive"] }
+base64 = "0.22"
+
+# Escritorio / Android (en web no existe sistema de archivos clásico)
+dirs = { version = "5", optional = true }
 
 # CLI / Desktop (solo main.rs)
 colored = { version = "2", optional = true }
@@ -29,7 +54,27 @@ rust_xlsxwriter = { version = "0.94.0", optional = true }
 # Android
 jni = { version = "0.21", optional = true }
 
+# Web (WASM)
+wasm-bindgen = { version = "0.2", optional = true }
+
+# Para que uuid::Uuid::new_v4() funcione en wasm32
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["v4", "js"] }
+getrandom = { version = "0.2", features = ["js"] }
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+
 [features]
 default = ["desktop"]
-desktop = ["dep:colored", "dep:dialoguer", "dep:console", "dep:ureq", "dep:lettre", "dep:open", "dep:calamine", "dep:rust_xlsxwriter"]
-android = ["dep:jni"]
+desktop = [
+    "dep:dirs",
+    "dep:colored",
+    "dep:dialoguer",
+    "dep:console",
+    "dep:ureq",
+    "dep:lettre",
+    "dep:open",
+    "dep:calamine",
+    "dep:rust_xlsxwriter",
+]
+android = ["dep:dirs", "dep:jni"]
+web = ["dep:wasm-bindgen"]

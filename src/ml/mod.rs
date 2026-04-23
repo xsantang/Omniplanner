@@ -21,11 +21,13 @@ pub mod svm;
 
 // Re-exports para conveniencia
 pub use advisor::{
-    AlmacenAsesor, AnalisisDeuda, CategoriaEscenario, ComparacionRapida, CorteBancario,
-    CriterioDecision, DeudaRastreada, DiagnosticoGlobal, DiagnosticoMes, DiccionarioAcciones,
-    ErrorPago, Escenario, FrecuenciaPago, ImpactoAccion, IngresoRastreado, MatrizDecision, MesPago,
-    MesSimulado, MetaAhorro, Movimiento, Presupuesto, RastreadorDeudas, RegistroAsesor,
-    ResumenDeuda, SimulacionLibertad, TipoRegistro,
+    AhorroPagoExtra, AlmacenAsesor, AnalisisDeuda, CategoriaEscenario, ComparacionPlanes,
+    ComparacionRapida, CorteBancario, CriterioDecision, DecisionPago, DeudaRastreada,
+    DiagnosticoGlobal, DiagnosticoMes, DiccionarioAcciones, ErrorPago, Escenario, EstadoDeudaUi,
+    EstrategiaLibertad, FrecuenciaPago, AjusteMensualLibertad, ImpactoAccion, IngresoRastreado,
+    MatrizDecision, MesPago, MesSimulado, MetaAhorro, Movimiento, Presupuesto, RastreadorDeudas,
+    RecomendacionPagoExtra, RegistroAsesor, ResumenDeuda, SimulacionLibertad,
+    SimulacionLiquidacion, TipoRegistro,
 };
 pub use ann::ANN;
 pub use cnn::CNN;

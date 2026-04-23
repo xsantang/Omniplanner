@@ -6,7 +6,9 @@
 //! Incluye auto-sync con GitHub Gist y backups locales rotativos.
 
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 use crate::agenda::Agenda;
@@ -22,6 +24,7 @@ use crate::tasks::TaskManager;
 use crate::vcs::DataVcs;
 
 /// Máximo de backups locales a mantener
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_BACKUPS: usize = 5;
 
 /// Estado completo de la aplicación (persistible)
@@ -72,6 +75,7 @@ impl AppState {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn ruta_datos() -> PathBuf {
         // En Android, DATA_DIR se configura vía FFI cmd_init
         if let Ok(guard) = crate::ffi::data_dir() {
@@ -88,6 +92,7 @@ impl AppState {
     }
 
     /// Rota backups locales: data.json.1, data.json.2, ... data.json.{MAX_BACKUPS}
+    #[cfg(not(target_arch = "wasm32"))]
     fn rotar_backups() {
         let ruta = Self::ruta_datos();
         if !ruta.exists() {
@@ -108,41 +113,48 @@ impl AppState {
     }
 
     pub fn guardar(&mut self) -> Result<(), String> {
-        let ruta = Self::ruta_datos();
+        #[cfg(target_arch = "wasm32")]
+        {
+            // En WASM la persistencia la maneja el host (JS/localStorage).
+            // Aquí solo actualizamos el timestamp; el host serializa via `omni_export_state`.
+            self.ultima_modificacion = chrono::Utc::now().timestamp();
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ruta = Self::ruta_datos();
 
-        // Rotar backups antes de escribir
-        Self::rotar_backups();
+            // Rotar backups antes de escribir
+            Self::rotar_backups();
 
-        // Actualizar timestamp
-        self.ultima_modificacion = chrono::Utc::now().timestamp();
+            // Actualizar timestamp
+            self.ultima_modificacion = chrono::Utc::now().timestamp();
 
-        let json =
-            serde_json::to_string_pretty(self).map_err(|e| format!("Error serializando: {}", e))?;
-        fs::write(&ruta, &json)
-            .map_err(|e| format!("Error escribiendo {}: {}", ruta.display(), e))?;
+            let json = serde_json::to_string_pretty(self)
+                .map_err(|e| format!("Error serializando: {}", e))?;
+            fs::write(&ruta, &json)
+                .map_err(|e| format!("Error escribiendo {}: {}", ruta.display(), e))?;
 
-        // Auto-sync a Gist (silencioso, no bloquea en error)
-        #[cfg(feature = "desktop")]
-        if self.sync.auto_sync && self.sync.gist_configurado() {
-            match crate::sync::gist::gist_push(&self.sync, &json) {
-                Ok(gist_id) => {
-                    if self.sync.gist_id.is_empty() || self.sync.gist_id != gist_id {
-                        self.sync.gist_id = gist_id;
-                        // Re-guardar para persistir el nuevo gist_id
-                        let json2 = serde_json::to_string_pretty(self).unwrap_or_default();
-                        fs::write(&ruta, json2).ok();
+            // Auto-sync a Gist (silencioso, no bloquea en error)
+            #[cfg(feature = "desktop")]
+            if self.sync.auto_sync && self.sync.gist_configurado() {
+                match crate::sync::gist::gist_push(&self.sync, &json) {
+                    Ok(gist_id) => {
+                        if self.sync.gist_id.is_empty() || self.sync.gist_id != gist_id {
+                            self.sync.gist_id = gist_id;
+                            let json2 = serde_json::to_string_pretty(self).unwrap_or_default();
+                            fs::write(&ruta, json2).ok();
+                        }
                     }
-                }
-                Err(_e) => {
-                    // Sync falló silenciosamente — datos locales están a salvo
-                    // Se reintentará en el próximo guardar()
+                    Err(_e) => {}
                 }
             }
-        }
 
-        Ok(())
+            Ok(())
+        }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn cargar() -> Result<Self, String> {
         let ruta = Self::ruta_datos();
         if !ruta.exists() {
@@ -150,6 +162,8 @@ impl AppState {
         }
 
         // Intentar cargar local
+        // `mut` solo se usa en la rama desktop (auto-pull desde Gist).
+        #[allow(unused_mut)]
         let mut state = match fs::read_to_string(&ruta) {
             Ok(contenido) => match serde_json::from_str::<Self>(&contenido) {
                 Ok(s) => s,
@@ -201,6 +215,7 @@ impl AppState {
     }
 
     /// Intenta restaurar desde backups locales (.1, .2, ...) o desde Gist
+    #[cfg(not(target_arch = "wasm32"))]
     fn restaurar_desde_backup() -> Result<Self, String> {
         let ruta = Self::ruta_datos();
 
@@ -251,6 +266,25 @@ impl AppState {
         }
 
         Err("No se pudo restaurar datos. Archivo corrupto y sin backups disponibles.".to_string())
+    }
+
+    /// En WASM no hay sistema de archivos: el host (JS) debe llamar
+    /// `omni_import_state` con el contenido JSON, y `cargar()` devuelve
+    /// un estado vacío mientras tanto.
+    #[cfg(target_arch = "wasm32")]
+    pub fn cargar() -> Result<Self, String> {
+        Ok(Self::new())
+    }
+
+    /// Carga un AppState directamente desde un string JSON (útil para WASM
+    /// cuando el host gestiona la persistencia).
+    pub fn cargar_desde_json(json: &str) -> Result<Self, String> {
+        serde_json::from_str::<Self>(json).map_err(|e| format!("JSON inválido: {}", e))
+    }
+
+    /// Serializa el estado actual a JSON (para que el host lo persista).
+    pub fn exportar_json(&self) -> Result<String, String> {
+        serde_json::to_string(self).map_err(|e| format!("Error serializando: {}", e))
     }
 }
 

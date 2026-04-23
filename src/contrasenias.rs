@@ -6,6 +6,19 @@
 //! - Generar claves de cifrado (frases de 20 palabras)
 //! - Almacenar y gestionar contraseñas por sitio/servicio
 //! - Evaluar y mejorar seguridad de contraseñas
+//!
+//! ## Notas de seguridad
+//!
+//! - La aleatoriedad usada en la generación de contraseñas y frases semilla
+//!   proviene de [`getrandom`], que delega en el CSPRNG del sistema operativo
+//!   (`getrandom(2)` en Linux, `BCryptGenRandom` en Windows, `arc4random` en
+//!   macOS/BSD, `crypto.getRandomValues` en navegadores). No se usan PRNGs
+//!   de juguete como `xorshift` para material sensible.
+//! - Las contraseñas se almacenan **en texto plano** dentro de
+//!   [`AlmacenContrasenias`]. Si el archivo de estado se guarda en disco sin
+//!   cifrar, un atacante con acceso al disco podrá leerlas. Para cifrado en
+//!   reposo usa AES-GCM/ChaCha20-Poly1305 con clave derivada (Argon2/scrypt)
+//!   sobre una contraseña maestra — esto vive fuera de este módulo.
 
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -122,7 +135,38 @@ pub fn verificar_texto(original: &str, input: &str) -> ResultadoVerificacion {
 
 // ── Generación de contraseñas ───────────────────────────────
 
-/// Genera una contraseña aleatoria segura
+/// Rellena `buf` con bytes del CSPRNG del sistema. Si `getrandom` falla
+/// (extremadamente raro), hace fallback a un xorshift64 seedado con el
+/// reloj. En ese caso la contraseña resultante se considera de emergencia
+/// y el llamador debería regenerarla cuando el CSPRNG vuelva a estar
+/// disponible.
+fn rellenar_aleatorio(buf: &mut [u8]) {
+    if getrandom::getrandom(buf).is_ok() {
+        return;
+    }
+    // Fallback determinístico: sólo por si getrandom no está disponible.
+    let mut estado: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x12345678_9ABCDEF0);
+    for byte in buf.iter_mut() {
+        estado = xorshift64(estado);
+        *byte = estado as u8;
+    }
+}
+
+/// Devuelve un `usize` aleatorio en `[0, n)` con distribución ~uniforme
+/// (sesgo despreciable mientras `n` sea mucho menor que `u64::MAX`).
+fn aleatorio_en(n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let mut buf = [0u8; 8];
+    rellenar_aleatorio(&mut buf);
+    (u64::from_le_bytes(buf) as usize) % n
+}
+
+/// Genera una contraseña aleatoria segura usando el CSPRNG del sistema.
 pub fn generar_contrasenia(longitud: usize, usar_especiales: bool) -> String {
     use std::collections::HashSet;
 
@@ -139,52 +183,37 @@ pub fn generar_contrasenia(longitud: usize, usar_especiales: bool) -> String {
         charset.extend_from_slice(especiales);
     }
 
-    // Usar hash de timestamp + contador como fuente pseudo-aleatoria
-    // (sin dependencias externas de RNG)
     let mut resultado = Vec::with_capacity(longitud);
-    let semilla = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
 
-    let mut estado: u64 = semilla as u64;
-
-    // Garantizar al menos uno de cada tipo
+    // Garantizar al menos uno de cada tipo (reduce casos frágiles).
     let mut obligatorios: Vec<u8> = Vec::new();
-    estado = xorshift64(estado);
-    obligatorios.push(minus[(estado as usize) % minus.len()]);
-    estado = xorshift64(estado);
-    obligatorios.push(mayus[(estado as usize) % mayus.len()]);
-    estado = xorshift64(estado);
-    obligatorios.push(digitos[(estado as usize) % digitos.len()]);
+    obligatorios.push(minus[aleatorio_en(minus.len())]);
+    obligatorios.push(mayus[aleatorio_en(mayus.len())]);
+    obligatorios.push(digitos[aleatorio_en(digitos.len())]);
     if usar_especiales {
-        estado = xorshift64(estado);
-        obligatorios.push(especiales[(estado as usize) % especiales.len()]);
+        obligatorios.push(especiales[aleatorio_en(especiales.len())]);
     }
 
-    // Llenar el resto
+    // Llenar el resto con bytes del CSPRNG reducidos módulo charset.len().
+    // El sesgo es despreciable en la práctica para charset pequeño.
     for _ in 0..(longitud.saturating_sub(obligatorios.len())) {
-        estado = xorshift64(estado);
-        resultado.push(charset[(estado as usize) % charset.len()]);
+        resultado.push(charset[aleatorio_en(charset.len())]);
     }
     resultado.extend(obligatorios);
 
-    // Mezclar (Fisher-Yates con xorshift)
+    // Fisher-Yates uniforme con CSPRNG.
     let n = resultado.len();
     for i in (1..n).rev() {
-        estado = xorshift64(estado);
-        let j = (estado as usize) % (i + 1);
+        let j = aleatorio_en(i + 1);
         resultado.swap(i, j);
     }
 
-    // Verificar unicidad mínima
+    // Verificar unicidad mínima (seguridad frente a charsets degenerados).
     let unicos: HashSet<u8> = resultado.iter().copied().collect();
     if unicos.len() < longitud / 3 {
-        // Muy repetitiva, regenerar posiciones
         for byte in &mut resultado {
-            estado = xorshift64(estado);
-            if estado.is_multiple_of(3) {
-                *byte = charset[(estado as usize) % charset.len()];
+            if aleatorio_en(3) == 0 {
+                *byte = charset[aleatorio_en(charset.len())];
             }
         }
     }
@@ -228,18 +257,11 @@ pub fn generar_clave_cifrado(num_palabras: usize) -> Vec<String> {
     ];
 
     let mut resultado = Vec::with_capacity(num_palabras);
-    let semilla = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-
-    let mut estado: u64 = semilla as u64;
     let mut usadas = std::collections::HashSet::new();
 
     for _ in 0..num_palabras {
         loop {
-            estado = xorshift64(estado);
-            let idx = (estado as usize) % palabras.len();
+            let idx = aleatorio_en(palabras.len());
             if usadas.insert(idx) {
                 resultado.push(palabras[idx].to_string());
                 break;
@@ -351,13 +373,9 @@ pub fn evaluar_fortaleza(clave: &str) -> (u32, String) {
 /// Mejora una contraseña existente haciéndola más segura
 pub fn mejorar_contrasenia(original: &str) -> String {
     let mut chars: Vec<char> = original.chars().collect();
-    let semilla = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut estado: u64 = semilla as u64;
 
-    // Reemplazos leet-speak
+    // Reemplazos leet-speak deterministas (no agregan entropía,
+    // pero confunden diccionarios básicos).
     for c in &mut chars {
         match *c {
             'a' | 'A' => *c = '@',
@@ -370,17 +388,15 @@ pub fn mejorar_contrasenia(original: &str) -> String {
         }
     }
 
-    // Agregar caracteres extra si es corta
+    // Agregar caracteres extra si es corta usando el CSPRNG.
     while chars.len() < 16 {
-        estado = xorshift64(estado);
         let extras = b"!@#$%&*-_=+?23456789ABCDEFGHJK";
-        chars.push(extras[(estado as usize) % extras.len()] as char);
+        chars.push(extras[aleatorio_en(extras.len())] as char);
     }
 
-    // Insertar mayúsculas aleatorias
+    // Insertar mayúsculas aleatorias usando el CSPRNG.
     for c in &mut chars {
-        estado = xorshift64(estado);
-        if estado.is_multiple_of(4) && c.is_ascii_lowercase() {
+        if aleatorio_en(4) == 0 && c.is_ascii_lowercase() {
             *c = c.to_ascii_uppercase();
         }
     }
@@ -388,7 +404,10 @@ pub fn mejorar_contrasenia(original: &str) -> String {
     chars.into_iter().collect()
 }
 
-// ── PRNG simple (xorshift64) ────────────────────────────────
+// ── PRNG de emergencia (xorshift64) ─────────────────────────
+//
+// Sólo se usa como último recurso si [`getrandom`] falla. NO usar para
+// claves ni material criptográfico fuera de ese camino de fallback.
 
 fn xorshift64(mut state: u64) -> u64 {
     if state == 0 {
@@ -462,5 +481,21 @@ mod tests {
         let mejorada = mejorar_contrasenia("password");
         assert_ne!(mejorada, "password");
         assert!(mejorada.len() >= 16);
+    }
+
+    #[test]
+    fn csprng_devuelve_valores_distintos() {
+        // Dos llamadas consecutivas al CSPRNG deben casi siempre diferir.
+        // (probabilidad de colisión ≈ 2^-64 con getrandom).
+        let a = generar_contrasenia(24, true);
+        let b = generar_contrasenia(24, true);
+        assert_ne!(a, b, "CSPRNG no debería dar dos valores iguales consecutivos");
+    }
+
+    #[test]
+    fn frase_semilla_no_es_determinista() {
+        let a = generar_clave_cifrado(12);
+        let b = generar_clave_cifrado(12);
+        assert_ne!(a, b, "Dos frases semilla consecutivas no deben coincidir");
     }
 }

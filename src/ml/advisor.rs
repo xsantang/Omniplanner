@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 // ══════════════════════════════════════════════════════════════
@@ -859,6 +861,13 @@ pub struct DeudaRastreada {
     /// Componente mensual de principal + intereses (P&I) aplicado a la deuda.
     #[serde(default)]
     pub principal_interes_mensual: f64,
+    /// La deuda ya fue originada/desembolsada. Si es false, aún no inicia pagos.
+    #[serde(default = "default_true")]
+    pub originada: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Registro de un mes para una deuda.
@@ -916,6 +925,91 @@ impl ErrorPago {
     }
 }
 
+// ══════════════════════════════════════════════════════════════
+//  Fase 3 — Decisión tipada de aceptación de un pago
+// ══════════════════════════════════════════════════════════════
+
+/// Resultado de evaluar un pago antes de registrarlo.
+///
+/// Permite que la UI distinga entre pagos aceptables, pagos que ameritan
+/// un aviso, pagos que exigen doble confirmación por lo sospechosos y
+/// pagos que deben bloquearse de plano (datos inválidos).
+#[derive(Clone, Debug, PartialEq)]
+pub enum DecisionPago {
+    /// Pago válido, se puede registrar directamente.
+    Aceptar,
+    /// Pago válido pero con una advertencia que conviene mostrar.
+    AceptarConAviso(String),
+    /// Pago probablemente correcto pero sospechoso: exigir confirmación extra.
+    PedirDobleConfirmacion(String),
+    /// Pago inválido: no debe registrarse tal como está.
+    Bloquear(String),
+}
+
+impl DecisionPago {
+    /// ¿El pago puede registrarse sin más trámite?
+    pub fn es_aceptado(&self) -> bool {
+        matches!(self, DecisionPago::Aceptar | DecisionPago::AceptarConAviso(_))
+    }
+
+    /// ¿Se requiere que el usuario confirme explícitamente?
+    pub fn requiere_confirmacion(&self) -> bool {
+        matches!(self, DecisionPago::PedirDobleConfirmacion(_))
+    }
+
+    /// ¿El pago debe rechazarse?
+    pub fn esta_bloqueado(&self) -> bool {
+        matches!(self, DecisionPago::Bloquear(_))
+    }
+
+    /// Mensaje humano asociado (vacío si es Aceptar).
+    pub fn mensaje(&self) -> &str {
+        match self {
+            DecisionPago::Aceptar => "",
+            DecisionPago::AceptarConAviso(m)
+            | DecisionPago::PedirDobleConfirmacion(m)
+            | DecisionPago::Bloquear(m) => m.as_str(),
+        }
+    }
+}
+
+/// Estado de una deuda para mostrarla en listas / dashboards.
+///
+/// Versión tipada de lo que antes se calculaba con `if`s dispersos en la UI.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EstadoDeudaUi {
+    /// Saldo ≈ 0 y marcada como inactiva.
+    Liquidada,
+    /// Al día, sin atrasos significativos.
+    AlDia,
+    /// El pago mínimo no alcanza a cubrir los intereses del mes: la deuda crece sola.
+    EnTrampaIntereses,
+    /// Existe monto vencido acumulado (P&I o escrow) por encima del pago del mes.
+    Vencida { monto_vencido: f64 },
+}
+
+impl EstadoDeudaUi {
+    /// Emoji / badge corto para prefijar en listas.
+    pub fn badge(&self) -> &str {
+        match self {
+            EstadoDeudaUi::Liquidada => "✅",
+            EstadoDeudaUi::AlDia => "🟢",
+            EstadoDeudaUi::EnTrampaIntereses => "🔴",
+            EstadoDeudaUi::Vencida { .. } => "🟠",
+        }
+    }
+
+    /// Etiqueta humana.
+    pub fn etiqueta(&self) -> &str {
+        match self {
+            EstadoDeudaUi::Liquidada => "Liquidada",
+            EstadoDeudaUi::AlDia => "Al día",
+            EstadoDeudaUi::EnTrampaIntereses => "Trampa de intereses",
+            EstadoDeudaUi::Vencida { .. } => "Vencida",
+        }
+    }
+}
+
 /// Resultado global del diagnóstico.
 #[derive(Clone, Debug)]
 pub struct DiagnosticoGlobal {
@@ -943,6 +1037,60 @@ pub struct ResumenDeuda {
     pub tendencia: String,
 }
 
+/// Resultado de simular cuánto toma liquidar una deuda pagando un
+/// monto mensual constante (sólo P&I).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SimulacionLiquidacion {
+    pub meses: u32,
+    pub intereses_totales: f64,
+    pub pagado_total: f64,
+}
+
+/// Comparativa de lo que se ahorra aplicando `extra` dólares extra
+/// por mes sobre el pago P&I mínimo hasta liquidar la deuda.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AhorroPagoExtra {
+    pub pago_base: f64,
+    pub extra: f64,
+    pub meses_base: u32,
+    pub meses_con_extra: u32,
+    pub meses_ahorrados: u32,
+    pub intereses_base: f64,
+    pub intereses_con_extra: f64,
+    pub intereses_ahorrados: f64,
+}
+
+impl AhorroPagoExtra {
+    /// Porcentaje de intereses ahorrados respecto al escenario base.
+    pub fn porcentaje_intereses_ahorrados(&self) -> f64 {
+        if self.intereses_base <= 0.01 {
+            0.0
+        } else {
+            (self.intereses_ahorrados / self.intereses_base) * 100.0
+        }
+    }
+
+    /// Ahorro por dólar extra aportado (intereses ahorrados / extra total pagado).
+    /// Aproximación: extra × meses_con_extra.
+    pub fn eficiencia_por_dolar_extra(&self) -> f64 {
+        let invertido = self.extra * self.meses_con_extra.max(1) as f64;
+        if invertido <= 0.01 {
+            0.0
+        } else {
+            self.intereses_ahorrados / invertido
+        }
+    }
+}
+
+/// Recomendación sobre a qué deuda conviene aplicar un pago extra.
+#[derive(Clone, Debug)]
+pub struct RecomendacionPagoExtra {
+    pub nombre_deuda: String,
+    pub ahorro: AhorroPagoExtra,
+    /// Todas las alternativas ordenadas de mayor a menor ahorro de intereses.
+    pub ranking: Vec<(String, AhorroPagoExtra)>,
+}
+
 impl DeudaRastreada {
     pub fn nueva(nombre: &str, tasa_anual: f64, pago_minimo: f64) -> Self {
         Self {
@@ -955,6 +1103,7 @@ impl DeudaRastreada {
             enganche: 0.0,
             escrow_mensual: 0.0,
             principal_interes_mensual: pago_minimo,
+            originada: true,
         }
     }
 
@@ -981,7 +1130,11 @@ impl DeudaRastreada {
         let mut atraso_escrow = 0.0;
 
         for mes in self.historial.iter().take(indice) {
-            if mes.saldo_inicio < 0.01 && !self.es_pago_corriente() {
+            // Para deudas con interés real (hipotecas, tarjetas, préstamos)
+            // se acumula atraso si el pago fue menor al mínimo, independiente
+            // del saldo_inicio — porque el escrow/P&I es exigible aunque el
+            // saldo contable sea bajo o cero (ej: escrow puro).
+            if mes.saldo_inicio < 0.01 && !self.es_pago_corriente() && self.escrow_mensual < 0.01 {
                 continue;
             }
             atraso_pi = (atraso_pi + self.pago_pi_mensual() - mes.pago).max(0.0);
@@ -1126,6 +1279,191 @@ impl DeudaRastreada {
             saldo = saldo_final;
         }
         resultado
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Fase 3 — Helpers tipados (DecisionPago / EstadoDeudaUi)
+    // ──────────────────────────────────────────────────────────
+
+    /// Interés mensual estimado sobre un saldo dado.
+    fn intereses_del_saldo(&self, saldo: f64) -> f64 {
+        let tasa_mensual = self.tasa_anual / 100.0 / 12.0;
+        (saldo.max(0.0)) * tasa_mensual
+    }
+
+    /// Simula desde el saldo actual cuántos meses e intereses tomaría liquidar
+    /// la deuda pagando exactamente `pago_mensual` cada mes (P&I, sin escrow).
+    /// Devuelve `None` si el pago no alcanza a cubrir intereses (deuda infinita).
+    pub fn simular_liquidacion(&self, pago_mensual: f64) -> Option<SimulacionLiquidacion> {
+        if pago_mensual <= 0.01 {
+            return None;
+        }
+        let tasa_mensual = self.tasa_anual / 100.0 / 12.0;
+        let mut saldo = self.saldo_actual();
+        if saldo <= 0.01 {
+            return Some(SimulacionLiquidacion {
+                meses: 0,
+                intereses_totales: 0.0,
+                pagado_total: 0.0,
+            });
+        }
+        let mut intereses_totales = 0.0;
+        let mut pagado_total = 0.0;
+        let mut meses = 0u32;
+
+        while saldo > 0.01 && meses < 600 {
+            let interes = saldo * tasa_mensual;
+            if pago_mensual <= interes + 0.001 {
+                // el pago no reduce principal ⇒ nunca liquida
+                return None;
+            }
+            intereses_totales += interes;
+            saldo += interes;
+            let pago = pago_mensual.min(saldo);
+            saldo -= pago;
+            pagado_total += pago;
+            meses += 1;
+        }
+
+        if saldo > 0.01 {
+            return None;
+        }
+
+        Some(SimulacionLiquidacion {
+            meses,
+            intereses_totales,
+            pagado_total,
+        })
+    }
+
+    /// Calcula qué se ahorra (meses + intereses) por pagar `extra` dólares
+    /// extra sobre el pago P&I mínimo, cada mes, hasta liquidar.
+    ///
+    /// Devuelve `None` si no hay saldo activo o si ni siquiera el pago
+    /// con extra alcanza a cubrir intereses.
+    pub fn ahorro_por_pago_extra(&self, extra: f64) -> Option<AhorroPagoExtra> {
+        if extra <= 0.01 || self.saldo_actual() <= 0.01 {
+            return None;
+        }
+        let pago_base = self.pago_pi_mensual().max(0.01);
+        let base = self.simular_liquidacion(pago_base)?;
+        let con_extra = self.simular_liquidacion(pago_base + extra)?;
+
+        Some(AhorroPagoExtra {
+            pago_base,
+            extra,
+            meses_base: base.meses,
+            meses_con_extra: con_extra.meses,
+            meses_ahorrados: base.meses.saturating_sub(con_extra.meses),
+            intereses_base: base.intereses_totales,
+            intereses_con_extra: con_extra.intereses_totales,
+            intereses_ahorrados: (base.intereses_totales - con_extra.intereses_totales).max(0.0),
+        })
+    }
+
+    /// Evalúa si un pago propuesto puede registrarse tal cual.
+    ///
+    /// Reglas:
+    /// - `pago_pi` o `pago_escrow` negativos → `Bloquear`.
+    /// - `saldo_inicio` negativo → `Bloquear`.
+    /// - Pago total == 0 y hay saldo o pago corriente → `PedirDobleConfirmacion`.
+    /// - Pago total < 50% del pago exigible → `PedirDobleConfirmacion`.
+    /// - Pago total anormalmente alto (>10× exigible o > saldo + margen) → `PedirDobleConfirmacion`.
+    /// - Pago P&I no cubre intereses del mes (trampa) → `AceptarConAviso`.
+    /// - En cualquier otro caso → `Aceptar`.
+    pub fn evaluar_pago_mes(
+        &self,
+        pago_pi: f64,
+        pago_escrow: f64,
+        saldo_inicio: f64,
+    ) -> DecisionPago {
+        if pago_pi.is_nan() || pago_escrow.is_nan() || saldo_inicio.is_nan() {
+            return DecisionPago::Bloquear("Valores no numéricos (NaN).".to_string());
+        }
+        if pago_pi < 0.0 {
+            return DecisionPago::Bloquear(format!(
+                "El pago P&I no puede ser negativo (${:.2}).",
+                pago_pi
+            ));
+        }
+        if pago_escrow < 0.0 {
+            return DecisionPago::Bloquear(format!(
+                "El pago de escrow no puede ser negativo (${:.2}).",
+                pago_escrow
+            ));
+        }
+        if saldo_inicio < 0.0 {
+            return DecisionPago::Bloquear(format!(
+                "El saldo de inicio no puede ser negativo (${:.2}).",
+                saldo_inicio
+            ));
+        }
+
+        let pago_total = pago_pi + pago_escrow;
+        let exigible = self.pago_exigible_total_proximo_mes();
+        let debe_pagar = saldo_inicio > 0.01 || self.es_pago_corriente() || exigible > 0.01;
+
+        if pago_total < 0.01 && debe_pagar {
+            return DecisionPago::PedirDobleConfirmacion(format!(
+                "Pago de $0.00 registrado habiendo ${:.2} exigible. ¿Seguro?",
+                exigible
+            ));
+        }
+
+        if exigible > 0.01 && pago_total + 0.01 < exigible * 0.5 {
+            return DecisionPago::PedirDobleConfirmacion(format!(
+                "Pago ${:.2} es menos del 50% del exigible (${:.2}).",
+                pago_total, exigible
+            ));
+        }
+
+        // Pago anormalmente alto: > 10× lo exigible o excede por mucho el techo razonable
+        // (saldo_inicio + exigible + margen). Suele ser un dedo de más.
+        let techo_razonable = saldo_inicio + exigible + 1_000.0;
+        let excede_por_multiplo = exigible > 0.01 && pago_total > exigible * 10.0;
+        let excede_techo = pago_total > techo_razonable && pago_total > 1_000.0;
+        if excede_por_multiplo || excede_techo {
+            return DecisionPago::PedirDobleConfirmacion(format!(
+                "Pago ${:.2} parece excesivo (exigible ${:.2}, saldo ${:.2}). ¿Seguro?",
+                pago_total, exigible, saldo_inicio
+            ));
+        }
+
+        if self.tasa_anual > 0.0 && saldo_inicio > 0.01 {
+            let interes = self.intereses_del_saldo(saldo_inicio);
+            if interes > 1.0 && pago_pi + 0.01 < interes {
+                return DecisionPago::AceptarConAviso(format!(
+                    "El pago P&I ${:.2} no cubre intereses del mes ${:.2}: la deuda crecerá.",
+                    pago_pi, interes
+                ));
+            }
+        }
+
+        DecisionPago::Aceptar
+    }
+
+    /// Clasifica el estado actual de la deuda para presentarlo en listas.
+    pub fn estado_ui(&self) -> EstadoDeudaUi {
+        let saldo = self.saldo_actual();
+        if !self.activa && saldo < 0.01 {
+            return EstadoDeudaUi::Liquidada;
+        }
+
+        let vencido = self.deuda_vencida_total();
+        if vencido > 0.01 {
+            return EstadoDeudaUi::Vencida {
+                monto_vencido: vencido,
+            };
+        }
+
+        if self.tasa_anual > 0.0 && saldo > 0.01 {
+            let interes = self.intereses_del_saldo(saldo);
+            if interes > 1.0 && self.pago_pi_mensual() + 0.01 < interes {
+                return EstadoDeudaUi::EnTrampaIntereses;
+            }
+        }
+
+        EstadoDeudaUi::AlDia
     }
 }
 
@@ -1475,6 +1813,41 @@ impl RastreadorDeudas {
             .sum()
     }
 
+    /// Calcula, para cada deuda activa, cuánto se ahorraría en intereses
+    /// si se le aplicaran `extra` dólares extra por mes hasta liquidar.
+    /// Ordena el ranking de mayor a menor ahorro de intereses y devuelve
+    /// la mejor candidata junto al ranking completo.
+    pub fn mejor_destino_pago_extra(&self, extra: f64) -> Option<RecomendacionPagoExtra> {
+        if extra <= 0.01 {
+            return None;
+        }
+        let mut ranking: Vec<(String, AhorroPagoExtra)> = self
+            .deudas_activas()
+            .iter()
+            .filter_map(|d| {
+                d.ahorro_por_pago_extra(extra)
+                    .map(|a| (d.nombre.clone(), a))
+            })
+            .collect();
+
+        if ranking.is_empty() {
+            return None;
+        }
+
+        ranking.sort_by(|a, b| {
+            b.1.intereses_ahorrados
+                .partial_cmp(&a.1.intereses_ahorrados)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let (nombre, ahorro) = ranking[0].clone();
+        Some(RecomendacionPagoExtra {
+            nombre_deuda: nombre,
+            ahorro,
+            ranking,
+        })
+    }
+
     /// Flujo de caja libre por mes: ingreso − pagos mínimos de deudas.
     /// Nota: no descuenta gastos del presupuesto (esos se calculan por separado).
     pub fn flujo_libre_mensual(&self) -> f64 {
@@ -1803,6 +2176,7 @@ impl RastreadorDeudas {
     /// Formato esperado: cuenta,mes,saldo,pago,nuevos_cargos
     /// El CSV puede tener varias cuentas mezcladas; se agrupan automáticamente.
     /// Se asume tasa_anual = 0 (se puede ajustar después).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn importar_csv(ruta: &str) -> Result<RastreadorDeudas, String> {
         let contenido =
             fs::read_to_string(ruta).map_err(|e| format!("No se pudo leer '{}': {}", ruta, e))?;
@@ -1898,7 +2272,31 @@ impl RastreadorDeudas {
         presupuesto_mensual: f64,
         estrategia_bola_nieve: bool,
     ) -> SimulacionLibertad {
-        // Separar pagos corrientes de deudas reales
+        let estrategia = if estrategia_bola_nieve {
+            EstrategiaLibertad::BolaNieve
+        } else {
+            EstrategiaLibertad::Avalancha
+        };
+        self.simular_libertad_editado(presupuesto_mensual, &estrategia, &[])
+    }
+
+    /// Versión editable del simulador de libertad financiera.
+    ///
+    /// A diferencia de [`Self::simular_libertad`], permite:
+    ///   - Escoger estrategia de reparto del sobrante (Avalancha, Bola de nieve
+    ///     o Pesos relativos por deuda).
+    ///   - Fijar manualmente el pago a una deuda específica en un mes concreto
+    ///     via [`AjusteMensualLibertad`]; lo sobrante o faltante se re-reparte
+    ///     automáticamente entre las demás deudas activas.
+    ///
+    /// Útil para planificación tipo hoja de cálculo: "quita $100 de Tarjeta A
+    /// en el mes 3 y ponlos en Tarjeta B para nivelarla".
+    pub fn simular_libertad_editado(
+        &self,
+        presupuesto_mensual: f64,
+        estrategia: &EstrategiaLibertad,
+        ajustes: &[AjusteMensualLibertad],
+    ) -> SimulacionLibertad {
         let gastos_fijos: Vec<(String, f64)> = self
             .deudas
             .iter()
@@ -1907,7 +2305,6 @@ impl RastreadorDeudas {
             .collect();
         let total_gastos_fijos: f64 = gastos_fijos.iter().map(|(_, m)| *m).sum();
 
-        // Solo deudas reales (con saldo que se puede liquidar)
         let mut deudas: Vec<DeudaSimulada> = self
             .deudas
             .iter()
@@ -1922,13 +2319,7 @@ impl RastreadorDeudas {
             })
             .collect();
 
-        let nombre_estrategia = if estrategia_bola_nieve {
-            "Bola de nieve"
-        } else {
-            "Avalancha"
-        }
-        .to_string();
-
+        let nombre_estrategia = estrategia.nombre().to_string();
         let n = deudas.len();
         if n == 0 {
             return SimulacionLibertad {
@@ -1943,24 +2334,19 @@ impl RastreadorDeudas {
             };
         }
 
-        // Presupuesto real disponible para deudas = total - gastos fijos
         let presupuesto_deudas = (presupuesto_mensual - total_gastos_fijos).max(0.0);
-
         let mut meses_resultado: Vec<MesSimulado> = Vec::new();
         let mut total_pagado = 0.0;
         let mut total_intereses = 0.0;
         let mut orden_liquidacion: Vec<(String, usize)> = Vec::new();
-
-        // Rastrear cuánto se libera de deudas liquidadas
         let minimos_originales: f64 = deudas.iter().map(|d| d.pago_minimo).sum();
 
         for mes_num in 1..=600usize {
-            let vivas: usize = deudas.iter().filter(|d| d.liquidada_mes.is_none()).count();
+            let vivas = deudas.iter().filter(|d| d.liquidada_mes.is_none()).count();
             if vivas == 0 {
                 break;
             }
 
-            // Calcular cuánto se liberó de deudas ya liquidadas
             let minimos_vivos: f64 = deudas
                 .iter()
                 .filter(|d| d.liquidada_mes.is_none())
@@ -1972,10 +2358,32 @@ impl RastreadorDeudas {
             let mut pagos_mes: Vec<(String, f64)> = Vec::new();
             let mut intereses_mes: Vec<(String, f64)> = Vec::new();
 
-            // Paso 1: Pagar mínimos — obligatorias primero (hipoteca, carro, etc.)
+            // Paso 0: aplicar ajustes manuales del usuario para este mes.
+            // Los ajustes reemplazan cualquier lógica automática para esa deuda.
+            let mut deudas_con_ajuste: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for ajuste in ajustes.iter().filter(|a| a.mes == mes_num) {
+                let idx = match deudas
+                    .iter()
+                    .position(|d| d.nombre == ajuste.nombre_deuda && d.liquidada_mes.is_none())
+                {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let saldo = deudas[idx].saldo;
+                let pago = ajuste.pago_forzado.max(0.0).min(saldo).min(disponible);
+                disponible -= pago;
+                pagos_mes.push((deudas[idx].nombre.clone(), pago));
+                deudas_con_ajuste.insert(deudas[idx].nombre.clone());
+            }
+
+            // Paso 1: mínimos de deudas SIN ajuste, obligatorias primero.
             for obligatoria_primero in [true, false] {
                 for d in deudas.iter() {
-                    if d.liquidada_mes.is_some() || d.obligatoria != obligatoria_primero {
+                    if d.liquidada_mes.is_some()
+                        || d.obligatoria != obligatoria_primero
+                        || deudas_con_ajuste.contains(&d.nombre)
+                    {
                         continue;
                     }
                     let minimo = d.pago_minimo.min(d.saldo);
@@ -1985,53 +2393,145 @@ impl RastreadorDeudas {
                 }
             }
 
-            // Paso 2: Distribuir sobrante según estrategia (avalancha/bola de nieve)
+            // Paso 2: distribuir sobrante según la estrategia.
+            // Los ajustes manuales NO reciben extra automático: el usuario ya decidió.
             if disponible > 0.01 {
                 let mut indices_vivas: Vec<usize> = (0..n)
-                    .filter(|&i| deudas[i].liquidada_mes.is_none())
+                    .filter(|&i| {
+                        deudas[i].liquidada_mes.is_none()
+                            && !deudas_con_ajuste.contains(&deudas[i].nombre)
+                    })
                     .collect();
 
-                if estrategia_bola_nieve {
-                    indices_vivas.sort_by(|&a, &b| {
-                        deudas[a]
-                            .saldo
-                            .partial_cmp(&deudas[b].saldo)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                } else {
-                    indices_vivas.sort_by(|&a, &b| {
-                        deudas[b]
-                            .tasa_anual
-                            .partial_cmp(&deudas[a].tasa_anual)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-
-                for &idx in &indices_vivas {
-                    if disponible < 0.01 {
-                        break;
-                    }
-                    let d = &deudas[idx];
-                    let ya_pagado = pagos_mes
-                        .iter()
-                        .find(|(nm, _)| *nm == d.nombre)
-                        .map(|(_, p)| *p)
-                        .unwrap_or(0.0);
-                    let max_extra = (d.saldo - ya_pagado).max(0.0);
-                    let extra = max_extra.min(disponible);
-                    if extra > 0.01 {
-                        if let Some(entry) = pagos_mes
-                            .iter_mut()
-                            .find(|(nm, _)| *nm == deudas[idx].nombre)
-                        {
-                            entry.1 += extra;
+                match estrategia {
+                    EstrategiaLibertad::BolaNieve => {
+                        indices_vivas.sort_by(|&a, &b| {
+                            deudas[a]
+                                .saldo
+                                .partial_cmp(&deudas[b].saldo)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for &idx in &indices_vivas {
+                            if disponible < 0.01 {
+                                break;
+                            }
+                            let d = &deudas[idx];
+                            let ya_pagado = pagos_mes
+                                .iter()
+                                .find(|(nm, _)| *nm == d.nombre)
+                                .map(|(_, p)| *p)
+                                .unwrap_or(0.0);
+                            let max_extra = (d.saldo - ya_pagado).max(0.0);
+                            let extra = max_extra.min(disponible);
+                            if extra > 0.01 {
+                                if let Some(entry) = pagos_mes
+                                    .iter_mut()
+                                    .find(|(nm, _)| *nm == deudas[idx].nombre)
+                                {
+                                    entry.1 += extra;
+                                }
+                                disponible -= extra;
+                            }
                         }
-                        disponible -= extra;
+                    }
+                    EstrategiaLibertad::Avalancha => {
+                        indices_vivas.sort_by(|&a, &b| {
+                            deudas[b]
+                                .tasa_anual
+                                .partial_cmp(&deudas[a].tasa_anual)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for &idx in &indices_vivas {
+                            if disponible < 0.01 {
+                                break;
+                            }
+                            let d = &deudas[idx];
+                            let ya_pagado = pagos_mes
+                                .iter()
+                                .find(|(nm, _)| *nm == d.nombre)
+                                .map(|(_, p)| *p)
+                                .unwrap_or(0.0);
+                            let max_extra = (d.saldo - ya_pagado).max(0.0);
+                            let extra = max_extra.min(disponible);
+                            if extra > 0.01 {
+                                if let Some(entry) = pagos_mes
+                                    .iter_mut()
+                                    .find(|(nm, _)| *nm == deudas[idx].nombre)
+                                {
+                                    entry.1 += extra;
+                                }
+                                disponible -= extra;
+                            }
+                        }
+                    }
+                    EstrategiaLibertad::Pesos(pesos) => {
+                        // Reparto proporcional al peso entre deudas vivas sin ajuste.
+                        // Iteramos hasta 3 rondas para re-repartir el sobrante si alguna
+                        // deuda se llena antes de agotar el presupuesto.
+                        for _ in 0..3 {
+                            if disponible < 0.01 {
+                                break;
+                            }
+                            let total_peso: f64 = indices_vivas
+                                .iter()
+                                .map(|&i| {
+                                    pesos
+                                        .iter()
+                                        .find(|(nm, _)| *nm == deudas[i].nombre)
+                                        .map(|(_, p)| *p)
+                                        .unwrap_or(0.0)
+                                        .max(0.0)
+                                })
+                                .sum();
+                            if total_peso <= 1e-9 {
+                                break;
+                            }
+                            let disponible_ronda = disponible;
+                            let mut nuevos_vivas = Vec::new();
+                            for &idx in &indices_vivas {
+                                let peso = pesos
+                                    .iter()
+                                    .find(|(nm, _)| *nm == deudas[idx].nombre)
+                                    .map(|(_, p)| *p)
+                                    .unwrap_or(0.0)
+                                    .max(0.0);
+                                if peso <= 1e-9 {
+                                    continue;
+                                }
+                                let cuota = disponible_ronda * peso / total_peso;
+                                let d = &deudas[idx];
+                                let ya_pagado = pagos_mes
+                                    .iter()
+                                    .find(|(nm, _)| *nm == d.nombre)
+                                    .map(|(_, p)| *p)
+                                    .unwrap_or(0.0);
+                                let max_extra = (d.saldo - ya_pagado).max(0.0);
+                                let extra = cuota.min(max_extra).min(disponible);
+                                if extra > 0.01 {
+                                    if let Some(entry) = pagos_mes
+                                        .iter_mut()
+                                        .find(|(nm, _)| *nm == deudas[idx].nombre)
+                                    {
+                                        entry.1 += extra;
+                                    }
+                                    disponible -= extra;
+                                }
+                                // Si aún cabe más, sigue en la próxima ronda.
+                                if (max_extra - extra) > 0.01 {
+                                    nuevos_vivas.push(idx);
+                                }
+                            }
+                            if nuevos_vivas.len() == indices_vivas.len() {
+                                // No se llenó ninguna deuda: no habrá nada que re-repartir.
+                                break;
+                            }
+                            indices_vivas = nuevos_vivas;
+                        }
                     }
                 }
             }
 
-            // Paso 3: Aplicar pagos e intereses
+            // Paso 3: aplicar pagos e intereses.
             let mut saldos_mes: Vec<(String, f64)> = Vec::new();
             let mut liquidadas_este_mes: Vec<String> = Vec::new();
 
@@ -2092,6 +2592,39 @@ impl RastreadorDeudas {
             orden_liquidacion,
             gastos_fijos,
             total_gastos_fijos,
+        }
+    }
+
+    /// Compara dos planes (por ejemplo el automático y el editado) y devuelve
+    /// las diferencias relevantes para la toma de decisiones.
+    pub fn comparar_planes(
+        base: &SimulacionLibertad,
+        alternativa: &SimulacionLibertad,
+    ) -> ComparacionPlanes {
+        let meses_base = base.meses.len() as i32;
+        let meses_alt = alternativa.meses.len() as i32;
+        let max_pago_base = base
+            .meses
+            .iter()
+            .map(|m| m.pagos.iter().map(|(_, p)| *p).sum::<f64>())
+            .fold(0.0_f64, f64::max);
+        let max_pago_alt = alternativa
+            .meses
+            .iter()
+            .map(|m| m.pagos.iter().map(|(_, p)| *p).sum::<f64>())
+            .fold(0.0_f64, f64::max);
+
+        ComparacionPlanes {
+            meses_base: meses_base as usize,
+            meses_alternativa: meses_alt as usize,
+            diferencia_meses: meses_alt - meses_base,
+            intereses_base: base.total_intereses,
+            intereses_alternativa: alternativa.total_intereses,
+            diferencia_intereses: alternativa.total_intereses - base.total_intereses,
+            max_pago_mensual_base: max_pago_base,
+            max_pago_mensual_alternativa: max_pago_alt,
+            orden_liquidacion_base: base.orden_liquidacion.clone(),
+            orden_liquidacion_alternativa: alternativa.orden_liquidacion.clone(),
         }
     }
 
@@ -2229,6 +2762,80 @@ pub struct SimulacionLibertad {
     /// Pagos corrientes (renta, seguro, etc.) que se restan del presupuesto cada mes.
     pub gastos_fijos: Vec<(String, f64)>,
     pub total_gastos_fijos: f64,
+}
+
+/// Estrategia de reparto del sobrante sobre los pagos mínimos.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EstrategiaLibertad {
+    /// Tasa más alta primero (ahorra más intereses).
+    Avalancha,
+    /// Saldo más bajo primero (motivación rápida).
+    BolaNieve,
+    /// Reparto proporcional a pesos por deuda (nombre → peso).
+    /// Útil para "nivelar" varias deudas al mismo tiempo.
+    Pesos(Vec<(String, f64)>),
+}
+
+impl EstrategiaLibertad {
+    pub fn nombre(&self) -> &'static str {
+        match self {
+            EstrategiaLibertad::Avalancha => "Avalancha",
+            EstrategiaLibertad::BolaNieve => "Bola de nieve",
+            EstrategiaLibertad::Pesos(_) => "Pesos personalizados",
+        }
+    }
+
+    /// Construye una estrategia `Pesos` a partir de pares `(nombre, peso)`,
+    /// normalizando para que la suma sea 1.0. Si todos los pesos son 0 o
+    /// negativos, devuelve `Avalancha` como fallback seguro.
+    pub fn pesos_normalizados(pesos: Vec<(String, f64)>) -> Self {
+        let suma: f64 = pesos.iter().map(|(_, p)| p.max(0.0)).sum();
+        if suma <= 1e-9 {
+            return EstrategiaLibertad::Avalancha;
+        }
+        let normalizados = pesos
+            .into_iter()
+            .map(|(n, p)| (n, (p.max(0.0)) / suma))
+            .collect();
+        EstrategiaLibertad::Pesos(normalizados)
+    }
+}
+
+/// Ajuste manual del usuario: fijar el pago a una deuda concreta en un mes concreto.
+/// El simulador lo respeta y re-reparte el resto del presupuesto entre las demás.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AjusteMensualLibertad {
+    /// Mes 1-indexado (1 = primer mes de la simulación).
+    pub mes: usize,
+    pub nombre_deuda: String,
+    pub pago_forzado: f64,
+}
+
+impl AjusteMensualLibertad {
+    pub fn nuevo(mes: usize, nombre_deuda: impl Into<String>, pago_forzado: f64) -> Self {
+        Self {
+            mes,
+            nombre_deuda: nombre_deuda.into(),
+            pago_forzado: pago_forzado.max(0.0),
+        }
+    }
+}
+
+/// Diferencias relevantes entre dos simulaciones de libertad financiera.
+#[derive(Clone, Debug)]
+pub struct ComparacionPlanes {
+    pub meses_base: usize,
+    pub meses_alternativa: usize,
+    /// `alternativa - base`: negativo = el plan alternativo sale más rápido.
+    pub diferencia_meses: i32,
+    pub intereses_base: f64,
+    pub intereses_alternativa: f64,
+    /// `alternativa - base`: negativo = la alternativa ahorra intereses.
+    pub diferencia_intereses: f64,
+    pub max_pago_mensual_base: f64,
+    pub max_pago_mensual_alternativa: f64,
+    pub orden_liquidacion_base: Vec<(String, usize)>,
+    pub orden_liquidacion_alternativa: Vec<(String, usize)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2612,6 +3219,7 @@ impl AlmacenAsesor {
     }
 
     /// Directorio de exportación.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn dir_exportacion() -> PathBuf {
         let dir = dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -2622,6 +3230,7 @@ impl AlmacenAsesor {
     }
 
     /// Exporta TODOS los registros a un CSV resumen.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn exportar_resumen_csv(&self) -> Result<PathBuf, String> {
         let dir = Self::dir_exportacion();
         let ruta = dir.join("asesor_registros.csv");
@@ -2636,6 +3245,7 @@ impl AlmacenAsesor {
     }
 
     /// Exporta un registro individual a CSV detallado.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn exportar_registro_csv(&self, id: u64) -> Result<PathBuf, String> {
         let reg = self
             .registros
@@ -2663,6 +3273,7 @@ impl AlmacenAsesor {
     }
 
     /// Exporta todos los registros a un reporte de texto legible (para imprimir).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn exportar_reporte_texto(&self) -> Result<PathBuf, String> {
         let dir = Self::dir_exportacion();
         let ruta = dir.join("asesor_reporte.txt");
@@ -2684,6 +3295,7 @@ impl AlmacenAsesor {
     }
 
     /// Exporta un solo registro a texto.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn exportar_registro_texto(&self, id: u64) -> Result<PathBuf, String> {
         let reg = self
             .registros
@@ -2887,5 +3499,377 @@ mod tests {
         assert!((analisis.tasa_mensual_calculada - 0.0).abs() < 0.001);
         assert!((analisis.pago_a_interes - 0.0).abs() < 0.01);
         assert!((analisis.pago_a_capital - 500.0).abs() < 0.01);
+    }
+
+    // ── Fase 3: DecisionPago / EstadoDeudaUi ──
+
+    fn deuda_tarjeta() -> DeudaRastreada {
+        let mut d = DeudaRastreada::nueva("Visa", 24.0, 50.0);
+        d.registrar_mes("Ene", 1_000.0, 50.0, 0.0);
+        d
+    }
+
+    #[test]
+    fn decision_pago_bloquea_negativos() {
+        let d = deuda_tarjeta();
+        assert!(matches!(
+            d.evaluar_pago_mes(-1.0, 0.0, 100.0),
+            DecisionPago::Bloquear(_)
+        ));
+        assert!(matches!(
+            d.evaluar_pago_mes(10.0, -5.0, 100.0),
+            DecisionPago::Bloquear(_)
+        ));
+        assert!(matches!(
+            d.evaluar_pago_mes(10.0, 0.0, -1.0),
+            DecisionPago::Bloquear(_)
+        ));
+    }
+
+    #[test]
+    fn decision_pago_cero_pide_confirmacion() {
+        let d = deuda_tarjeta();
+        let dec = d.evaluar_pago_mes(0.0, 0.0, 1_000.0);
+        assert!(matches!(dec, DecisionPago::PedirDobleConfirmacion(_)));
+        assert!(dec.requiere_confirmacion());
+    }
+
+    #[test]
+    fn decision_pago_mitad_exigible_pide_confirmacion() {
+        let d = deuda_tarjeta();
+        // Exigible ~ 50, pago 10 = 20% → doble confirmación
+        let dec = d.evaluar_pago_mes(10.0, 0.0, 1_000.0);
+        assert!(matches!(dec, DecisionPago::PedirDobleConfirmacion(_)));
+    }
+
+    #[test]
+    fn decision_pago_cubre_exigible_pero_no_intereses_avisa() {
+        // Tarjeta con saldo alto y pago mínimo alto; el pago cubre exigible
+        // pero no alcanza a cubrir intereses del saldo inicial.
+        let mut d = DeudaRastreada::nueva("Visa", 30.0, 200.0);
+        d.registrar_mes("Ene", 10_000.0, 200.0, 0.0);
+        let dec = d.evaluar_pago_mes(200.0, 0.0, 10_000.0);
+        assert!(matches!(dec, DecisionPago::AceptarConAviso(_)));
+        assert!(dec.es_aceptado());
+    }
+
+    #[test]
+    fn decision_pago_normal_acepta() {
+        let mut d = DeudaRastreada::nueva("Préstamo", 6.0, 500.0);
+        d.registrar_mes("Ene", 10_000.0, 500.0, 0.0);
+        let dec = d.evaluar_pago_mes(500.0, 0.0, 9_500.0);
+        assert_eq!(dec, DecisionPago::Aceptar);
+        assert!(dec.es_aceptado());
+        assert!(!dec.requiere_confirmacion());
+        assert!(!dec.esta_bloqueado());
+    }
+
+    #[test]
+    fn estado_ui_liquidada() {
+        let mut d = DeudaRastreada::nueva("Visa", 24.0, 100.0);
+        d.registrar_mes("Ene", 100.0, 100.0, 0.0);
+        assert!(!d.activa);
+        assert_eq!(d.estado_ui(), EstadoDeudaUi::Liquidada);
+    }
+
+    #[test]
+    fn estado_ui_trampa_de_intereses() {
+        let mut d = DeudaRastreada::nueva("Visa", 30.0, 20.0);
+        d.registrar_mes("Ene", 10_000.0, 20.0, 0.0);
+        // interés mensual ~ $250, pago_minimo $20 → trampa
+        assert_eq!(d.estado_ui(), EstadoDeudaUi::EnTrampaIntereses);
+    }
+
+    #[test]
+    fn estado_ui_al_dia() {
+        let mut d = DeudaRastreada::nueva("Préstamo", 6.0, 500.0);
+        d.registrar_mes("Ene", 10_000.0, 500.0, 0.0);
+        assert_eq!(d.estado_ui(), EstadoDeudaUi::AlDia);
+    }
+
+    #[test]
+    fn decision_pago_excesivo_pide_confirmacion() {
+        let d = deuda_tarjeta();
+        let dec = d.evaluar_pago_mes(20_000.0, 0.0, 1_000.0);
+        assert!(matches!(dec, DecisionPago::PedirDobleConfirmacion(_)));
+    }
+
+    #[test]
+    fn decision_pago_nan_bloquea() {
+        let d = deuda_tarjeta();
+        assert!(matches!(
+            d.evaluar_pago_mes(f64::NAN, 0.0, 100.0),
+            DecisionPago::Bloquear(_)
+        ));
+    }
+
+    #[test]
+    fn decision_pago_mensaje_no_vacio_cuando_no_aceptar() {
+        let d = deuda_tarjeta();
+        let dec = d.evaluar_pago_mes(0.0, 0.0, 1_000.0);
+        assert!(!dec.mensaje().is_empty());
+        assert!(DecisionPago::Aceptar.mensaje().is_empty());
+    }
+
+    #[test]
+    fn estado_ui_vencida_detecta_atraso() {
+        let mut d = DeudaRastreada::nueva("Hipoteca", 5.0, 500.0);
+        d.obligatoria = true;
+        d.registrar_mes("Ene", 100_000.0, 100.0, 0.0);
+        let estado = d.estado_ui();
+        assert!(matches!(estado, EstadoDeudaUi::Vencida { .. }));
+        if let EstadoDeudaUi::Vencida { monto_vencido } = estado {
+            assert!(monto_vencido > 300.0);
+        }
+    }
+
+    #[test]
+    fn estado_ui_badge_y_etiqueta() {
+        assert_eq!(EstadoDeudaUi::Liquidada.badge(), "✅");
+        assert_eq!(EstadoDeudaUi::AlDia.etiqueta(), "Al día");
+        assert_eq!(EstadoDeudaUi::EnTrampaIntereses.badge(), "🔴");
+        assert_eq!(
+            EstadoDeudaUi::Vencida {
+                monto_vencido: 100.0
+            }
+            .etiqueta(),
+            "Vencida"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Tests — Análisis de ahorro por pago extra
+    // ──────────────────────────────────────────────────────────
+
+    fn deuda_con_saldo(nombre: &str, saldo: f64, tasa_anual: f64, pago_min: f64) -> DeudaRastreada {
+        let mut d = DeudaRastreada::nueva(nombre, tasa_anual, pago_min);
+        // Sembrar un mes de historial para que saldo_actual() devuelva el saldo deseado.
+        d.historial.push(MesPago {
+            mes: "2026-01".into(),
+            saldo_inicio: saldo,
+            pago: 0.0,
+            pago_escrow: 0.0,
+            nuevos_cargos: 0.0,
+            intereses: 0.0,
+            saldo_final: saldo,
+        });
+        d.activa = saldo > 0.01;
+        d
+    }
+
+    #[test]
+    fn simular_liquidacion_basica() {
+        let d = deuda_con_saldo("Visa", 1000.0, 24.0, 100.0);
+        let sim = d.simular_liquidacion(100.0).expect("debería liquidar");
+        assert!(sim.meses > 0 && sim.meses < 600);
+        assert!(sim.intereses_totales > 0.0);
+    }
+
+    #[test]
+    fn simular_liquidacion_pago_insuficiente_no_converge() {
+        // 24% anual = 2% mensual. Saldo 1000 ⇒ intereses mes 1 = 20. Pago 15 no alcanza.
+        let d = deuda_con_saldo("Visa", 1000.0, 24.0, 15.0);
+        assert!(d.simular_liquidacion(15.0).is_none());
+    }
+
+    #[test]
+    fn ahorro_por_pago_extra_reduce_intereses_y_meses() {
+        // 24% anual ⇒ 2% mensual. Saldo 3000 ⇒ intereses mes 1 = 60.
+        // pago_min 100 cubre intereses y deja 40 al principal.
+        let d = deuda_con_saldo("Visa", 3000.0, 24.0, 100.0);
+        let a = d
+            .ahorro_por_pago_extra(100.0)
+            .expect("debería haber ahorro");
+        assert!(a.meses_ahorrados > 0);
+        assert!(a.intereses_ahorrados > 0.0);
+        assert!(a.intereses_con_extra < a.intereses_base);
+        assert!(a.meses_con_extra < a.meses_base);
+        assert!(a.porcentaje_intereses_ahorrados() > 0.0);
+    }
+
+    #[test]
+    fn ahorro_por_pago_extra_sin_saldo_devuelve_none() {
+        let d = deuda_con_saldo("Visa", 0.0, 24.0, 50.0);
+        assert!(d.ahorro_por_pago_extra(100.0).is_none());
+    }
+
+    #[test]
+    fn ahorro_por_pago_extra_con_extra_cero_devuelve_none() {
+        let d = deuda_con_saldo("Visa", 1000.0, 24.0, 100.0);
+        assert!(d.ahorro_por_pago_extra(0.0).is_none());
+    }
+
+    #[test]
+    fn mejor_destino_pago_extra_prioriza_mayor_ahorro() {
+        let mut r = RastreadorDeudas::default();
+        // Hipoteca: tasa baja, pago_min cubre bien (saldo 5000 @ 6% ⇒ interés mes1 = 25).
+        r.agregar_deuda(deuda_con_saldo("Hipoteca", 5000.0, 6.0, 100.0));
+        // Tarjeta: tasa alta (saldo 5000 @ 24% ⇒ interés mes1 = 100). pago_min 120 apenas reduce.
+        r.agregar_deuda(deuda_con_saldo("Tarjeta", 5000.0, 24.0, 120.0));
+
+        let rec = r
+            .mejor_destino_pago_extra(100.0)
+            .expect("debería recomendar");
+        assert_eq!(rec.nombre_deuda, "Tarjeta");
+        assert_eq!(rec.ranking.len(), 2);
+        // El primer elemento del ranking coincide con la recomendación.
+        assert_eq!(rec.ranking[0].0, "Tarjeta");
+        // El ahorro de Tarjeta > ahorro de Hipoteca.
+        assert!(rec.ranking[0].1.intereses_ahorrados > rec.ranking[1].1.intereses_ahorrados);
+    }
+
+    #[test]
+    fn mejor_destino_sin_deudas_devuelve_none() {
+        let r = RastreadorDeudas::default();
+        assert!(r.mejor_destino_pago_extra(100.0).is_none());
+    }
+
+    #[test]
+    fn eficiencia_por_dolar_extra_es_no_negativa() {
+        let d = deuda_con_saldo("Visa", 2000.0, 18.0, 80.0);
+        let a = d.ahorro_por_pago_extra(50.0).expect("ahorro");
+        assert!(a.eficiencia_por_dolar_extra() >= 0.0);
+    }
+
+    // ──────────────────────────────────────────────────────────
+    //  Tests — Planificador editable de libertad financiera
+    // ──────────────────────────────────────────────────────────
+
+    fn rastreador_con_dos_tarjetas() -> RastreadorDeudas {
+        let mut r = RastreadorDeudas::default();
+        r.agregar_deuda(deuda_con_saldo("Visa", 2000.0, 24.0, 60.0));
+        r.agregar_deuda(deuda_con_saldo("Amex", 1000.0, 18.0, 40.0));
+        r
+    }
+
+    #[test]
+    fn simular_libertad_delegado_sigue_funcionando() {
+        let r = rastreador_con_dos_tarjetas();
+        let sim = r.simular_libertad(200.0, false);
+        assert!(!sim.meses.is_empty());
+        assert_eq!(sim.estrategia, "Avalancha");
+        assert!(sim.total_intereses > 0.0);
+    }
+
+    #[test]
+    fn estrategia_pesos_reparte_segun_peso() {
+        let r = rastreador_con_dos_tarjetas();
+        let estrategia = EstrategiaLibertad::Pesos(vec![
+            ("Visa".into(), 3.0),
+            ("Amex".into(), 1.0),
+        ]);
+        let sim = r.simular_libertad_editado(200.0, &estrategia, &[]);
+        assert_eq!(sim.estrategia, "Pesos personalizados");
+        // Primer mes: Visa debería recibir bastante más que Amex.
+        let mes1 = &sim.meses[0];
+        let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
+        let pago_amex = mes1.pagos.iter().find(|(n, _)| n == "Amex").unwrap().1;
+        assert!(pago_visa > pago_amex);
+    }
+
+    #[test]
+    fn pesos_normalizados_fallback_si_todos_cero() {
+        let estrategia = EstrategiaLibertad::pesos_normalizados(vec![
+            ("A".into(), 0.0),
+            ("B".into(), 0.0),
+        ]);
+        assert_eq!(estrategia, EstrategiaLibertad::Avalancha);
+    }
+
+    #[test]
+    fn pesos_normalizados_suma_uno() {
+        let estrategia = EstrategiaLibertad::pesos_normalizados(vec![
+            ("A".into(), 3.0),
+            ("B".into(), 1.0),
+        ]);
+        match estrategia {
+            EstrategiaLibertad::Pesos(p) => {
+                let suma: f64 = p.iter().map(|(_, v)| v).sum();
+                assert!((suma - 1.0).abs() < 1e-9);
+            }
+            _ => panic!("debería ser Pesos"),
+        }
+    }
+
+    #[test]
+    fn ajuste_manual_respeta_pago_forzado() {
+        let r = rastreador_con_dos_tarjetas();
+        // Forzar que en el mes 1, Visa reciba sólo 30 (menos que mínimo).
+        // El resto del presupuesto debe ir a Amex.
+        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
+        let sim = r.simular_libertad_editado(
+            200.0,
+            &EstrategiaLibertad::Avalancha,
+            &ajustes,
+        );
+        let mes1 = &sim.meses[0];
+        let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
+        let pago_amex = mes1.pagos.iter().find(|(n, _)| n == "Amex").unwrap().1;
+        assert!((pago_visa - 30.0).abs() < 0.01);
+        // El ajuste liberó recursos que deben haberse redirigido a Amex.
+        assert!(pago_amex > 40.0);
+    }
+
+    #[test]
+    fn ajuste_manual_solo_afecta_su_mes() {
+        let r = rastreador_con_dos_tarjetas();
+        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
+        let sim = r.simular_libertad_editado(
+            200.0,
+            &EstrategiaLibertad::Avalancha,
+            &ajustes,
+        );
+        // En el mes 2 ya no hay ajuste → Visa debe recibir al menos su mínimo.
+        if sim.meses.len() >= 2 {
+            let mes2 = &sim.meses[1];
+            let pago_visa = mes2
+                .pagos
+                .iter()
+                .find(|(n, _)| n == "Visa")
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0);
+            // En avalancha Visa tiene tasa más alta → recibe extra, >= mínimo 60.
+            assert!(pago_visa >= 60.0 - 0.01);
+        }
+    }
+
+    #[test]
+    fn ajuste_manual_redistribuye_cuando_sobra() {
+        let r = rastreador_con_dos_tarjetas();
+        // Forzar Visa a un pago ENORME acotado por saldo: el simulador debe
+        // tomar como máximo el saldo y no dejar el presupuesto en negativo.
+        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 10_000.0)];
+        let sim = r.simular_libertad_editado(
+            200.0,
+            &EstrategiaLibertad::Avalancha,
+            &ajustes,
+        );
+        let mes1 = &sim.meses[0];
+        let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
+        // El pago a Visa está acotado por el presupuesto disponible (≤ 200).
+        assert!(pago_visa <= 200.0 + 0.01);
+        assert!(mes1.sobrante >= 0.0);
+    }
+
+    #[test]
+    fn comparar_planes_detecta_diferencias() {
+        let r = rastreador_con_dos_tarjetas();
+        let base = r.simular_libertad(200.0, false);
+        let alt = r.simular_libertad_editado(
+            200.0,
+            &EstrategiaLibertad::BolaNieve,
+            &[],
+        );
+        let cmp = RastreadorDeudas::comparar_planes(&base, &alt);
+        assert_eq!(cmp.meses_base, base.meses.len());
+        assert_eq!(cmp.meses_alternativa, alt.meses.len());
+        assert!((cmp.intereses_base - base.total_intereses).abs() < 1e-6);
+    }
+
+    #[test]
+    fn plan_sin_deudas_devuelve_vacio() {
+        let r = RastreadorDeudas::default();
+        let sim = r.simular_libertad_editado(500.0, &EstrategiaLibertad::Avalancha, &[]);
+        assert!(sim.meses.is_empty());
     }
 }

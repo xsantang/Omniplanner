@@ -21,6 +21,7 @@
 pub mod agenda;
 pub mod canvas;
 pub mod contrasenias;
+pub mod cripto;
 pub mod diagrams;
 pub mod mapper;
 pub mod memoria;
@@ -32,3 +33,6 @@ pub mod tasks;
 pub mod vcs;
 
 pub mod ffi;
+
+#[cfg(feature = "web")]
+pub mod wasm;
