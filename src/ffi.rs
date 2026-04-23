@@ -1779,7 +1779,10 @@ fn cmd_diagrama_agregar_nodo(params: &Value) -> String {
             .to_string();
         let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let y = params.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let d = state.diagramas.get_mut(idx).ok_or("Diagrama no encontrado")?;
+        let d = state
+            .diagramas
+            .get_mut(idx)
+            .ok_or("Diagrama no encontrado")?;
         let id = d.agregar_nodo(Nodo::new(tipo_nodo_from_str(tipo), etiqueta, x, y));
         state.guardar()?;
         Ok(serde_json::json!({ "id": id }))
@@ -1806,14 +1809,21 @@ fn cmd_diagrama_conectar(params: &Value) -> String {
             .get("etiqueta")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let tipo_con = match params.get("tipo").and_then(|v| v.as_str()).unwrap_or("linea") {
+        let tipo_con = match params
+            .get("tipo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("linea")
+        {
             "flecha" => crate::diagrams::TipoConexion::Flecha,
-            "condicional" => crate::diagrams::TipoConexion::Condicional(
-                etiqueta.clone().unwrap_or_default(),
-            ),
+            "condicional" => {
+                crate::diagrams::TipoConexion::Condicional(etiqueta.clone().unwrap_or_default())
+            }
             _ => crate::diagrams::TipoConexion::LineaRecta,
         };
-        let d = state.diagramas.get_mut(idx).ok_or("Diagrama no encontrado")?;
+        let d = state
+            .diagramas
+            .get_mut(idx)
+            .ok_or("Diagrama no encontrado")?;
         d.conectar(&origen, &destino, tipo_con, etiqueta);
         state.guardar()?;
         Ok("Conexión creada")

@@ -8,7 +8,8 @@ use colored::Colorize;
 use omniplanner::ml::{
     AjusteMensualLibertad, DecisionPago, DeudaRastreada, EstrategiaLibertad, FrecuenciaPago,
     IngresoRastreado, RastreadorDeudas, SimulacionLibertad,
-};use omniplanner::storage::AppState;
+};
+use omniplanner::storage::AppState;
 use rust_xlsxwriter::{Format, FormatAlign, FormatBorder, Workbook};
 
 use crate::{
@@ -4403,11 +4404,7 @@ pub fn rastreador_eliminar(state: &mut AppState) {
 /// Muestra un análisis de ahorro (meses e intereses) al aplicar `extra`
 /// dólares extra por mes a una deuda, y compara contra el resto de deudas
 /// activas para sugerir si ese extra rendiría más en otra deuda.
-fn mostrar_analisis_ahorro_pago_extra(
-    rastreador: &RastreadorDeudas,
-    idx: usize,
-    extra: f64,
-) {
+fn mostrar_analisis_ahorro_pago_extra(rastreador: &RastreadorDeudas, idx: usize, extra: f64) {
     let deuda = match rastreador.deudas.get(idx) {
         Some(d) => d,
         None => return,
@@ -4418,7 +4415,11 @@ fn mostrar_analisis_ahorro_pago_extra(
     };
 
     println!();
-    println!("  {} Análisis de pago extra (+${:.2}/mes)", "💡".cyan(), extra);
+    println!(
+        "  {} Análisis de pago extra (+${:.2}/mes)",
+        "💡".cyan(),
+        extra
+    );
     println!(
         "    · En '{}': liquidas en {} meses en vez de {} ({} meses antes)",
         deuda.nombre.cyan(),
@@ -4461,7 +4462,11 @@ fn mostrar_analisis_ahorro_pago_extra(
             println!();
             println!("  Ranking de ahorro con +${:.2}/mes:", extra);
             for (i, (nombre, a)) in rec.ranking.iter().take(3).enumerate() {
-                let nombre_corto = if nombre.len() > 24 { &nombre[..24] } else { nombre.as_str() };
+                let nombre_corto = if nombre.len() > 24 {
+                    &nombre[..24]
+                } else {
+                    nombre.as_str()
+                };
                 println!(
                     "    {}. {:<24} ahorra ${:>8.2} ({:>5.1}%) · {} meses antes",
                     i + 1,
@@ -4545,23 +4550,21 @@ fn editor_plan_libertad(
                     sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
                 }
             }
-            Some(3)
-                if mover_recursos_entre_deudas(&sim, &mut ajustes) => {
-                    sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
-                }
-            Some(4)
-                if fijar_pago_en_mes(&sim, &mut ajustes) => {
-                    sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
-                }
+            Some(3) if mover_recursos_entre_deudas(&sim, &mut ajustes) => {
+                sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
+            }
+            Some(4) if fijar_pago_en_mes(&sim, &mut ajustes) => {
+                sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
+            }
             Some(5)
                 if !ajustes.is_empty()
-                    && confirmar("¿Eliminar todos los ajustes manuales?", false)
-                => {
-                    ajustes.clear();
-                    sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
-                    println!("  Ajustes eliminados.");
-                    pausa();
-                }
+                    && confirmar("¿Eliminar todos los ajustes manuales?", false) =>
+            {
+                ajustes.clear();
+                sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
+                println!("  Ajustes eliminados.");
+                pausa();
+            }
             Some(6) => mostrar_comparacion_planes(&base_snapshot, &sim),
             Some(7) | Some(0) | None => return sim,
             _ => {}
@@ -4598,7 +4601,11 @@ fn elegir_estrategia(rastreador: &RastreadorDeudas) -> Option<EstrategiaLibertad
             let mut pesos: Vec<(String, f64)> = Vec::new();
             for d in &activas {
                 let peso = pedir_f64(
-                    &format!("  Peso para '{}' (saldo ${:.2})", d.nombre, d.saldo_actual()),
+                    &format!(
+                        "  Peso para '{}' (saldo ${:.2})",
+                        d.nombre,
+                        d.saldo_actual()
+                    ),
                     1.0,
                 );
                 pesos.push((d.nombre.clone(), peso));
@@ -4617,10 +4624,7 @@ fn mover_recursos_entre_deudas(
         return false;
     }
     let max_mes = sim.meses.len();
-    let mes = pedir_f64(
-        &format!("Mes (1-{})", max_mes),
-        1.0,
-    ) as usize;
+    let mes = pedir_f64(&format!("Mes (1-{})", max_mes), 1.0) as usize;
     if mes < 1 || mes > max_mes {
         println!("  Mes fuera de rango.");
         pausa();
@@ -4688,10 +4692,7 @@ fn mover_recursos_entre_deudas(
     true
 }
 
-fn fijar_pago_en_mes(
-    sim: &SimulacionLibertad,
-    ajustes: &mut Vec<AjusteMensualLibertad>,
-) -> bool {
+fn fijar_pago_en_mes(sim: &SimulacionLibertad, ajustes: &mut Vec<AjusteMensualLibertad>) -> bool {
     if sim.meses.is_empty() {
         return false;
     }
@@ -4828,10 +4829,7 @@ fn mostrar_comparacion_planes(base: &SimulacionLibertad, alt: &SimulacionLiberta
     };
     println!(
         "  {:<28} {:>15} {:>15} {:>15}",
-        "Meses hasta libertad",
-        cmp.meses_base,
-        cmp.meses_alternativa,
-        diff_meses_txt
+        "Meses hasta libertad", cmp.meses_base, cmp.meses_alternativa, diff_meses_txt
     );
     let diff_int = cmp.diferencia_intereses;
     let diff_int_txt = if diff_int.abs() < 0.01 {
@@ -4883,8 +4881,7 @@ fn mostrar_comparacion_planes(base: &SimulacionLibertad, alt: &SimulacionLiberta
     } else if cmp.diferencia_meses == 0 && diff_max.abs() < 1.0 && diff_int.abs() < 1.0 {
         println!(
             "  💡 {}",
-            "Mismo resultado con pagos redistribuidos — útil para nivelar meses difíciles."
-                .cyan()
+            "Mismo resultado con pagos redistribuidos — útil para nivelar meses difíciles.".cyan()
         );
     } else if cmp.diferencia_meses > 0 || diff_int > 1.0 {
         println!(
@@ -4895,4 +4892,3 @@ fn mostrar_comparacion_planes(base: &SimulacionLibertad, alt: &SimulacionLiberta
     println!();
     pausa();
 }
-

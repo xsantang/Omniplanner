@@ -954,7 +954,10 @@ pub enum DecisionPago {
 impl DecisionPago {
     /// ¿El pago puede registrarse sin más trámite?
     pub fn es_aceptado(&self) -> bool {
-        matches!(self, DecisionPago::Aceptar | DecisionPago::AceptarConAviso(_))
+        matches!(
+            self,
+            DecisionPago::Aceptar | DecisionPago::AceptarConAviso(_)
+        )
     }
 
     /// ¿Se requiere que el usuario confirme explícitamente?
@@ -3775,10 +3778,8 @@ mod tests {
     #[test]
     fn estrategia_pesos_reparte_segun_peso() {
         let r = rastreador_con_dos_tarjetas();
-        let estrategia = EstrategiaLibertad::Pesos(vec![
-            ("Visa".into(), 3.0),
-            ("Amex".into(), 1.0),
-        ]);
+        let estrategia =
+            EstrategiaLibertad::Pesos(vec![("Visa".into(), 3.0), ("Amex".into(), 1.0)]);
         let sim = r.simular_libertad_editado(200.0, &estrategia, &[]);
         assert_eq!(sim.estrategia, "Pesos personalizados");
         // Primer mes: Visa debería recibir bastante más que Amex.
@@ -3790,19 +3791,15 @@ mod tests {
 
     #[test]
     fn pesos_normalizados_fallback_si_todos_cero() {
-        let estrategia = EstrategiaLibertad::pesos_normalizados(vec![
-            ("A".into(), 0.0),
-            ("B".into(), 0.0),
-        ]);
+        let estrategia =
+            EstrategiaLibertad::pesos_normalizados(vec![("A".into(), 0.0), ("B".into(), 0.0)]);
         assert_eq!(estrategia, EstrategiaLibertad::Avalancha);
     }
 
     #[test]
     fn pesos_normalizados_suma_uno() {
-        let estrategia = EstrategiaLibertad::pesos_normalizados(vec![
-            ("A".into(), 3.0),
-            ("B".into(), 1.0),
-        ]);
+        let estrategia =
+            EstrategiaLibertad::pesos_normalizados(vec![("A".into(), 3.0), ("B".into(), 1.0)]);
         match estrategia {
             EstrategiaLibertad::Pesos(p) => {
                 let suma: f64 = p.iter().map(|(_, v)| v).sum();
@@ -3818,11 +3815,7 @@ mod tests {
         // Forzar que en el mes 1, Visa reciba sólo 30 (menos que mínimo).
         // El resto del presupuesto debe ir a Amex.
         let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
-        let sim = r.simular_libertad_editado(
-            200.0,
-            &EstrategiaLibertad::Avalancha,
-            &ajustes,
-        );
+        let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let mes1 = &sim.meses[0];
         let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
         let pago_amex = mes1.pagos.iter().find(|(n, _)| n == "Amex").unwrap().1;
@@ -3835,11 +3828,7 @@ mod tests {
     fn ajuste_manual_solo_afecta_su_mes() {
         let r = rastreador_con_dos_tarjetas();
         let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
-        let sim = r.simular_libertad_editado(
-            200.0,
-            &EstrategiaLibertad::Avalancha,
-            &ajustes,
-        );
+        let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         // En el mes 2 ya no hay ajuste → Visa debe recibir al menos su mínimo.
         if sim.meses.len() >= 2 {
             let mes2 = &sim.meses[1];
@@ -3860,11 +3849,7 @@ mod tests {
         // Forzar Visa a un pago ENORME acotado por saldo: el simulador debe
         // tomar como máximo el saldo y no dejar el presupuesto en negativo.
         let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 10_000.0)];
-        let sim = r.simular_libertad_editado(
-            200.0,
-            &EstrategiaLibertad::Avalancha,
-            &ajustes,
-        );
+        let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let mes1 = &sim.meses[0];
         let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
         // El pago a Visa está acotado por el presupuesto disponible (≤ 200).
@@ -3876,11 +3861,7 @@ mod tests {
     fn comparar_planes_detecta_diferencias() {
         let r = rastreador_con_dos_tarjetas();
         let base = r.simular_libertad(200.0, false);
-        let alt = r.simular_libertad_editado(
-            200.0,
-            &EstrategiaLibertad::BolaNieve,
-            &[],
-        );
+        let alt = r.simular_libertad_editado(200.0, &EstrategiaLibertad::BolaNieve, &[]);
         let cmp = RastreadorDeudas::comparar_planes(&base, &alt);
         assert_eq!(cmp.meses_base, base.meses.len());
         assert_eq!(cmp.meses_alternativa, alt.meses.len());

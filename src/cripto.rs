@@ -391,7 +391,8 @@ pub fn verificar_rsa_pss(pem_publico: &str, mensaje: &[u8], firma: &[u8]) -> Res
         .map_err(|e| ErrorCripto::Pkcs8Fallido(e.to_string()))?;
     let vk = RsaPssVerifying::<Sha256>::new(pk);
     let sig = rsa::pss::Signature::try_from(firma).map_err(|_| ErrorCripto::FirmaInvalida)?;
-    vk.verify(mensaje, &sig).map_err(|_| ErrorCripto::FirmaInvalida)
+    vk.verify(mensaje, &sig)
+        .map_err(|_| ErrorCripto::FirmaInvalida)
 }
 
 // ── Sobre híbrido RSA+AES para mensajes largos ───────────────
@@ -542,10 +543,10 @@ mod tests {
     fn x25519_ecdh_produce_clave_simetrica_identica() {
         let a = ParClavesX25519::generar();
         let b = ParClavesX25519::generar();
-        let ka =
-            ecdh_x25519_a_aes256(&a.secreto_bytes(), &b.publica_bytes(), b"omniplanner/v1").unwrap();
-        let kb =
-            ecdh_x25519_a_aes256(&b.secreto_bytes(), &a.publica_bytes(), b"omniplanner/v1").unwrap();
+        let ka = ecdh_x25519_a_aes256(&a.secreto_bytes(), &b.publica_bytes(), b"omniplanner/v1")
+            .unwrap();
+        let kb = ecdh_x25519_a_aes256(&b.secreto_bytes(), &a.publica_bytes(), b"omniplanner/v1")
+            .unwrap();
         assert_eq!(ka, kb);
     }
 

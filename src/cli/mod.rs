@@ -4,4 +4,3 @@
 //! y mejorar mantenibilidad sin alterar el comportamiento.
 
 pub mod rastreador;
-

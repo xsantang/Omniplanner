@@ -12064,7 +12064,6 @@ pub(crate) fn menu_asesor_registrar_accion(state: &mut AppState) {
     pausa();
 }
 
-
 // ── Historial unificado y exportación ──
 
 pub(crate) fn menu_asesor_historial(state: &mut AppState) {

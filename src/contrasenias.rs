@@ -489,7 +489,10 @@ mod tests {
         // (probabilidad de colisión ≈ 2^-64 con getrandom).
         let a = generar_contrasenia(24, true);
         let b = generar_contrasenia(24, true);
-        assert_ne!(a, b, "CSPRNG no debería dar dos valores iguales consecutivos");
+        assert_ne!(
+            a, b,
+            "CSPRNG no debería dar dos valores iguales consecutivos"
+        );
     }
 
     #[test]

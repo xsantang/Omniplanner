@@ -180,7 +180,11 @@ impl Repo {
             return Ok(None);
         }
         let id = fs::read_to_string(ref_path)?.trim().to_string();
-        if id.is_empty() { Ok(None) } else { Ok(Some(id)) }
+        if id.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(id))
+        }
     }
 
     fn escribir_head_rama(&self, rama: &str) -> Resultado<()> {
@@ -262,8 +266,8 @@ impl Repo {
     fn leer_index(&self) -> Resultado<BTreeMap<String, String>> {
         let path = self.dir_repo().join("index.json");
         let raw = fs::read_to_string(path)?;
-        let idx: BTreeMap<String, String> = serde_json::from_str(&raw)
-            .map_err(|e| ErrorVcs::IndexCorrupto(e.to_string()))?;
+        let idx: BTreeMap<String, String> =
+            serde_json::from_str(&raw).map_err(|e| ErrorVcs::IndexCorrupto(e.to_string()))?;
         Ok(idx)
     }
 
@@ -571,11 +575,7 @@ impl Repo {
         false
     }
 
-    fn listar_archivos_rel(
-        &self,
-        desde: &Path,
-        ignore: &[String],
-    ) -> Resultado<Vec<String>> {
+    fn listar_archivos_rel(&self, desde: &Path, ignore: &[String]) -> Resultado<Vec<String>> {
         let mut out = Vec::new();
         self.recorrer(desde, ignore, &mut out)?;
         out.sort();
@@ -693,7 +693,10 @@ mod tests {
         let id2 = repo.commit("v2", "yo").unwrap();
         assert_eq!(repo.log().unwrap().len(), 2);
         assert_eq!(repo.log().unwrap()[0].id, id2);
-        assert_eq!(repo.log().unwrap()[0].padre_id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            repo.log().unwrap()[0].padre_id.as_deref(),
+            Some(id.as_str())
+        );
     }
 
     #[test]
@@ -732,7 +735,10 @@ mod tests {
         repo.add(".").unwrap();
         repo.commit("feat c2", "a").unwrap();
 
-        assert!(repo.listar_ramas().unwrap().contains(&"feature".to_string()));
+        assert!(repo
+            .listar_ramas()
+            .unwrap()
+            .contains(&"feature".to_string()));
         assert!(repo.listar_ramas().unwrap().contains(&"main".to_string()));
 
         repo.cambiar_rama("main").unwrap();

@@ -21,10 +21,10 @@ pub mod svm;
 
 // Re-exports para conveniencia
 pub use advisor::{
-    AhorroPagoExtra, AlmacenAsesor, AnalisisDeuda, CategoriaEscenario, ComparacionPlanes,
-    ComparacionRapida, CorteBancario, CriterioDecision, DecisionPago, DeudaRastreada,
-    DiagnosticoGlobal, DiagnosticoMes, DiccionarioAcciones, ErrorPago, Escenario, EstadoDeudaUi,
-    EstrategiaLibertad, FrecuenciaPago, AjusteMensualLibertad, ImpactoAccion, IngresoRastreado,
+    AhorroPagoExtra, AjusteMensualLibertad, AlmacenAsesor, AnalisisDeuda, CategoriaEscenario,
+    ComparacionPlanes, ComparacionRapida, CorteBancario, CriterioDecision, DecisionPago,
+    DeudaRastreada, DiagnosticoGlobal, DiagnosticoMes, DiccionarioAcciones, ErrorPago, Escenario,
+    EstadoDeudaUi, EstrategiaLibertad, FrecuenciaPago, ImpactoAccion, IngresoRastreado,
     MatrizDecision, MesPago, MesSimulado, MetaAhorro, Movimiento, Presupuesto, RastreadorDeudas,
     RecomendacionPagoExtra, RegistroAsesor, ResumenDeuda, SimulacionLibertad,
     SimulacionLiquidacion, TipoRegistro,
