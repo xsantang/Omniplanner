@@ -2306,12 +2306,24 @@ impl RastreadorDeudas {
         estrategia: &EstrategiaLibertad,
         ajustes: &[AjusteMensualLibertad],
     ) -> SimulacionLibertad {
-        let gastos_fijos: Vec<(String, f64)> = self
-            .deudas
-            .iter()
-            .filter(|d| d.activa && d.es_pago_corriente())
-            .map(|d| (d.nombre.clone(), d.pago_total_mensual()))
-            .collect();
+        let gastos_fijos: Vec<(String, f64)> = {
+            let mut v: Vec<(String, f64)> = self
+                .deudas
+                .iter()
+                .filter(|d| d.activa && d.es_pago_corriente())
+                .map(|d| (d.nombre.clone(), d.pago_total_mensual()))
+                .collect();
+            // Escrow de hipotecas/préstamos: es gasto mensual obligatorio que no
+            // reduce el saldo principal — se paga seguro/impuestos. Se trata igual
+            // que un pago corriente para que el presupuesto disponible para deuda
+            // lo descuente correctamente.
+            for d in self.deudas.iter() {
+                if d.activa && !d.es_pago_corriente() && d.escrow_mensual > 0.01 {
+                    v.push((format!("{} — Escrow", d.nombre), d.escrow_mensual));
+                }
+            }
+            v
+        };
         let total_gastos_fijos: f64 = gastos_fijos.iter().map(|(_, m)| *m).sum();
 
         let mut deudas: Vec<DeudaSimulada> = self
