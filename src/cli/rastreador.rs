@@ -78,8 +78,9 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
                 } else {
                     let tipo = if d.obligatoria { " 🔒" } else { "" };
                     let tasa_display = format!("{:.1}%", d.tasa_anual);
-                    let pago_display = if d.tiene_escrow_configurado() {
-                        format!("${:.2}+${:.2}", d.pago_pi_mensual(), d.escrow_mensual)
+                    let tiene_escrow = d.tiene_escrow_configurado();
+                    let pago_display = if tiene_escrow {
+                        format!("${:.2}", d.pago_total_mensual())
                     } else {
                         format!("${:.2}", d.pago_pi_mensual())
                     };
@@ -113,6 +114,17 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
                         tipo,
                         enganche_tag
                     );
+                    if tiene_escrow {
+                        println!(
+                            "       {}",
+                            format!(
+                                "↳ P&I ${:.2} + Escrow ${:.2} (seguro/impuestos)",
+                                d.pago_pi_mensual(),
+                                d.escrow_mensual
+                            )
+                            .dimmed()
+                        );
+                    }
                 }
             }
             println!("  {}", "─".repeat(92));
