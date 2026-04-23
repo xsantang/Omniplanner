@@ -864,6 +864,11 @@ pub struct DeudaRastreada {
     /// La deuda ya fue originada/desembolsada. Si es false, aún no inicia pagos.
     #[serde(default = "default_true")]
     pub originada: bool,
+    /// Saldo principal inicial declarado al crear la deuda (antes de cualquier pago).
+    /// Se usa como fallback de `saldo_actual()` cuando el historial está vacío,
+    /// por ejemplo en hipotecas o préstamos pendientes de originarse.
+    #[serde(default)]
+    pub saldo_inicial: f64,
 }
 
 fn default_true() -> bool {
@@ -1104,6 +1109,7 @@ impl DeudaRastreada {
             escrow_mensual: 0.0,
             principal_interes_mensual: pago_minimo,
             originada: true,
+            saldo_inicial: 0.0,
         }
     }
 
@@ -1213,7 +1219,10 @@ impl DeudaRastreada {
     }
 
     pub fn saldo_actual(&self) -> f64 {
-        self.historial.last().map(|m| m.saldo_final).unwrap_or(0.0)
+        self.historial
+            .last()
+            .map(|m| m.saldo_final)
+            .unwrap_or(self.saldo_inicial)
     }
 
     pub fn registrar_mes(&mut self, mes: &str, saldo_inicio: f64, pago: f64, nuevos_cargos: f64) {

@@ -1387,9 +1387,13 @@ pub fn rastreador_agregar_deuda(state: &mut AppState) {
     };
     deuda.enganche = enganche;
     let saldo_efectivo = (saldo - enganche).max(0.0);
+    // Persistimos el principal declarado para que `saldo_actual()` lo refleje
+    // aun cuando el historial esté vacío (caso típico: mortgage pendiente de originarse).
+    deuda.saldo_inicial = saldo_efectivo;
     if tipo != 2 {
         if tipo == 1 && inicia_con_primera_cuota {
             deuda.activa = false;
+            deuda.originada = false;
             println!();
             println!(
                 "  ⏳ '{}' quedará pendiente: la deuda se originará cuando registres la primera cuota.",
