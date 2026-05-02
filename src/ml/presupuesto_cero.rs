@@ -6,6 +6,11 @@
 //! Ingreso total - Gastos fijos - Gastos variables - Pagos deuda - Ahorro = 0
 
 use serde::{Deserialize, Serialize};
+use super::advisor::FrecuenciaPago;
+
+fn frecuencia_mensual_default() -> FrecuenciaPago {
+    FrecuenciaPago::Mensual
+}
 
 // ─── Categorías ──────────────────────────────────────────────
 
@@ -55,6 +60,32 @@ pub struct LineaPresupuesto {
     /// Saldo total de la deuda (solo para PagoDeuda)
     #[serde(default)]
     pub saldo_total_deuda: Option<f64>,
+    /// Monto realmente pagado en este mes (acumulado, soporta pagos parciales).
+    #[serde(default)]
+    pub monto_pagado_real: f64,
+    /// Meses anteriores aún no pagados (atrasados). 0 = al día.
+    #[serde(default)]
+    pub meses_atrasados: u32,
+    /// Frecuencia de este pago (para mostrar correctamente en la UI).
+    #[serde(default = "frecuencia_mensual_default")]
+    pub frecuencia: FrecuenciaPago,
+}
+
+impl LineaPresupuesto {
+    /// Monto total que se debe pagar este mes (mes corriente + meses atrasados).
+    pub fn monto_a_pagar(&self) -> f64 {
+        self.monto * (1.0 + self.meses_atrasados as f64)
+    }
+
+    /// Lo que falta por pagar después de los pagos parciales.
+    pub fn pendiente_real(&self) -> f64 {
+        (self.monto_a_pagar() - self.monto_pagado_real).max(0.0)
+    }
+
+    /// ¿Está atrasado y aún no se ha cubierto el mes corriente?
+    pub fn esta_atrasado(&self) -> bool {
+        self.meses_atrasados > 0 && !self.pagado
+    }
 }
 
 // ─── Presupuesto mensual completo ───────────────────────────
@@ -134,6 +165,25 @@ impl PresupuestoMensual {
             .filter(|l| l.pagado && l.categoria != Categoria::Ingreso)
             .map(|l| l.monto)
             .sum()
+    }
+
+    /// Suma del dinero realmente pagado (incluye pagos parciales).
+    pub fn total_pagado_real(&self) -> f64 {
+        self.lineas
+            .iter()
+            .filter(|l| l.categoria != Categoria::Ingreso)
+            .map(|l| l.monto_pagado_real)
+            .sum()
+    }
+
+    /// Dinero disponible considerando lo realmente pagado.
+    pub fn disponible_real(&self) -> f64 {
+        self.total_ingresos() - self.total_pagado_real()
+    }
+
+    /// ¿Hay alguna línea con meses atrasados sin pagar?
+    pub fn tiene_atrasos(&self) -> bool {
+        self.lineas.iter().any(|l| l.esta_atrasado())
     }
 
     pub fn total_pendiente(&self) -> f64 {
@@ -292,14 +342,62 @@ pub struct LineaPlantilla {
     /// Saldo total de la deuda (solo para PagoDeuda)
     #[serde(default)]
     pub saldo_total_deuda: Option<f64>,
+    /// Meses atrasados arrastrados de la fuente (Carrington-style)
+    #[serde(default)]
+    pub meses_atrasados: u32,
+    /// Frecuencia real del pago. Mensual = aparece cada mes. Anual = una vez al año, etc.
+    #[serde(default = "frecuencia_mensual_default")]
+    pub frecuencia: FrecuenciaPago,
+    /// Mes del año (1-12) en que este pago es exigible.
+    /// None = incluir siempre (compatibilidad con datos existentes).
+    /// Some(m) = solo generar este mes en el presupuesto mensual cuando el mes actual == m
+    /// (o sea múltiplo del período para trimestral/semestral).
+    #[serde(default)]
+    pub mes_pago: Option<u8>,
+}
+
+impl LineaPlantilla {
+    /// ¿Debe aparecer esta línea en el presupuesto del mes dado?
+    /// `mes_num` es el número de mes (1-12).
+    pub fn incluir_en_mes(&self, mes_num: u8) -> bool {
+        let periodo: u8 = match self.frecuencia {
+            // Semanal/Quincenal/Mensual → siempre
+            FrecuenciaPago::Semanal | FrecuenciaPago::Quincenal | FrecuenciaPago::Mensual => {
+                return true;
+            }
+            FrecuenciaPago::Trimestral => 3,
+            FrecuenciaPago::Semestral => 6,
+            FrecuenciaPago::Anual => 12,
+            // UnaVez: no se regenera automáticamente
+            FrecuenciaPago::UnaVez => return false,
+        };
+
+        match self.mes_pago {
+            None => true, // sin mes configurado → compatibilidad: incluir siempre
+            Some(base) => {
+                let base = base.clamp(1, 12);
+                let diff = (mes_num as i32 - base as i32).rem_euclid(12) as u8;
+                diff % periodo == 0
+            }
+        }
+    }
 }
 
 impl PlantillaPresupuesto {
-    /// Genera un presupuesto nuevo a partir de la plantilla
+    /// Genera un presupuesto nuevo a partir de la plantilla.
+    /// Solo incluye las líneas cuya frecuencia/mes corresponda al mes indicado.
     pub fn generar_mes(&self, mes: &str) -> PresupuestoMensual {
+        // Extraer número de mes del string "YYYY-MM"
+        let mes_num: u8 = mes
+            .split('-')
+            .nth(1)
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(1);
+
         let lineas = self
             .lineas
             .iter()
+            .filter(|pl| pl.incluir_en_mes(mes_num))
             .map(|pl| LineaPresupuesto {
                 nombre: pl.nombre.clone(),
                 categoria: pl.categoria.clone(),
@@ -308,6 +406,9 @@ impl PlantillaPresupuesto {
                 fecha_limite: pl.fecha_limite.clone(),
                 notas: String::new(),
                 saldo_total_deuda: pl.saldo_total_deuda,
+                monto_pagado_real: 0.0,
+                meses_atrasados: pl.meses_atrasados,
+                frecuencia: pl.frecuencia.clone(),
             })
             .collect();
 
@@ -471,6 +572,9 @@ pub fn importar_excel(ruta: &Path) -> ImportacionExcel {
                         fecha_limite: String::new(),
                         notas: nombre_hoja.clone(),
                         saldo_total_deuda: None,
+                        monto_pagado_real: 0.0,
+                        meses_atrasados: 0,
+                        frecuencia: FrecuenciaPago::Mensual,
                     });
                 }
             }
@@ -560,6 +664,9 @@ pub fn generar_plantilla_desde_importacion(meses: &[PresupuestoMensual]) -> Plan
                 monto_default: (promedio * 100.0).round() / 100.0,
                 fecha_limite: String::new(),
                 saldo_total_deuda: None,
+                meses_atrasados: 0,
+                frecuencia: FrecuenciaPago::Mensual,
+                mes_pago: None,
             }
         })
         .collect();
@@ -604,6 +711,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Casa".into(),
@@ -613,6 +723,9 @@ mod tests {
             fecha_limite: "1".into(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Carro".into(),
@@ -622,6 +735,9 @@ mod tests {
             fecha_limite: "15".into(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "BOFA".into(),
@@ -631,6 +747,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Comida".into(),
@@ -640,6 +759,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Savings".into(),
@@ -649,6 +771,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
 
         // 3500 - 1500 - 750 - 300 - 400 - 50 = 500
@@ -668,6 +793,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Renta".into(),
@@ -677,6 +805,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Ahorro".into(),
@@ -686,6 +817,9 @@ mod tests {
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
         });
 
         let resumen = pres.resumen();
@@ -714,6 +848,9 @@ mod tests {
                     monto_default: 3000.0,
                     fecha_limite: String::new(),
                     saldo_total_deuda: None,
+                    meses_atrasados: 0,
+                    frecuencia: FrecuenciaPago::Mensual,
+                    mes_pago: None,
                 },
                 LineaPlantilla {
                     nombre: "Renta".into(),
@@ -721,14 +858,33 @@ mod tests {
                     monto_default: 1500.0,
                     fecha_limite: "1".into(),
                     saldo_total_deuda: None,
+                    meses_atrasados: 0,
+                    frecuencia: FrecuenciaPago::Mensual,
+                    mes_pago: None,
+                },
+                LineaPlantilla {
+                    nombre: "Seguro Vida".into(),
+                    categoria: Categoria::GastoFijo,
+                    monto_default: 800.0,
+                    fecha_limite: String::new(),
+                    saldo_total_deuda: None,
+                    meses_atrasados: 0,
+                    frecuencia: FrecuenciaPago::Anual,
+                    mes_pago: Some(3), // solo en marzo
                 },
             ],
         };
 
-        let mes = plantilla.generar_mes("2026-05");
-        assert_eq!(mes.mes, "2026-05");
-        assert_eq!(mes.lineas.len(), 2);
-        assert!(!mes.lineas[0].pagado);
-        assert_eq!(mes.lineas[0].monto, 3000.0);
+        // Mayo (mes 5): anual con mes_pago=3 NO debe aparecer
+        let mes_mayo = plantilla.generar_mes("2026-05");
+        assert_eq!(mes_mayo.mes, "2026-05");
+        assert_eq!(mes_mayo.lineas.len(), 2); // sin el seguro anual
+        assert!(!mes_mayo.lineas[0].pagado);
+        assert_eq!(mes_mayo.lineas[0].monto, 3000.0);
+
+        // Marzo (mes 3): anual con mes_pago=3 SÍ debe aparecer
+        let mes_marzo = plantilla.generar_mes("2026-03");
+        assert_eq!(mes_marzo.lineas.len(), 3);
+        assert_eq!(mes_marzo.lineas[2].monto, 800.0);
     }
 }

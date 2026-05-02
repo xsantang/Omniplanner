@@ -1,0 +1,14 @@
+Mes,Categoria,Concepto,Plan_mes,Meses_atrasados,Total_a_pagar,Pagado_real,Pendiente,Pagado_completo,Saldo_total_deuda
+2026-05,Ingreso,"VA",4500.00,0,4500.00,0.00,4500.00,no,
+2026-05,Gasto Fijo,"Unit Con Fin",297.00,1,594.00,0.00,594.00,no,
+2026-05,Gasto Fijo,"Navy Federal Credit Union",500.00,1,1000.00,0.00,1000.00,no,
+2026-05,Gasto Fijo,"Carrington Mortgage Services, llc — Escrow",253.06,0,253.06,506.12,0.00,si,
+2026-05,Pago de Deuda,"Bofa Mastercard",236.00,0,236.00,236.00,0.00,si,10999.64
+2026-05,Pago de Deuda,"Dell",200.00,0,200.00,100.00,100.00,no,2306.45
+2026-05,Pago de Deuda,"Bofa azul",150.00,0,150.00,150.00,0.00,si,2913.92
+2026-05,Pago de Deuda,"5/3 dividend",149.00,1,298.00,0.00,298.00,no,2294.33
+2026-05,Pago de Deuda,"Discover",500.00,1,1000.00,0.00,1000.00,no,12160.01
+2026-05,Pago de Deuda,"Carrington Mortgage Services, llc",1283.54,0,1283.54,2567.08,0.00,si,207490.74
+2026-05,Gasto Fijo,"Renta Kissimmee",800.00,0,800.00,800.00,0.00,si,
+2026-05,Gasto Fijo,"Celular",50.00,0,50.00,50.00,0.00,si,
+2026-05,RESUMEN,"Totales",4500.00,,5864.60,4409.20,2992.00,,

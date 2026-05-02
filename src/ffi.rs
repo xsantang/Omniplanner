@@ -710,6 +710,9 @@ fn cmd_presupuesto_agregar(params: &Value) -> String {
             fecha_limite,
             notas,
             saldo_total_deuda,
+            monto_pagado_real: 0.0,
+            meses_atrasados: 0,
+            frecuencia: crate::ml::FrecuenciaPago::Mensual,
         });
 
         state.guardar()?;

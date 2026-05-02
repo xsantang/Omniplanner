@@ -11,7 +11,7 @@ name = "omniplanner"
 crate-type = ["lib", "cdylib"]
 
 [[bin]]
-name = "omniplanner"
+name = "omniplanner-cli"
 path = "src/main.rs"
 # El binario CLI solo tiene sentido en escritorio; en Android usamos la lib.
 required-features = ["desktop"]
