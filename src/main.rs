@@ -23,9 +23,10 @@ use omniplanner::ml::presupuesto_cero::{
 };
 use omniplanner::ml::{
     dataset_circulos, dataset_iris_sintetico, dataset_secuencia_temporal, dataset_xor, Activacion,
-    AnalisisDeuda, ArbolDecision, BosqueAleatorio, ComparacionRapida, CorteBancario, Dataset,
-    FrecuenciaPago, GridWorld, ImpactoAccion, MatrizDecision, MetaAhorro, ModeloML, Movimiento,
-    MultiBandit, Perdida, QTable, RegistroAsesor, Rng, SVMMulticlase, TipoModelo, TipoRNN,
+    AjusteMensualLibertad, AnalisisDeuda, ArbolDecision, BosqueAleatorio, ComparacionRapida,
+    CorteBancario, Dataset, DeudaRastreada, EstrategiaLibertad, FrecuenciaPago, GridWorld,
+    ImpactoAccion, MatrizDecision, MetaAhorro, ModeloML, Movimiento, MultiBandit, Perdida, QTable,
+    RastreadorDeudas, RegistroAsesor, Rng, SVMMulticlase, SimulacionLibertad, TipoModelo, TipoRNN,
     TipoRegistro, ANN, CNN, DNN, RNN, SVM,
 };
 use omniplanner::nlp::{DatosEntrenamiento, TipoRelacion, Valoracion};
@@ -2955,16 +2956,19 @@ pub(crate) fn exportar_canvas_html(state: &AppState) {
         state.canvases[idx].nombre.replace(' ', "_").to_lowercase()
     );
     let sugerencia = pedir_texto_opcional(&format!("Archivo (Enter = {})", nombre_archivo));
-    let archivo = if sugerencia.is_empty() {
+    let nombre = if sugerencia.is_empty() {
         nombre_archivo
     } else {
         sugerencia
     };
 
+    let dir = omniplanner::ml::advisor::AlmacenAsesor::dir_exportacion();
+    let archivo = dir.join(&nombre);
+
     let html = state.canvases[idx].exportar_html();
     match std::fs::write(&archivo, &html) {
         Ok(_) => {
-            println!("  {} Exportado a '{}'", "✓".green(), archivo);
+            println!("  {} Exportado a '{}'", "✓".green(), archivo.display());
             if TermConfirm::new()
                 .with_prompt("  ¿Abrir en navegador?")
                 .default(true)
@@ -6151,16 +6155,18 @@ pub(crate) fn exportar_ics(state: &AppState) {
     }
 
     let ical = sync::calendario::exportar_ical(&eventos, &tareas);
-    let archivo = match pedir_texto("Archivo de salida (ej: omniplanner.ics)") {
+    let nombre = match pedir_texto("Archivo de salida (ej: omniplanner.ics)") {
         Some(t) => t,
         None => return,
     };
+    let dir = omniplanner::ml::advisor::AlmacenAsesor::dir_exportacion();
+    let archivo = dir.join(&nombre);
 
     match std::fs::write(&archivo, &ical) {
         Ok(_) => println!(
             "  {} Exportado a '{}' ({} eventos, {} tareas)",
             "✓".green(),
-            archivo,
+            archivo.display(),
             eventos.len(),
             tareas.len()
         ),
@@ -6607,15 +6613,17 @@ pub(crate) fn exportar_estado(state: &AppState) {
         Some(t) => t,
         None => return,
     };
+    let dir = omniplanner::ml::advisor::AlmacenAsesor::dir_exportacion();
+    let archivo = dir.join(&nombre);
 
     match serde_json::to_string_pretty(state) {
-        Ok(json) => match std::fs::write(&nombre, &json) {
+        Ok(json) => match std::fs::write(&archivo, &json) {
             Ok(_) => {
                 let tamano = json.len() as f64 / 1024.0;
                 println!(
                     "  {} Estado exportado a '{}' ({:.1} KB)",
                     "✓".green(),
-                    nombre,
+                    archivo.display(),
                     tamano
                 );
                 println!(
@@ -7402,11 +7410,209 @@ pub(crate) fn ml_elegir_dataset(state: &AppState) -> Option<usize> {
 
 pub(crate) fn pedir_f64(prompt: &str, default: f64) -> f64 {
     let s: String = Input::new()
-        .with_prompt(format!("  {} (default: {})", prompt, default))
+        .with_prompt(format!(
+            "  {} (default: {}) [acepta expresiones: 2*1283.54, 2(1283.54), 50%, 1283.54+500…]",
+            prompt, default
+        ))
         .default(default.to_string())
         .interact_text()
         .unwrap_or_else(|_| default.to_string());
-    s.parse().unwrap_or(default)
+    let txt = s.trim();
+    if txt.is_empty() {
+        return default;
+    }
+    match evaluar_expresion(txt) {
+        Ok(v) => {
+            // Eco discreto del cálculo cuando el usuario escribió una expresión real.
+            if !txt
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+            {
+                println!("    = {:.2}", v);
+            }
+            v
+        }
+        Err(e) => {
+            println!(
+                "    {} Expresión inválida ({}). Se usa default {}.",
+                "⚠".yellow(),
+                e,
+                default
+            );
+            default
+        }
+    }
+}
+
+/// Evalúa una expresión aritmética simple.
+///
+/// Soporta:
+/// - Operadores: `+ - * / ( )`
+/// - Multiplicación implícita: `2(3+4)` = `2*(3+4)`
+/// - Sufijo de porcentaje: `50%` = `0.5`, `200*15%` = `30`
+/// - Números con punto decimal y separadores de miles `1,283.54` (las comas se ignoran).
+pub(crate) fn evaluar_expresion(s: &str) -> Result<f64, String> {
+    let tokens = tokenizar(s)?;
+    let mut p = Parser { tokens, pos: 0 };
+    let v = p.expr()?;
+    if p.pos != p.tokens.len() {
+        return Err(format!("token sobrante en posición {}", p.pos));
+    }
+    Ok(v)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Tok {
+    Num(f64),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    LParen,
+    RParen,
+}
+
+fn tokenizar(s: &str) -> Result<Vec<Tok>, String> {
+    let mut out = Vec::new();
+    let bytes: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if c == ',' {
+            // Separador de miles: lo ignoramos (1,283.54 → 1283.54).
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_digit() || c == '.' {
+            let mut j = i;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_digit() || bytes[j] == '.' || bytes[j] == ',')
+            {
+                j += 1;
+            }
+            let raw: String = bytes[i..j].iter().filter(|c| **c != ',').collect();
+            let v: f64 = raw
+                .parse()
+                .map_err(|_| format!("número inválido '{}'", raw))?;
+            out.push(Tok::Num(v));
+            i = j;
+            continue;
+        }
+        match c {
+            '+' => out.push(Tok::Plus),
+            '-' => out.push(Tok::Minus),
+            '*' | 'x' | 'X' | '·' => out.push(Tok::Star),
+            '/' | '÷' => out.push(Tok::Slash),
+            '%' => out.push(Tok::Percent),
+            '(' | '[' => out.push(Tok::LParen),
+            ')' | ']' => out.push(Tok::RParen),
+            _ => return Err(format!("carácter inesperado '{}'", c)),
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+struct Parser {
+    tokens: Vec<Tok>,
+    pos: usize,
+}
+
+impl Parser {
+    fn peek(&self) -> Option<&Tok> {
+        self.tokens.get(self.pos)
+    }
+    fn eat(&mut self) -> Option<Tok> {
+        let t = self.tokens.get(self.pos).cloned();
+        if t.is_some() {
+            self.pos += 1;
+        }
+        t
+    }
+    // expr := term (('+'|'-') term)*
+    fn expr(&mut self) -> Result<f64, String> {
+        let mut v = self.term()?;
+        while let Some(t) = self.peek() {
+            match t {
+                Tok::Plus => {
+                    self.eat();
+                    v += self.term()?;
+                }
+                Tok::Minus => {
+                    self.eat();
+                    v -= self.term()?;
+                }
+                _ => break,
+            }
+        }
+        Ok(v)
+    }
+    // term := factor (('*'|'/'|implicit) factor)*
+    fn term(&mut self) -> Result<f64, String> {
+        let mut v = self.factor()?;
+        loop {
+            match self.peek() {
+                Some(Tok::Star) => {
+                    self.eat();
+                    v *= self.factor()?;
+                }
+                Some(Tok::Slash) => {
+                    self.eat();
+                    let d = self.factor()?;
+                    if d == 0.0 {
+                        return Err("división por cero".into());
+                    }
+                    v /= d;
+                }
+                // Multiplicación implícita: número o ')' seguido de '(' → *
+                Some(Tok::LParen) => {
+                    v *= self.factor()?;
+                }
+                _ => break,
+            }
+        }
+        Ok(v)
+    }
+    // factor := ('-'|'+')? postfix
+    fn factor(&mut self) -> Result<f64, String> {
+        let neg = match self.peek() {
+            Some(Tok::Minus) => {
+                self.eat();
+                true
+            }
+            Some(Tok::Plus) => {
+                self.eat();
+                false
+            }
+            _ => false,
+        };
+        let mut v = self.primary()?;
+        // Postfix '%' (puede aparecer varias veces, raro pero válido).
+        while let Some(Tok::Percent) = self.peek() {
+            self.eat();
+            v /= 100.0;
+        }
+        Ok(if neg { -v } else { v })
+    }
+    fn primary(&mut self) -> Result<f64, String> {
+        match self.eat() {
+            Some(Tok::Num(n)) => Ok(n),
+            Some(Tok::LParen) => {
+                let v = self.expr()?;
+                match self.eat() {
+                    Some(Tok::RParen) => Ok(v),
+                    _ => Err("falta ')'".into()),
+                }
+            }
+            Some(t) => Err(format!("se esperaba número, se encontró {:?}", t)),
+            None => Err("expresión vacía".into()),
+        }
+    }
 }
 
 pub(crate) fn pedir_usize(prompt: &str, default: usize) -> usize {
@@ -9850,15 +10056,36 @@ pub(crate) fn menu_presupuesto_cero(state: &mut AppState) {
         println!("  👋 Vamos a configurar tu presupuesto por primera vez.");
         println!("  💡 Solo necesitas hacerlo una vez — después cada mes se genera solo.");
         println!();
-        if TermConfirm::new()
-            .with_prompt("  ¿Crear tu plantilla de presupuesto ahora?")
-            .default(true)
-            .interact()
-            .unwrap_or(false)
-        {
-            crear_plantilla_manual(state);
-        } else {
-            return;
+
+        let n_ing =
+            state.asesor.presupuesto.ingresos.len() + state.asesor.rastreador.ingresos.len();
+        let n_gas = state.asesor.presupuesto.gastos.len();
+        let n_deu = state
+            .asesor
+            .rastreador
+            .deudas
+            .iter()
+            .filter(|d| d.activa)
+            .count();
+        let hay_datos = n_ing + n_gas + n_deu > 0;
+
+        let mut opciones: Vec<&str> = Vec::new();
+        if hay_datos {
+            opciones.push("📥 Importar desde mis datos del Asesor (recomendado)");
+        }
+        opciones.push("✍️  Crear plantilla a mano");
+        opciones.push("🔙 Volver");
+
+        match menu("¿Cómo quieres empezar?", &opciones) {
+            Some(0) if hay_datos => {
+                if !importar_plantilla_desde_asesor(state) {
+                    return;
+                }
+            }
+            Some(i) if (hay_datos && i == 1) || (!hay_datos && i == 0) => {
+                crear_plantilla_manual(state);
+            }
+            _ => return,
         }
     }
 
@@ -9906,10 +10133,16 @@ pub(crate) fn menu_presupuesto_cero(state: &mut AppState) {
 
         let opciones = &[
             "✅  Marcar pagos realizados",
+            "↩️   Quitar / revertir un pago",
+            "📋  Ver pagos realizados (cuadro del mes)",
+            "📤  Exportar pagos a CSV",
             "✏️   Editar monto de una línea",
             "➕  Agregar línea al mes",
+            "💵  Sincronizar ingresos desde Rastreador",
+            "�  Empujar pagos de este mes -> Rastreador",
             "📊  Ver presupuesto completo",
             "🔧  Editar plantilla base",
+            "📥  Reimportar plantilla desde Asesor",
             "🔄  Regenerar mes desde plantilla",
             "📆  Ver otro mes",
             "🔙  Volver",
@@ -9917,15 +10150,32 @@ pub(crate) fn menu_presupuesto_cero(state: &mut AppState) {
 
         match menu("¿Qué hacer?", opciones) {
             Some(0) => marcar_pagos(state, &mes_actual),
-            Some(1) => editar_monto_linea(state, &mes_actual),
-            Some(2) => agregar_linea_mes(state, &mes_actual),
-            Some(3) => {
+            Some(1) => quitar_pago(state, &mes_actual),
+            Some(2) => {
+                ver_pagos_realizados(state, &mes_actual);
+                pausa();
+            }
+            Some(3) => exportar_pagos_csv(state, &mes_actual),
+            Some(4) => editar_monto_linea(state, &mes_actual),
+            Some(5) => agregar_linea_mes(state, &mes_actual),
+            Some(6) => sincronizar_ingresos_rastreador(state, &mes_actual),
+            Some(7) => empujar_presupuesto_a_rastreador(state, &mes_actual),
+            Some(8) => {
                 ver_presupuesto_completo(state, &mes_actual);
                 pausa();
             }
-            Some(4) => crear_plantilla_manual(state),
-            Some(5) => generar_presupuesto_mes(state, &mes_actual),
-            Some(6) => {
+            Some(9) => crear_plantilla_manual(state),
+            Some(10) => {
+                if importar_plantilla_desde_asesor(state) {
+                    // Regenerar el mes actual con la nueva plantilla
+                    state.presupuesto.meses.retain(|m| m.mes != mes_actual);
+                    if let Some(pl) = &state.presupuesto.plantilla {
+                        state.presupuesto.meses.push(pl.generar_mes(&mes_actual));
+                    }
+                }
+            }
+            Some(11) => generar_presupuesto_mes(state, &mes_actual),
+            Some(12) => {
                 let mes = pedir_texto_opcional("Mes (YYYY-MM, ej: 2026-03)");
                 if !mes.is_empty() {
                     ver_presupuesto_completo(state, &mes);
@@ -9970,32 +10220,57 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual) {
 
     match &res.salud {
         SaludPresupuesto::Perfecto => {
-            println!("    ✅  Saldo: $0.00 — ¡Cada dólar asignado!");
+            println!("    ✅  Saldo del plan: $0.00 — ¡Cada dólar asignado!");
         }
         SaludPresupuesto::SobraDinero(s) => {
-            println!("    🟡 Sobran ${:.2} — asígnalos a ahorro o deuda.", s);
+            println!(
+                "    🟡 Sobran ${:.2} en el plan — asígnalos a ahorro o deuda.",
+                s
+            );
         }
         SaludPresupuesto::FaltaDinero(f) => {
-            println!("    🔴 Faltan ${:.2} — recorta gastos.", f);
+            println!("    🔴 Faltan ${:.2} en el plan — recorta gastos.", f);
         }
     }
 
-    // Progreso de pagos
+    // ── Estado real del mes (efectivo) ───────────────────────────────
+    let pagado_real = pres.total_pagado_real();
+    let te_queda = res.ingresos - pagado_real;
+    let falta_por_pagar: f64 = pres
+        .lineas
+        .iter()
+        .filter(|l| l.categoria != Categoria::Ingreso)
+        .map(|l| l.pendiente_real())
+        .sum();
+
+    println!();
+    println!("    {}", "▸ Estado real del mes (efectivo):".bold());
     if res.egresos > 0.0 {
-        let pct_pagado = res.pagado / res.egresos * 100.0;
+        let pct_pagado = (pagado_real / res.egresos * 100.0).clamp(0.0, 100.0);
         let barra_len = 30;
         let lleno = ((pct_pagado / 100.0) * barra_len as f64) as usize;
         let vacio = barra_len - lleno;
-        println!();
         println!(
-            "    Pagado: [{}{}] {:.0}%  (${:.2} de ${:.2})",
+            "    ✅ Pagado:        [{}{}] {:.0}%  (${:.2} de ${:.2})",
             "█".repeat(lleno).green(),
             "░".repeat(vacio),
             pct_pagado,
-            res.pagado,
+            pagado_real,
             res.egresos
         );
+    } else {
+        println!("    ✅ Pagado:        ${:.2}", pagado_real);
     }
+    let te_queda_lbl = format!("    💰 Te queda:      ${:.2}", te_queda);
+    if te_queda >= 0.0 {
+        println!("{}", te_queda_lbl.green());
+    } else {
+        println!(
+            "{}",
+            format!("    🔴 Sobregiro:     ${:.2}", te_queda.abs()).red()
+        );
+    }
+    println!("    ⏳ Falta por pagar: ${:.2}", falta_por_pagar);
 
     for alerta in &res.alertas {
         println!("    {}", alerta.yellow());
@@ -10034,6 +10309,411 @@ pub(crate) fn generar_presupuesto_mes(state: &mut AppState, mes: &str) {
     pausa();
 }
 
+pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
+    limpiar();
+    separador("📥 IMPORTAR PLANTILLA DESDE TUS DATOS");
+
+    let n_ing_asesor = state.asesor.presupuesto.ingresos.len();
+    let n_ing_rastreador = state.asesor.rastreador.ingresos.len();
+    let n_ing = n_ing_asesor + n_ing_rastreador;
+    let n_gas = state.asesor.presupuesto.gastos.len();
+    let n_deu = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .filter(|d| d.activa)
+        .count();
+
+    if n_ing == 0 && n_gas == 0 && n_deu == 0 {
+        println!("  {} No hay datos en el Asesor para importar.", "✗".red());
+        println!(
+            "  Registra ingresos/gastos/deudas en el Asesor primero, o crea la plantilla a mano."
+        );
+        pausa();
+        return false;
+    }
+
+    println!("  Voy a usar lo que ya tienes registrado:");
+    println!(
+        "    💵 Ingresos (Asesor + Rastreador): {} ({} + {})",
+        n_ing, n_ing_asesor, n_ing_rastreador
+    );
+    println!("    🏠/🛒 Gastos del Asesor:        {}", n_gas);
+    println!("    💳 Deudas del Rastreador (activas): {}", n_deu);
+    println!();
+    if !TermConfirm::new()
+        .with_prompt("  ¿Generar plantilla con estos datos?")
+        .default(true)
+        .interact()
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    let mut lineas: Vec<presupuesto_cero::LineaPlantilla> = Vec::new();
+
+    // Ingresos del Asesor (mensualizados)
+    for m in &state.asesor.presupuesto.ingresos {
+        let monto = m.frecuencia.a_mensual(m.monto);
+        if monto <= 0.0 {
+            continue;
+        }
+        lineas.push(presupuesto_cero::LineaPlantilla {
+            nombre: m.concepto.clone(),
+            categoria: Categoria::Ingreso,
+            monto_default: (monto * 100.0).round() / 100.0,
+            fecha_limite: String::new(),
+            saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
+        });
+    }
+
+    // Ingresos del Rastreador (fuente principal en este proyecto)
+    for ing in &state.asesor.rastreador.ingresos {
+        if !ing.confirmado {
+            continue;
+        }
+        let monto = ing.monto_mensual();
+        if monto <= 0.0 {
+            continue;
+        }
+        lineas.push(presupuesto_cero::LineaPlantilla {
+            nombre: ing.concepto.clone(),
+            categoria: Categoria::Ingreso,
+            monto_default: (monto * 100.0).round() / 100.0,
+            fecha_limite: String::new(),
+            saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
+        });
+    }
+
+    // Gastos (mensualizados; fijo→GastoFijo, variable→GastoVariable)
+    for g in &state.asesor.presupuesto.gastos {
+        let monto = g.frecuencia.a_mensual(g.monto);
+        if monto <= 0.0 {
+            continue;
+        }
+        let cat = if g.fijo {
+            Categoria::GastoFijo
+        } else {
+            Categoria::GastoVariable
+        };
+        lineas.push(presupuesto_cero::LineaPlantilla {
+            nombre: g.concepto.clone(),
+            categoria: cat,
+            monto_default: (monto * 100.0).round() / 100.0,
+            fecha_limite: String::new(),
+            saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
+        });
+    }
+
+    // Deudas / pagos del Rastreador (multicuenta + diagnóstico).
+    // Reglas:
+    //   - obligatoria + tasa≈0 (renta, celular, seguros, suscripciones) → GastoFijo
+    //   - resto con saldo > 0 → PagoDeuda con saldo total
+    //   - escrow_mensual > 0 → línea separada GastoFijo "<nombre> — Escrow"
+    //   - meses_atrasados se calcula desde deuda_vencida_componentes()
+    //   - Si una entrada obligatoria tiene pago = 0, se pregunta el monto
+    //     mensual y se guarda de regreso en el Rastreador (queda fijo).
+    let mut omitidas: Vec<(String, String)> = Vec::new();
+
+    // Pre-pasada: completar pagos faltantes en pagos corrientes (renta, celular, etc.)
+    let nombres_a_completar: Vec<String> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .filter(|d| {
+            d.activa
+                && d.obligatoria
+                && d.tasa_anual < 0.01
+                && d.pago_pi_mensual() < 0.01
+                && d.escrow_mensual < 0.01
+        })
+        .map(|d| d.nombre.clone())
+        .collect();
+
+    if !nombres_a_completar.is_empty() {
+        println!();
+        println!(
+            "  {} Algunas deudas obligatorias no tienen monto mensual. Te lo pregunto y lo guardo:",
+            "⚠️".yellow()
+        );
+        for nombre in &nombres_a_completar {
+            let monto = pedir_f64(
+                &format!("    💰 ¿Cuánto pagas cada mes por '{}'? $", nombre),
+                0.0,
+            );
+            if monto > 0.0 {
+                if let Some(d) = state
+                    .asesor
+                    .rastreador
+                    .deudas
+                    .iter_mut()
+                    .find(|x| x.nombre == *nombre)
+                {
+                    d.pago_minimo = monto;
+                    d.principal_interes_mensual = monto;
+                    println!("      {} {} = ${:.2}/mes (guardado en Rastreador)", "✓".green(), nombre, monto);
+                }
+            }
+        }
+        println!();
+    }
+
+    for d in state.asesor.rastreador.deudas.iter() {
+        if !d.activa {
+            omitidas.push((d.nombre.clone(), "inactiva".into()));
+            continue;
+        }
+
+        let pi = d.pago_pi_mensual();
+        let escrow = d.escrow_mensual.max(0.0);
+
+        // Atrasos vienen del rastreador (vencido / pago mensual)
+        let (vencido_pi, vencido_escrow) = d.deuda_vencida_componentes();
+        let atras_pi = if pi > 0.01 {
+            (vencido_pi / pi).round() as u32
+        } else {
+            0
+        };
+        let atras_escrow = if escrow > 0.01 {
+            (vencido_escrow / escrow).round() as u32
+        } else {
+            0
+        };
+
+        // Más permisivo que es_pago_corriente(): cualquier deuda obligatoria
+        // sin interés cuenta como gasto fijo recurrente, sin importar el saldo.
+        // Así renta/celular siempre entran al presupuesto.
+        let es_corriente = d.obligatoria && d.tasa_anual < 0.01;
+
+        if es_corriente {
+            if pi > 0.0 {
+                // Para pagos no-mensuales (anual, semestral, etc.) usar el monto
+                // completo del período (pago_minimo), NO el equivalente mensual.
+                let es_mensual = matches!(d.frecuencia, FrecuenciaPago::Mensual | FrecuenciaPago::Semanal | FrecuenciaPago::Quincenal);
+                let monto_linea = if es_mensual {
+                    (pi * 100.0).round() / 100.0
+                } else {
+                    (d.pago_minimo.max(d.principal_interes_mensual) * 100.0).round() / 100.0
+                };
+
+                // Para pagos no-mensuales, preguntar en qué mes del año se paga
+                let mes_pago = if !es_mensual {
+                    let mes_actual_num = Local::now().month() as u8;
+                    println!();
+                    println!(
+                        "  📅 '{}' es un pago {} de ${:.2}.",
+                        d.nombre, d.frecuencia.nombre(), monto_linea
+                    );
+                    let mes_input = pedir_f64(
+                        &format!("     ¿En qué mes del año se paga? (1-12, Enter={}) ", mes_actual_num),
+                        mes_actual_num as f64,
+                    )
+                    .clamp(1.0, 12.0) as u8;
+                    Some(mes_input)
+                } else {
+                    None
+                };
+
+                if !es_mensual {
+                    println!(
+                        "    🗓️  Se incluirá solo en el mes {} de cada año.",
+                        mes_pago.unwrap_or(1)
+                    );
+                }
+
+                lineas.push(presupuesto_cero::LineaPlantilla {
+                    nombre: d.nombre.clone(),
+                    categoria: Categoria::GastoFijo,
+                    monto_default: monto_linea,
+                    fecha_limite: String::new(),
+                    saldo_total_deuda: None,
+                    meses_atrasados: if es_mensual { atras_pi } else { 0 },
+                    frecuencia: d.frecuencia.clone(),
+                    mes_pago,
+                });
+            } else if escrow == 0.0 {
+                omitidas.push((
+                    d.nombre.clone(),
+                    "pago mensual = 0 (no se ingresó monto)".into(),
+                ));
+            }
+        } else if pi > 0.0 {
+            // Deuda real (P&I)
+            let saldo = d.saldo_actual();
+            lineas.push(presupuesto_cero::LineaPlantilla {
+                nombre: d.nombre.clone(),
+                categoria: Categoria::PagoDeuda,
+                monto_default: (pi * 100.0).round() / 100.0,
+                fecha_limite: String::new(),
+                saldo_total_deuda: if saldo > 0.0 { Some(saldo) } else { None },
+                meses_atrasados: atras_pi,
+                frecuencia: FrecuenciaPago::Mensual,
+                mes_pago: None,
+            });
+        } else if escrow == 0.0 {
+            omitidas.push((
+                d.nombre.clone(),
+                "pago mensual = 0 (define pago_pi o pago_mínimo)".into(),
+            ));
+        }
+
+        // Escrow como gasto fijo separado (taxes/seguros de la hipoteca)
+        if escrow > 0.0 {
+            lineas.push(presupuesto_cero::LineaPlantilla {
+                nombre: format!("{} — Escrow", d.nombre),
+                categoria: Categoria::GastoFijo,
+                monto_default: (escrow * 100.0).round() / 100.0,
+                fecha_limite: String::new(),
+                saldo_total_deuda: None,
+                meses_atrasados: atras_escrow,
+                frecuencia: FrecuenciaPago::Mensual,
+                mes_pago: None,
+            });
+        }
+    }
+
+    // Persistir cualquier pago_minimo que recién hayamos completado
+    let _ = state.guardar();
+
+    // ── Captura de gastos fijos faltantes (renta, celular, internet, luz, etc.)
+    // Si no aparecen en lo importado, los pedimos aquí y los guardamos en el
+    // Rastreador como deudas obligatorias con tasa 0 (pagos corrientes), para
+    // que la próxima vez ya estén.
+    println!();
+    println!(
+        "  {} ¿Te falta algún gasto fijo (renta, celular, internet, luz, agua, seguros, etc.)?",
+        "❓".cyan()
+    );
+    if TermConfirm::new()
+        .with_prompt("    ¿Agregar gastos fijos ahora?")
+        .default(true)
+        .interact()
+        .unwrap_or(false)
+    {
+        loop {
+            let nombre = match pedir_texto("    Nombre del gasto (vacío=terminar)") {
+                Some(n) if !n.trim().is_empty() => n,
+                _ => break,
+            };
+            let monto = pedir_f64(&format!("    Monto mensual de '{}' $", nombre), 0.0);
+            if monto <= 0.0 {
+                continue;
+            }
+            let atras = pedir_f64(
+                &format!("    ¿Meses atrasados de '{}'? (0=al día)", nombre),
+                0.0,
+            )
+            .max(0.0)
+            .round() as u32;
+
+            // Guardar en el Rastreador como pago corriente (obligatorio, tasa 0)
+            let mut nueva = crate::DeudaRastreada::nueva(&nombre, 0.0, monto);
+            nueva.obligatoria = true;
+            nueva.principal_interes_mensual = monto;
+            state.asesor.rastreador.deudas.push(nueva);
+
+            // Y a la plantilla del mes
+            lineas.push(presupuesto_cero::LineaPlantilla {
+                nombre: nombre.clone(),
+                categoria: Categoria::GastoFijo,
+                monto_default: monto,
+                fecha_limite: String::new(),
+                saldo_total_deuda: None,
+                meses_atrasados: atras,
+                frecuencia: FrecuenciaPago::Mensual,
+                mes_pago: None,
+            });
+            println!(
+                "      {} {} = ${:.2}/mes guardado (Rastreador + plantilla)",
+                "✓".green(),
+                nombre,
+                monto
+            );
+        }
+        let _ = state.guardar();
+    }
+
+    if lineas.is_empty() {
+        println!("  {} No se generó ninguna línea con monto > 0.", "✗".red());
+        pausa();
+        return false;
+    }
+
+    // Ordenar: Ingresos, Fijos, Variables, Deudas, Ahorro
+    lineas.sort_by_key(|l| match l.categoria {
+        Categoria::Ingreso => 0,
+        Categoria::GastoFijo => 1,
+        Categoria::GastoVariable => 2,
+        Categoria::PagoDeuda => 3,
+        Categoria::Ahorro => 4,
+    });
+
+    // Resumen
+    let total_ing: f64 = lineas
+        .iter()
+        .filter(|l| l.categoria == Categoria::Ingreso)
+        .map(|l| l.monto_default)
+        .sum();
+    let total_eg: f64 = lineas
+        .iter()
+        .filter(|l| l.categoria != Categoria::Ingreso)
+        .map(|l| l.monto_default)
+        .sum();
+
+    println!();
+    println!("  ✅ {} líneas generadas", lineas.len());
+    println!("    💵 Ingresos: ${:.2}", total_ing);
+    println!("    💸 Egresos:  ${:.2}", total_eg);
+    let saldo = total_ing - total_eg;
+    if saldo.abs() < 0.01 {
+        println!("    ✅ Saldo: $0.00 — perfecto");
+    } else if saldo > 0.0 {
+        println!(
+            "    🟡 Sobran ${:.2} — asígnalos a ahorro/deuda extra",
+            saldo
+        );
+    } else {
+        println!("    🔴 Faltan ${:.2} — recorta o aumenta ingreso", -saldo);
+    }
+
+    state.presupuesto.plantilla = Some(presupuesto_cero::PlantillaPresupuesto {
+        nombre: "Importada del Asesor".into(),
+        lineas,
+    });
+    println!();
+    println!("  ✅ Plantilla guardada.");
+
+    if !omitidas.is_empty() {
+        println!();
+        println!(
+            "  {} {} deuda(s)/pago(s) del Rastreador NO se importaron:",
+            "⚠️".yellow(),
+            omitidas.len()
+        );
+        for (n, motivo) in &omitidas {
+            println!("    • {} — {}", n, motivo);
+        }
+        println!(
+            "    {} arréglalas en el Rastreador (Pago mínimo / P&I) o agrégalas a mano.",
+            "↳".dimmed()
+        );
+    }
+
+    pausa();
+    true
+}
+
 pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
     limpiar();
     separador("🔧 CREAR PLANTILLA DE PRESUPUESTO");
@@ -10058,6 +10738,9 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
             monto_default: monto,
             fecha_limite: fecha,
             saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
         });
     }
 
@@ -10086,6 +10769,9 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
             monto_default: monto,
             fecha_limite: fecha,
             saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
         });
     }
 
@@ -10113,6 +10799,9 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
             monto_default: monto,
             fecha_limite: String::new(),
             saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
         });
     }
 
@@ -10156,6 +10845,9 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
             } else {
                 None
             },
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
         });
     }
 
@@ -10183,6 +10875,9 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
             monto_default: monto,
             fecha_limite: String::new(),
             saldo_total_deuda: None,
+            meses_atrasados: 0,
+            frecuencia: FrecuenciaPago::Mensual,
+            mes_pago: None,
         });
     }
 
@@ -10232,60 +10927,569 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
     pausa();
 }
 
-pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
-    let pres = match state.presupuesto.mes_actual_mut(mes) {
-        Some(p) => p,
-        None => {
-            println!(
-                "  {} No hay presupuesto para {}. Genera uno primero.",
-                "✗".red(),
-                mes
-            );
-            pausa();
-            return;
-        }
+/// Sincroniza un pago hecho en Presupuesto Base Cero con la deuda
+/// equivalente del Rastreador (baja saldo, registra historial del mes).
+/// Devuelve true si encontró la deuda y la actualizó.
+pub(crate) fn sincronizar_pago_rastreador(
+    state: &mut AppState,
+    nombre_linea: &str,
+    mes: &str,
+    monto: f64,
+) -> bool {
+    if monto <= 0.0 {
+        return false;
+    }
+
+    // Detectar si la línea es la parte de Escrow
+    let (nombre_base, es_escrow) = if let Some(pos) = nombre_linea.rfind("— Escrow") {
+        (nombre_linea[..pos].trim().to_string(), true)
+    } else if let Some(pos) = nombre_linea.rfind("- Escrow") {
+        (nombre_linea[..pos].trim().to_string(), true)
+    } else {
+        (nombre_linea.to_string(), false)
     };
 
-    limpiar();
-    separador("✅ MARCAR PAGOS REALIZADOS");
+    let needle = nombre_base.to_lowercase();
 
-    let pendientes: Vec<usize> = pres
-        .lineas
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| !l.pagado && l.categoria != Categoria::Ingreso)
-        .map(|(i, _)| i)
-        .collect();
+    // Buscar deuda con nombre coincidente (igualdad o contiene)
+    let idx_deuda = state.asesor.rastreador.deudas.iter().position(|d| {
+        let dn = d.nombre.to_lowercase();
+        dn == needle || dn.contains(&needle) || needle.contains(&dn)
+    });
 
-    if pendientes.is_empty() {
-        println!("  ✅ ¡Todos los pagos están al día!");
+    let idx = match idx_deuda {
+        Some(i) => i,
+        None => return false,
+    };
+
+    let deuda = &mut state.asesor.rastreador.deudas[idx];
+    let saldo_actual = deuda.saldo_actual();
+
+    // Buscar entrada del historial para este mes (si ya existe, actualizar)
+    if let Some(entry) = deuda.historial.iter_mut().find(|m| m.mes == mes) {
+        if es_escrow {
+            entry.pago_escrow += monto;
+        } else {
+            entry.pago += monto;
+            // Recalcular saldo_final del mes con el pago acumulado
+            let despues = (entry.saldo_inicio - entry.pago).max(0.0);
+            entry.saldo_final = if despues < 0.01 {
+                0.0
+            } else {
+                despues + entry.intereses + entry.nuevos_cargos
+            };
+        }
+    } else {
+        // Crear nueva entrada de mes
+        let (pago_pi, pago_escrow) = if es_escrow {
+            (0.0, monto)
+        } else {
+            (monto, 0.0)
+        };
+        deuda.registrar_mes_con_escrow(mes, saldo_actual, pago_pi, pago_escrow, 0.0);
+    }
+
+    true
+}
+
+/// Revierte un pago previamente registrado en el Rastreador.
+/// Si el `MesPago` queda en cero tras la reversión, se elimina del historial.
+pub(crate) fn revertir_pago_rastreador(
+    state: &mut AppState,
+    nombre_linea: &str,
+    mes: &str,
+    monto: f64,
+) -> bool {
+    if monto <= 0.0 {
+        return false;
+    }
+
+    let (nombre_base, es_escrow) = if let Some(pos) = nombre_linea.rfind("— Escrow") {
+        (nombre_linea[..pos].trim().to_string(), true)
+    } else if let Some(pos) = nombre_linea.rfind("- Escrow") {
+        (nombre_linea[..pos].trim().to_string(), true)
+    } else {
+        (nombre_linea.to_string(), false)
+    };
+
+    let needle = nombre_base.to_lowercase();
+    let idx = match state.asesor.rastreador.deudas.iter().position(|d| {
+        let dn = d.nombre.to_lowercase();
+        dn == needle || dn.contains(&needle) || needle.contains(&dn)
+    }) {
+        Some(i) => i,
+        None => return false,
+    };
+
+    let deuda = &mut state.asesor.rastreador.deudas[idx];
+    let pos_mes = deuda.historial.iter().position(|m| m.mes == mes);
+    let Some(pos) = pos_mes else { return false };
+
+    {
+        let entry = &mut deuda.historial[pos];
+        if es_escrow {
+            entry.pago_escrow = (entry.pago_escrow - monto).max(0.0);
+        } else {
+            entry.pago = (entry.pago - monto).max(0.0);
+            let despues = (entry.saldo_inicio - entry.pago).max(0.0);
+            entry.saldo_final = if despues < 0.01 {
+                0.0
+            } else {
+                despues + entry.intereses + entry.nuevos_cargos
+            };
+        }
+    }
+
+    // Si el mes quedó en cero (sin pagos ni cargos), eliminarlo del historial
+    let entry = &deuda.historial[pos];
+    if entry.pago < 0.001
+        && entry.pago_escrow < 0.001
+        && entry.nuevos_cargos < 0.001
+        && entry.intereses < 0.001
+    {
+        deuda.historial.remove(pos);
+    }
+    deuda.activa = deuda.saldo_actual() >= 0.01;
+    true
+}
+
+/// Convierte cualquier formato de mes a "YYYY-MM" para comparar con el presupuesto.
+/// Acepta: "2026-05", "May 2026", "Mar 2024", "2026-5"
+pub(crate) fn mes_a_yyyy_mm(s: &str) -> Option<String> {
+    let s = s.trim();
+    // Ya en formato YYYY-MM
+    if s.len() == 7 && s.as_bytes().get(4) == Some(&b'-') {
+        return Some(s.to_string());
+    }
+    // Formato "May 2026" o "Mar 2024"
+    let meses_en = [
+        ("Jan", 1), ("Feb", 2), ("Mar", 3), ("Apr", 4), ("May", 5), ("Jun", 6),
+        ("Jul", 7), ("Aug", 8), ("Sep", 9), ("Oct", 10), ("Nov", 11), ("Dec", 12),
+    ];
+    let meses_es = [
+        ("Ene", 1), ("Feb", 2), ("Mar", 3), ("Abr", 4), ("May", 5), ("Jun", 6),
+        ("Jul", 7), ("Ago", 8), ("Sep", 9), ("Oct", 10), ("Nov", 11), ("Dic", 12),
+    ];
+    let partes: Vec<&str> = s.splitn(2, ' ').collect();
+    if partes.len() == 2 {
+        let mes_str = partes[0];
+        let anio: Option<i32> = partes[1].parse().ok();
+        if let Some(anio) = anio {
+            for (nombre, num) in meses_en.iter().chain(meses_es.iter()) {
+                if mes_str.eq_ignore_ascii_case(nombre) {
+                    return Some(format!("{:04}-{:02}", anio, num));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Sincroniza hacia el Presupuesto Base Cero cuando se registra/edita un pago
+/// directamente en el Rastreador. Actualiza monto_pagado_real y pagado de la
+/// LineaPresupuesto correspondiente para ese mes.
+pub(crate) fn sincronizar_presupuesto_desde_rastreador(
+    state: &mut AppState,
+    nombre_deuda: &str,
+    mes: &str,
+    monto_nuevo: f64,
+) {
+    let needle = nombre_deuda.to_lowercase();
+    // Buscar el mes en el presupuesto
+    let Some(pres) = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes) else { return };
+
+    // Buscar la línea cuyo nombre coincide con la deuda
+    let Some(linea) = pres.lineas.iter_mut().find(|l| {
+        let ln = l.nombre.to_lowercase();
+        ln == needle || ln.contains(&needle) || needle.contains(&ln)
+    }) else { return };
+
+    linea.monto_pagado_real = monto_nuevo;
+    linea.pagado = monto_nuevo >= linea.monto * 0.95;
+}
+
+pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
+    if state.presupuesto.mes_actual(mes).is_none() {
+        println!("  {} No hay presupuesto para {}.", "✗".red(), mes);
         pausa();
         return;
     }
 
-    let _nombres: Vec<String> = pendientes
-        .iter()
-        .map(|&i| {
-            let l = &pres.lineas[i];
-            format!(
-                "{} {} — ${:.2}{}",
-                l.categoria.emoji(),
-                l.nombre,
-                l.monto,
-                if l.fecha_limite.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (día {})", l.fecha_limite)
-                }
-            )
-        })
-        .collect();
-
-    println!("  💰 Selecciona los pagos que ya realizaste:");
-
-    // Marcar uno a uno
     loop {
-        let pendientes_now: Vec<usize> = pres
+        let pres = state.presupuesto.mes_actual_mut(mes).unwrap();
+        limpiar();
+        separador("↩️  QUITAR / REVERTIR PAGO");
+
+        let pagados_idx: Vec<usize> = pres
+            .lineas
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.categoria != Categoria::Ingreso && l.monto_pagado_real > 0.001
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        if pagados_idx.is_empty() {
+            println!("  No hay pagos registrados este mes para revertir.");
+            pausa();
+            return;
+        }
+
+        let nombres: Vec<String> = pagados_idx
+            .iter()
+            .map(|&i| {
+                let l = &pres.lineas[i];
+                let estado = if l.pagado {
+                    "PAGADO ✅".green().to_string()
+                } else {
+                    format!("parcial").yellow().to_string()
+                };
+                format!(
+                    "{} {} — pagado ${:.2} de ${:.2}  {}",
+                    l.categoria.emoji(),
+                    l.nombre,
+                    l.monto_pagado_real,
+                    l.monto_a_pagar(),
+                    estado
+                )
+            })
+            .collect();
+
+        let mut opciones: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+        opciones.push("🔙 Volver");
+
+        let sel = match menu("¿Qué pago quieres revertir?", &opciones) {
+            Some(i) if i < pagados_idx.len() => i,
+            _ => return,
+        };
+
+        let idx = pagados_idx[sel];
+        let l = &pres.lineas[idx];
+        let pagado_actual = l.monto_pagado_real;
+        let nombre = l.nombre.clone();
+
+        println!();
+        println!(
+            "  💳 {} — pagado actualmente: ${:.2}",
+            nombre.bold(),
+            pagado_actual
+        );
+        let sub = &[
+            "❌ Quitar TODO el pago (devolver fondos completos)",
+            "➖ Quitar solo una parte (monto específico)",
+            "🔙 Cancelar",
+        ];
+        let monto_a_revertir = match menu("¿Qué hacer?", sub) {
+            Some(0) => pagado_actual,
+            Some(1) => {
+                let m = pedir_f64(
+                    &format!(
+                        "  ¿Cuánto devolver? (máx ${:.2})",
+                        pagado_actual
+                    ),
+                    pagado_actual,
+                );
+                m.max(0.0).min(pagado_actual)
+            }
+            _ => continue,
+        };
+
+        if monto_a_revertir <= 0.0 {
+            continue;
+        }
+
+        // Aplicar reversión en presupuesto
+        let l = &mut pres.lineas[idx];
+        l.monto_pagado_real = (l.monto_pagado_real - monto_a_revertir).max(0.0);
+        // Si ya no cubre todo, dejar de marcar como pagado
+        if l.monto_pagado_real + 0.001 < l.monto_a_pagar() {
+            l.pagado = false;
+        }
+
+        println!(
+            "  {} Devuelto ${:.2} a tu disponible.",
+            "✓".green(),
+            monto_a_revertir
+        );
+
+        // Revertir en Rastreador
+        let revertido = revertir_pago_rastreador(state, &nombre, mes, monto_a_revertir);
+        if revertido {
+            println!("  {} Saldo restaurado en Rastreador.", "🔗".cyan());
+        }
+
+        // Guardar
+        if let Err(e) = state.guardar() {
+            println!("  {} No se pudo guardar: {}", "⚠".yellow(), e);
+        } else {
+            println!("  {} Reversión guardada en disco.", "💾".green());
+        }
+        pausa();
+    }
+}
+
+pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
+    if state.presupuesto.mes_actual(mes).is_none() {
+        println!(
+            "  {} No hay presupuesto para {}. Genera uno primero.",
+            "✗".red(),
+            mes
+        );
+        pausa();
+        return;
+    }
+
+    // ── Detectar ítems del Rastreador ausentes en este mes ───────────────────
+    {
+        let nombres_en_mes: std::collections::HashSet<String> = state
+            .presupuesto
+            .mes_actual(mes)
+            .map(|p| p.lineas.iter().map(|l| l.nombre.clone()).collect())
+            .unwrap_or_default();
+
+        // Para deudas no-mensuales: si ya se pagaron dentro de su ciclo → omitir.
+        let parse_mes_num = |s: &str| -> i32 {
+            let mut it = s.splitn(2, '-');
+            let y: i32 = it.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+            let m: i32 = it.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+            y * 12 + m
+        };
+        let actual_num = parse_mes_num(mes);
+
+        let mut pagados_en_ciclo: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for d in &state.asesor.rastreador.deudas {
+            let periodo: i32 = match d.frecuencia {
+                FrecuenciaPago::Semanal
+                | FrecuenciaPago::Quincenal
+                | FrecuenciaPago::Mensual => continue,
+                FrecuenciaPago::Trimestral => 3,
+                FrecuenciaPago::Semestral => 6,
+                FrecuenciaPago::Anual => 12,
+                FrecuenciaPago::UnaVez => 120,
+            };
+            let ya_pagado = state.presupuesto.meses.iter().any(|pm| {
+                let diff = actual_num - parse_mes_num(&pm.mes);
+                diff >= 0
+                    && diff < periodo
+                    && pm.lineas.iter().any(|l| l.nombre == d.nombre && l.pagado)
+            });
+            if ya_pagado {
+                pagados_en_ciclo.insert(d.nombre.clone());
+            }
+        }
+
+        // Tupla: (nombre, monto, frecuencia, categoria, saldo_deuda)
+        let faltantes: Vec<(String, f64, FrecuenciaPago, Categoria, Option<f64>)> = state
+            .asesor
+            .rastreador
+            .deudas
+            .iter()
+            .filter(|d| {
+                d.activa
+                    && d.pago_pi_mensual() > 0.01
+                    && !nombres_en_mes.contains(&d.nombre)
+                    && !pagados_en_ciclo.contains(&d.nombre)
+            })
+            .map(|d| {
+                let es_corriente = d.obligatoria && d.tasa_anual < 0.01;
+                let cat = if es_corriente {
+                    Categoria::GastoFijo
+                } else {
+                    Categoria::PagoDeuda
+                };
+                let monto = match d.frecuencia {
+                    FrecuenciaPago::Mensual
+                    | FrecuenciaPago::Semanal
+                    | FrecuenciaPago::Quincenal => d.pago_pi_mensual(),
+                    _ => d.pago_minimo.max(d.principal_interes_mensual),
+                };
+                let saldo = if !es_corriente {
+                    let s = d.saldo_actual();
+                    if s > 0.0 { Some(s) } else { None }
+                } else {
+                    None
+                };
+                (d.nombre.clone(), monto, d.frecuencia.clone(), cat, saldo)
+            })
+            .collect();
+
+        if !faltantes.is_empty() {
+            limpiar();
+            separador("⚠️  ÍTEMS DEL RASTREADOR FALTANTES EN ESTE MES");
+            println!();
+            println!(
+                "  {} Los siguientes ítems del Rastreador no están en {}:",
+                "⚠️".yellow(),
+                mes
+            );
+            println!();
+            for (nombre, monto, frec, cat, saldo) in &faltantes {
+                let emoji = cat.emoji();
+                let etiqueta = match frec {
+                    FrecuenciaPago::Semanal => "/semana",
+                    FrecuenciaPago::Quincenal => "/quincenal",
+                    FrecuenciaPago::Mensual => "/mes",
+                    FrecuenciaPago::Trimestral => "/trimestral",
+                    FrecuenciaPago::Semestral => "/semestral",
+                    FrecuenciaPago::Anual => "/anual",
+                    FrecuenciaPago::UnaVez => "/única vez",
+                };
+                if let Some(s) = saldo {
+                    println!(
+                        "    {} {:<30} ${:.2}{} (saldo total: ${:.2})",
+                        emoji, nombre, monto, etiqueta, s
+                    );
+                } else {
+                    println!("    {} {:<30} ${:.2}{}", emoji, nombre, monto, etiqueta);
+                }
+            }
+            println!();
+            if confirmar("¿Agregarlos al presupuesto de este mes ahora?", true) {
+                if let Some(pres) = state.presupuesto.mes_actual_mut(mes) {
+                    for (nombre, monto, frec, cat, saldo) in faltantes {
+                        pres.lineas.push(LineaPresupuesto {
+                            nombre,
+                            categoria: cat,
+                            monto,
+                            pagado: false,
+                            fecha_limite: String::new(),
+                            notas: String::new(),
+                            saldo_total_deuda: saldo,
+                            monto_pagado_real: 0.0,
+                            meses_atrasados: 0,
+                            frecuencia: frec,
+                        });
+                    }
+                    println!("  {} Ítems agregados.", "✅".green());
+                    let _ = state.guardar();
+                }
+                pausa();
+            }
+        }
+
+        // ── Detectar ingresos del Rastreador ausentes en este mes ─────────────
+        {
+            let nombres_en_mes: std::collections::HashSet<String> = state
+                .presupuesto
+                .mes_actual(mes)
+                .map(|p| p.lineas.iter().map(|l| l.nombre.clone()).collect())
+                .unwrap_or_default();
+
+            let ingresos_faltantes: Vec<(String, f64, FrecuenciaPago)> = state
+                .asesor
+                .rastreador
+                .ingresos
+                .iter()
+                .filter(|ing| {
+                    ing.confirmado
+                        && ing.monto_mensual() > 0.01
+                        && !nombres_en_mes.contains(&ing.concepto)
+                })
+                .map(|ing| (ing.concepto.clone(), ing.monto_mensual(), ing.frecuencia.clone()))
+                .collect();
+
+            if !ingresos_faltantes.is_empty() {
+                limpiar();
+                separador("💵  INGRESOS DEL RASTREADOR FALTANTES EN ESTE MES");
+                println!(
+                    "  {} Los siguientes ingresos están registrados pero NO están en el presupuesto de {}:",
+                    "ℹ️".cyan(), mes
+                );
+                println!();
+                for (nombre, monto, frec) in &ingresos_faltantes {
+                    let etiqueta = match frec {
+                        FrecuenciaPago::Semanal => "/semana",
+                        FrecuenciaPago::Quincenal => "/quincenal",
+                        FrecuenciaPago::Mensual => "/mes",
+                        FrecuenciaPago::Trimestral => "/trimestral",
+                        FrecuenciaPago::Semestral => "/semestral",
+                        FrecuenciaPago::Anual => "/anual",
+                        FrecuenciaPago::UnaVez => "/única vez",
+                    };
+                    println!("    💵 {:<30} ${:.2}{}", nombre, monto, etiqueta);
+                }
+                println!();
+                if confirmar("¿Agregarlos al presupuesto de este mes ahora?", true) {
+                    if let Some(pres) = state.presupuesto.mes_actual_mut(mes) {
+                        for (nombre, monto, frec) in ingresos_faltantes {
+                            pres.lineas.push(LineaPresupuesto {
+                                nombre,
+                                categoria: Categoria::Ingreso,
+                                monto,
+                                pagado: true, // ingresos se marcan como recibidos
+                                fecha_limite: String::new(),
+                                notas: String::new(),
+                                saldo_total_deuda: None,
+                                monto_pagado_real: monto,
+                                meses_atrasados: 0,
+                                frecuencia: frec,
+                            });
+                        }
+                        println!("  {} Ingresos agregados.", "✅".green());
+                        let _ = state.guardar();
+                    }
+                    pausa();
+                }
+            }
+        }
+    }
+
+    // Marcar uno a uno con cuadrito de dinero en vivo
+    loop {
+        let pres = state.presupuesto.mes_actual_mut(mes).unwrap();
+        limpiar();
+        separador("✅ REGISTRAR PAGOS DEL MES");
+
+        // ── Cuadrito de dinero en vivo ────────────────────────────────
+        let ingresos = pres.total_ingresos();
+        let pagado_real = pres.total_pagado_real();
+        let disponible = ingresos - pagado_real;
+        let pendiente_total: f64 = pres
+            .lineas
+            .iter()
+            .filter(|l| l.categoria != Categoria::Ingreso)
+            .map(|l| l.pendiente_real())
+            .sum();
+
+        println!(
+            "  {}",
+            "┌──────────── 💰 CUADRO DE PAGOS ────────────┐".cyan()
+        );
+        println!("  │  💵 Ingresos del mes:   ${:>12.2}    │", ingresos);
+        println!("  │  ✅ Pagado hasta ahora: ${:>12.2}    │", pagado_real);
+        let restante_lbl = if disponible >= 0.0 {
+            format!("  │  💰 Te queda:           ${:>12.2}    │", disponible)
+                .green()
+                .to_string()
+        } else {
+            format!(
+                "  │  🔴 SOBREGIRO:          ${:>12.2}    │",
+                disponible.abs()
+            )
+            .red()
+            .to_string()
+        };
+        println!("{}", restante_lbl);
+        println!(
+            "  │  ⏳ Falta por pagar:    ${:>12.2}    │",
+            pendiente_total
+        );
+        println!(
+            "  {}",
+            "└────────────────────────────────────────────┘".cyan()
+        );
+        if pres.tiene_atrasos() {
+            println!(
+                "  {}",
+                "  ⚠️  Hay deudas con MESES ATRASADOS — prioridad alta".red()
+            );
+        }
+        println!();
+
+        // ── Construir lista de pendientes ordenada por categoría ──────
+        let mut pendientes_now: Vec<usize> = pres
             .lineas
             .iter()
             .enumerate()
@@ -10293,35 +11497,146 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
             .map(|(i, _)| i)
             .collect();
 
+        // Orden: GastoFijo → GastoVariable → PagoDeuda → Ahorro
+        pendientes_now.sort_by_key(|&i| match pres.lineas[i].categoria {
+            Categoria::GastoFijo => 0,
+            Categoria::GastoVariable => 1,
+            Categoria::PagoDeuda => 2,
+            Categoria::Ahorro => 3,
+            _ => 4,
+        });
+
         if pendientes_now.is_empty() {
-            println!("  ✅ ¡Todo pagado!");
-            break;
+            println!("  ✅ ¡Todo pagado este mes!");
+            pausa();
+            return;
         }
 
         let nombres_now: Vec<String> = pendientes_now
             .iter()
             .map(|&i| {
                 let l = &pres.lineas[i];
-                format!("{} {} — ${:.2}", l.categoria.emoji(), l.nombre, l.monto,)
+                let badge_atras = if l.meses_atrasados > 0 {
+                    format!(
+                        " {} {}m atras",
+                        "🔴 ATRASADO".red().bold(),
+                        l.meses_atrasados
+                    )
+                } else {
+                    String::new()
+                };
+                let parcial = if l.monto_pagado_real > 0.0 {
+                    format!(" (parcial: ${:.2})", l.monto_pagado_real)
+                        .yellow()
+                        .to_string()
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{} {} — pendiente ${:.2}{}{}",
+                    l.categoria.emoji(),
+                    l.nombre,
+                    l.pendiente_real(),
+                    badge_atras,
+                    parcial
+                )
             })
             .collect();
+
         let mut opciones: Vec<&str> = nombres_now.iter().map(|s| s.as_str()).collect();
         opciones.push("✅ Listo, volver");
 
-        match menu("¿Qué pagaste?", &opciones) {
+        match menu("¿Qué pagaste? (selecciona la línea)", &opciones) {
             Some(i) if i < pendientes_now.len() => {
                 let idx = pendientes_now[i];
-                pres.lineas[idx].pagado = true;
-                println!(
-                    "  {} {} marcado como pagado",
-                    "✓".green(),
-                    pres.lineas[idx].nombre
+                let pendiente = pres.lineas[idx].pendiente_real();
+                let nombre = pres.lineas[idx].nombre.clone();
+
+                println!();
+                println!("  💳 {} — pendiente: ${:.2}", nombre.bold(), pendiente);
+                let monto_pago = pedir_f64(
+                    &format!("  ¿Cuánto pagaste? (Enter = ${:.2})", pendiente),
+                    pendiente,
                 );
+                if monto_pago <= 0.0 {
+                    continue;
+                }
+
+                // Aviso si excede lo disponible
+                if monto_pago > disponible + 0.001 {
+                    println!(
+                        "  {} Este pago (${:.2}) excede tu dinero disponible (${:.2}).",
+                        "⚠️".yellow(),
+                        monto_pago,
+                        disponible
+                    );
+                    let confirmar = Confirm::new()
+                        .with_prompt("¿Registrar de todos modos?")
+                        .default(false)
+                        .interact()
+                        .unwrap_or(false);
+                    if !confirmar {
+                        continue;
+                    }
+                }
+
+                let l = &mut pres.lineas[idx];
+                l.monto_pagado_real += monto_pago;
+
+                // Si cubrió un mes completo (o más), reducir meses_atrasados
+                if l.monto > 0.0 && l.meses_atrasados > 0 {
+                    let meses_cubiertos = (l.monto_pagado_real / l.monto).floor() as u32;
+                    let total_meses_a_pagar = l.meses_atrasados + 1;
+                    if meses_cubiertos >= total_meses_a_pagar {
+                        l.pagado = true;
+                        l.meses_atrasados = 0;
+                    } else if meses_cubiertos > 0 {
+                        // sólo se han cubierto algunos atrasados, no el corriente todavía
+                        // mantén meses_atrasados pero descuenta los cubiertos
+                        l.meses_atrasados = (l.meses_atrasados + 1).saturating_sub(meses_cubiertos);
+                    }
+                } else if l.monto_pagado_real + 0.001 >= l.monto_a_pagar() {
+                    l.pagado = true;
+                }
+
+                let estado = if l.pagado {
+                    "PAGADO ✅".green().to_string()
+                } else {
+                    format!("queda ${:.2}", l.pendiente_real())
+                        .yellow()
+                        .to_string()
+                };
+                let nombre_para_sync = nombre.clone();
+                println!(
+                    "  {} ${:.2} registrado en {} — {}",
+                    "✓".green(),
+                    monto_pago,
+                    nombre,
+                    estado
+                );
+
+                // Sincronizar con Rastreador (baja saldo de la deuda)
+                let sincronizado =
+                    sincronizar_pago_rastreador(state, &nombre_para_sync, mes, monto_pago);
+                if sincronizado {
+                    println!("  {} Saldo actualizado en Rastreador.", "🔗".cyan());
+                }
+
+                // Guardar inmediatamente para no perder el pago
+                if let Err(e) = state.guardar() {
+                    println!("  {} No se pudo guardar: {}", "⚠".yellow(), e);
+                } else {
+                    println!("  {} Pago guardado en disco.", "💾".green());
+                }
+                pausa();
             }
             _ => break,
         }
     }
-    pausa();
+
+    if let Err(e) = state.guardar() {
+        println!("  {} No se pudo guardar el estado final: {}", "⚠".yellow(), e);
+    }
 }
 
 pub(crate) fn agregar_linea_mes(state: &mut AppState, mes: &str) {
@@ -10370,6 +11685,38 @@ pub(crate) fn agregar_linea_mes(state: &mut AppState, mes: &str) {
         None
     };
 
+    // Frecuencia del pago
+    let frecs = &[
+        "Mensual (cada mes)",
+        "Quincenal (cada 2 semanas)",
+        "Semanal",
+        "Trimestral (cada 3 meses)",
+        "Semestral (cada 6 meses)",
+        "Anual (una vez al año)",
+        "Una sola vez",
+    ];
+    let frecuencia = match menu("¿Con qué frecuencia ocurre este pago?", frecs) {
+        Some(0) => FrecuenciaPago::Mensual,
+        Some(1) => FrecuenciaPago::Quincenal,
+        Some(2) => FrecuenciaPago::Semanal,
+        Some(3) => FrecuenciaPago::Trimestral,
+        Some(4) => FrecuenciaPago::Semestral,
+        Some(5) => FrecuenciaPago::Anual,
+        Some(6) => FrecuenciaPago::UnaVez,
+        _ => return,
+    };
+
+    // Para deudas, preguntar si hay meses atrasados (estilo Carrington Mortgage)
+    let meses_atrasados = if cat == Categoria::PagoDeuda {
+        let n = pedir_f64(
+            "  ¿Cuántos meses atrasados tiene esta deuda? (0=al día)",
+            0.0,
+        );
+        n.max(0.0).round() as u32
+    } else {
+        0
+    };
+
     pres.agregar(LineaPresupuesto {
         nombre: nombre.clone(),
         categoria: cat,
@@ -10378,9 +11725,184 @@ pub(crate) fn agregar_linea_mes(state: &mut AppState, mes: &str) {
         fecha_limite: String::new(),
         notas: String::new(),
         saldo_total_deuda: saldo_deuda,
+        monto_pagado_real: 0.0,
+        meses_atrasados,
+        frecuencia,
     });
 
     println!("  ✅ '{}' agregado: ${:.2}", nombre, monto);
+    pausa();
+}
+
+/// Toma el Presupuesto Base Cero como fuente de verdad y escribe todos los
+/// pagos registrados en él hacia el Rastreador, sobreescribiendo lo que haya.
+/// Útil para corregir el Rastreador cuando el Presupuesto está correcto.
+pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) {
+    let lineas_pago: Vec<(String, f64)> = state
+        .presupuesto
+        .mes_actual(mes)
+        .map(|p| {
+            p.lineas
+                .iter()
+                .filter(|l| l.categoria == Categoria::PagoDeuda || l.categoria == Categoria::GastoFijo)
+                .map(|l| (l.nombre.clone(), l.monto_pagado_real))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if lineas_pago.is_empty() {
+        println!("  {} No hay líneas de pago en el presupuesto de {}.", "ℹ️".cyan(), mes);
+        pausa();
+        return;
+    }
+
+    limpiar();
+    separador("🔗  EMPUJAR PRESUPUESTO → RASTREADOR");
+    println!();
+    println!("  Esto sobreescribirá los pagos del Rastreador para {} con los del Presupuesto.", mes.bold());
+    println!();
+
+    for (nombre, monto) in &lineas_pago {
+        let etiqueta = if *monto > 0.01 { format!("${:.2}", monto).green().to_string() } else { "sin pago".dimmed().to_string() };
+        println!("    • {:<32} {}", nombre, etiqueta);
+    }
+    println!();
+
+    if !confirmar("¿Confirmar? Esto reemplaza los datos del Rastreador para este mes.", false) {
+        println!("  Cancelado.");
+        pausa();
+        return;
+    }
+
+    let mut actualizadas = 0usize;
+    let mut omitidas = 0usize;
+
+    for (nombre, monto_real) in &lineas_pago {
+        let needle = nombre.to_lowercase();
+        let (nombre_base, es_escrow) = if let Some(pos) = needle.rfind("— escrow").or_else(|| needle.rfind("- escrow")) {
+            (needle[..pos].trim().to_string(), true)
+        } else {
+            (needle.clone(), false)
+        };
+
+        let idx = state.asesor.rastreador.deudas.iter().position(|d| {
+            let dn = d.nombre.to_lowercase();
+            dn == nombre_base || dn.contains(&nombre_base) || nombre_base.contains(&dn)
+        });
+
+        let Some(idx) = idx else { omitidas += 1; continue };
+
+        // Primero eliminar cualquier entrada existente para este mes
+        state.asesor.rastreador.deudas[idx].historial.retain(|m| m.mes != mes);
+
+        if *monto_real > 0.01 {
+            let d = &state.asesor.rastreador.deudas[idx];
+            let saldo_i = d.saldo_actual();
+            let tasa_m = d.tasa_anual / 100.0 / 12.0;
+            let (pago_pi, pago_escrow) = if es_escrow { (0.0, *monto_real) } else { (*monto_real, 0.0) };
+            let interes = (saldo_i - pago_pi).max(0.0) * tasa_m;
+            let saldo_f = ((saldo_i - pago_pi).max(0.0) + interes).max(0.0);
+
+            state.asesor.rastreador.deudas[idx].historial.push(
+                omniplanner::ml::MesPago {
+                    mes: mes.to_string(),
+                    saldo_inicio: saldo_i,
+                    pago: pago_pi,
+                    pago_escrow,
+                    nuevos_cargos: 0.0,
+                    intereses: interes,
+                    saldo_final: saldo_f,
+                    meses_cubiertos: vec![],
+                    nota: String::new(),
+                }
+            );
+            actualizadas += 1;
+        } else {
+            // monto=0 → no hubo pago, no se registra nada
+            actualizadas += 1;
+        }
+    }
+
+    let _ = state.guardar();
+    println!();
+    println!("  {} {} líneas sincronizadas al Rastreador.", "✅".green(), actualizadas);
+    if omitidas > 0 {
+        println!("  {} {} líneas no encontraron deuda coincidente en el Rastreador.", "⚠️".yellow(), omitidas);
+    }
+    pausa();
+}
+
+pub(crate) fn sincronizar_ingresos_rastreador(state: &mut AppState, mes: &str) {
+    let nombres_en_mes: std::collections::HashSet<String> = state
+        .presupuesto
+        .mes_actual(mes)
+        .map(|p| p.lineas.iter().map(|l| l.nombre.clone()).collect())
+        .unwrap_or_default();
+
+    let ingresos_faltantes: Vec<(String, f64, FrecuenciaPago)> = state
+        .asesor
+        .rastreador
+        .ingresos
+        .iter()
+        .filter(|ing| {
+            ing.confirmado
+                && ing.monto_mensual() > 0.01
+                && !nombres_en_mes.contains(&ing.concepto)
+        })
+        .map(|ing| (ing.concepto.clone(), ing.monto_mensual(), ing.frecuencia.clone()))
+        .collect();
+
+    limpiar();
+    separador("💵  Sincronizar ingresos desde Rastreador");
+
+    if ingresos_faltantes.is_empty() {
+        println!(
+            "  {} Todos los ingresos del Rastreador ya están en {}.",
+            "✅".green(), mes
+        );
+        pausa();
+        return;
+    }
+
+    println!(
+        "  Los siguientes ingresos están en el Rastreador pero NO en {}:",
+        mes.bold()
+    );
+    println!();
+    for (nombre, monto, frec) in &ingresos_faltantes {
+        let etiqueta = match frec {
+            FrecuenciaPago::Semanal => "/semana",
+            FrecuenciaPago::Quincenal => "/quincenal",
+            FrecuenciaPago::Mensual => "/mes",
+            FrecuenciaPago::Trimestral => "/trimestral",
+            FrecuenciaPago::Semestral => "/semestral",
+            FrecuenciaPago::Anual => "/anual",
+            FrecuenciaPago::UnaVez => "/única vez",
+        };
+        println!("    💵 {:<32} ${:.2}{}", nombre, monto, etiqueta);
+    }
+    println!();
+
+    if confirmar("¿Agregar estos ingresos al mes ahora?", true) {
+        if let Some(pres) = state.presupuesto.mes_actual_mut(mes) {
+            for (nombre, monto, frec) in ingresos_faltantes {
+                pres.lineas.push(LineaPresupuesto {
+                    nombre,
+                    categoria: Categoria::Ingreso,
+                    monto,
+                    pagado: true,
+                    fecha_limite: String::new(),
+                    notas: String::new(),
+                    saldo_total_deuda: None,
+                    monto_pagado_real: monto,
+                    meses_atrasados: 0,
+                    frecuencia: frec,
+                });
+            }
+            println!("  {} Ingresos agregados.", "✅".green());
+            let _ = state.guardar();
+        }
+    }
     pausa();
 }
 
@@ -10404,29 +11926,252 @@ pub(crate) fn editar_monto_linea(state: &mut AppState, mes: &str) {
         .lineas
         .iter()
         .map(|l| {
+            let badge = if l.meses_atrasados > 0 && !l.pagado {
+                format!(" 🔴 {}m atras", l.meses_atrasados)
+            } else {
+                String::new()
+            };
             format!(
-                "{} {} — ${:.2}{}",
+                "{} {} — ${:.2}{}{}",
                 l.categoria.emoji(),
                 l.nombre,
                 l.monto,
-                if l.pagado { " ✅" } else { "" }
+                if l.pagado { " ✅" } else { "" },
+                badge
             )
         })
         .collect();
     let refs: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
 
     if let Some(idx) = menu("¿Cuál editar?", &refs) {
-        let nuevo = pedir_f64(
-            &format!(
-                "Nuevo monto para '{}' (actual: ${:.2})",
-                pres.lineas[idx].nombre, pres.lineas[idx].monto
-            ),
-            pres.lineas[idx].monto,
-        );
-        if nuevo > 0.0 {
-            pres.lineas[idx].monto = nuevo;
-            println!("  ✅ Actualizado a ${:.2}", nuevo);
+        let acciones = &[
+            "💲 Cambiar monto",
+            "🔴 Configurar meses atrasados",
+            "♻️  Resetear pago real (parcial)",
+            "🔙 Cancelar",
+        ];
+        match menu("¿Qué editar?", acciones) {
+            Some(0) => {
+                let nuevo = pedir_f64(
+                    &format!(
+                        "Nuevo monto para '{}' (actual: ${:.2})",
+                        pres.lineas[idx].nombre, pres.lineas[idx].monto
+                    ),
+                    pres.lineas[idx].monto,
+                );
+                if nuevo > 0.0 {
+                    pres.lineas[idx].monto = nuevo;
+                    println!("  ✅ Actualizado a ${:.2}", nuevo);
+                }
+            }
+            Some(1) => {
+                let n = pedir_f64(
+                    &format!(
+                        "Meses atrasados para '{}' (actual: {})",
+                        pres.lineas[idx].nombre, pres.lineas[idx].meses_atrasados
+                    ),
+                    pres.lineas[idx].meses_atrasados as f64,
+                );
+                pres.lineas[idx].meses_atrasados = n.max(0.0).round() as u32;
+                if pres.lineas[idx].meses_atrasados > 0 {
+                    pres.lineas[idx].pagado = false;
+                }
+                println!(
+                    "  ✅ Meses atrasados = {}",
+                    pres.lineas[idx].meses_atrasados
+                );
+            }
+            Some(2) => {
+                pres.lineas[idx].monto_pagado_real = 0.0;
+                pres.lineas[idx].pagado = false;
+                println!("  ✅ Pago parcial reseteado");
+            }
+            _ => {}
         }
+    }
+    pausa();
+}
+
+pub(crate) fn ver_pagos_realizados(state: &AppState, mes: &str) {
+    let pres = match state.presupuesto.mes_actual(mes) {
+        Some(p) => p,
+        None => {
+            println!("  {} No hay presupuesto para {}.", "✗".red(), mes);
+            return;
+        }
+    };
+
+    limpiar();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════════╗".green()
+    );
+    println!("  📋 PAGOS REALIZADOS — {}", mes.bold());
+    println!(
+        "{}",
+        "╠══════════════════════════════════════════════════════════════════╣".green()
+    );
+
+    let ingresos = pres.total_ingresos();
+    let pagado = pres.total_pagado_real();
+    let disponible = ingresos - pagado;
+
+    let pagados: Vec<&LineaPresupuesto> = pres
+        .lineas
+        .iter()
+        .filter(|l| l.categoria != Categoria::Ingreso && l.monto_pagado_real > 0.0)
+        .collect();
+    let pendientes: Vec<&LineaPresupuesto> = pres
+        .lineas
+        .iter()
+        .filter(|l| {
+            l.categoria != Categoria::Ingreso
+                && l.monto_pagado_real <= 0.001
+                && l.pendiente_real() > 0.0
+        })
+        .collect();
+
+    println!();
+    println!(
+        "  💵 Ingresos del mes:        ${:>12.2}",
+        ingresos
+    );
+    println!("  ✅ Pagado hasta ahora:      ${:>12.2}", pagado);
+    let lbl_disp = if disponible >= 0.0 {
+        format!("  💰 Te queda:                ${:>12.2}", disponible).green()
+    } else {
+        format!(
+            "  🔴 SOBREGIRO:               ${:>12.2}",
+            disponible.abs()
+        )
+        .red()
+    };
+    println!("{}", lbl_disp);
+    println!();
+
+    if !pagados.is_empty() {
+        println!("  {} PAGOS HECHOS ({})", "✅".green(), pagados.len());
+        println!("  ─────────────────────────────────────────────────────────");
+        println!(
+            "  {:<30} {:>10} {:>10} {:>10}",
+            "Concepto", "Plan", "Pagado", "Estado"
+        );
+        for l in &pagados {
+            let estado = if l.pagado {
+                "PAGADO ✅".green().to_string()
+            } else {
+                format!("queda ${:.2}", l.pendiente_real())
+                    .yellow()
+                    .to_string()
+            };
+            let nombre_corto: String = l.nombre.chars().take(28).collect();
+            println!(
+                "  {} {:<28} ${:>9.2} ${:>9.2}  {}",
+                l.categoria.emoji(),
+                nombre_corto,
+                l.monto_a_pagar(),
+                l.monto_pagado_real,
+                estado
+            );
+        }
+    }
+
+    if !pendientes.is_empty() {
+        println!();
+        println!("  {} PENDIENTES ({})", "⏳".yellow(), pendientes.len());
+        println!("  ─────────────────────────────────────────────────────────");
+        for l in &pendientes {
+            let badge = if l.meses_atrasados > 0 {
+                format!(" 🔴 {}m atras", l.meses_atrasados).red().to_string()
+            } else {
+                String::new()
+            };
+            let nombre_corto: String = l.nombre.chars().take(28).collect();
+            println!(
+                "  {} {:<28} ${:>9.2}{}",
+                l.categoria.emoji(),
+                nombre_corto,
+                l.pendiente_real(),
+                badge
+            );
+        }
+    }
+
+    println!();
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════════╝".green()
+    );
+}
+
+pub(crate) fn exportar_pagos_csv(state: &AppState, mes: &str) {
+    let pres = match state.presupuesto.mes_actual(mes) {
+        Some(p) => p,
+        None => {
+            println!("  {} No hay presupuesto para {}.", "✗".red(), mes);
+            pausa();
+            return;
+        }
+    };
+
+    let dir = omniplanner::ml::advisor::AlmacenAsesor::dir_exportacion();
+    let archivo = dir.join(format!("pagos_{}.csv", mes));
+
+    let mut csv = String::new();
+    csv.push_str("Mes,Categoria,Concepto,Plan_mes,Meses_atrasados,Total_a_pagar,Pagado_real,Pendiente,Pagado_completo,Saldo_total_deuda\n");
+
+    for l in &pres.lineas {
+        let saldo = l
+            .saldo_total_deuda
+            .map(|s| format!("{:.2}", s))
+            .unwrap_or_default();
+        csv.push_str(&format!(
+            "{},{},\"{}\",{:.2},{},{:.2},{:.2},{:.2},{},{}\n",
+            mes,
+            l.categoria.nombre(),
+            l.nombre.replace('"', "'"),
+            l.monto,
+            l.meses_atrasados,
+            l.monto_a_pagar(),
+            l.monto_pagado_real,
+            l.pendiente_real(),
+            if l.pagado { "si" } else { "no" },
+            saldo,
+        ));
+    }
+
+    // Fila de resumen
+    csv.push_str(&format!(
+        "{},RESUMEN,\"Totales\",{:.2},,{:.2},{:.2},{:.2},,\n",
+        mes,
+        pres.total_ingresos(),
+        pres
+            .lineas
+            .iter()
+            .filter(|l| l.categoria != Categoria::Ingreso)
+            .map(|l| l.monto_a_pagar())
+            .sum::<f64>(),
+        pres.total_pagado_real(),
+        pres
+            .lineas
+            .iter()
+            .filter(|l| l.categoria != Categoria::Ingreso)
+            .map(|l| l.pendiente_real())
+            .sum::<f64>(),
+    ));
+
+    match std::fs::write(&archivo, csv) {
+        Ok(_) => {
+            println!(
+                "  {} CSV exportado: {}",
+                "✓".green(),
+                archivo.display()
+            );
+            println!(
+                "  💡 Ábrelo en Excel / Google Sheets para tu cuadro de planificación mensual."
+            );
+        }
+        Err(e) => println!("  {} Error escribiendo CSV: {}", "✗".red(), e),
     }
     pausa();
 }
@@ -10484,6 +12229,8 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
         for item in &items {
             let estado = if item.pagado {
                 "✅".to_string()
+            } else if item.meses_atrasados > 0 {
+                "🔴".to_string()
             } else {
                 "⬜".to_string()
             };
@@ -10492,12 +12239,30 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
             } else {
                 format!(" (día {})", item.fecha_limite)
             };
+            let badge_atras = if item.meses_atrasados > 0 && !item.pagado {
+                format!(
+                    "  {} {}m sin pagar",
+                    "⚠️ ATRASADO".red().bold(),
+                    item.meses_atrasados
+                )
+            } else {
+                String::new()
+            };
+            let parcial = if item.monto_pagado_real > 0.0 && !item.pagado {
+                format!("  💵 parcial ${:.2}", item.monto_pagado_real)
+                    .yellow()
+                    .to_string()
+            } else {
+                String::new()
+            };
             println!(
-                "    {} {:<30} ${:>10.2}{}",
+                "    {} {:<30} ${:>10.2}{}{}{}",
                 estado,
                 item.nombre,
                 item.monto,
-                fecha_str.dimmed()
+                fecha_str.dimmed(),
+                badge_atras,
+                parcial
             );
             // Mostrar info de saldo total para deudas
             if item.categoria == Categoria::PagoDeuda {
@@ -11471,6 +13236,652 @@ pub(crate) fn menu_asesor_proyecciones(state: &mut AppState) {
     pausa();
 }
 
+// ══════════════════════════════════════════════════════════════
+//  Simulador de escenarios (camino a libertad financiera)
+// ══════════════════════════════════════════════════════════════
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EscenarioAlternativo {
+    nuevas_deudas: Vec<DeudaRastreada>,
+    presupuesto_override: Option<f64>,
+    estrategia: Option<EstrategiaLibertad>,
+    ajustes: Vec<AjusteMensualLibertad>,
+    descripcion: Vec<String>,
+}
+
+impl EscenarioAlternativo {
+    fn rastreador_modificado(&self, base: &RastreadorDeudas) -> RastreadorDeudas {
+        let mut r = base.clone();
+        for d in &self.nuevas_deudas {
+            r.deudas.push(d.clone());
+        }
+        r
+    }
+    fn es_vacio(&self) -> bool {
+        self.nuevas_deudas.is_empty()
+            && self.presupuesto_override.is_none()
+            && self.estrategia.is_none()
+            && self.ajustes.is_empty()
+    }
+}
+
+pub(crate) fn formatear_plazo_meses(meses: usize) -> String {
+    if meses == 0 {
+        return "inmediato".to_string();
+    }
+    let anios = meses / 12;
+    let m = meses % 12;
+    if anios == 0 {
+        format!("{} mes(es)", m)
+    } else if m == 0 {
+        format!("{} año(s)", anios)
+    } else {
+        format!("{} año(s) y {} mes(es)", anios, m)
+    }
+}
+
+fn aporte_extra_para_mantener_plazo(
+    rastreador: &RastreadorDeudas,
+    presupuesto_base: f64,
+    estrategia: &EstrategiaLibertad,
+    ajustes: &[AjusteMensualLibertad],
+    meses_objetivo: usize,
+) -> Option<f64> {
+    if meses_objetivo == 0 {
+        return Some(0.0);
+    }
+    let eval = |p: f64| -> usize {
+        let sim = rastreador.simular_libertad_editado(p, estrategia, ajustes);
+        if sim.meses.is_empty() {
+            usize::MAX
+        } else {
+            sim.meses.len()
+        }
+    };
+    if eval(presupuesto_base) <= meses_objetivo {
+        return Some(0.0);
+    }
+    let mut lo = 0.0f64;
+    let mut hi = presupuesto_base.max(100.0);
+    let mut intentos = 0;
+    while eval(presupuesto_base + hi) > meses_objetivo && intentos < 25 {
+        hi *= 2.0;
+        intentos += 1;
+    }
+    if eval(presupuesto_base + hi) > meses_objetivo {
+        return None;
+    }
+    for _ in 0..40 {
+        if hi - lo < 1.0 {
+            break;
+        }
+        let mid = (lo + hi) / 2.0;
+        if eval(presupuesto_base + mid) <= meses_objetivo {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    Some(hi.ceil())
+}
+
+fn mostrar_comparacion_escenarios(
+    base: &RastreadorDeudas,
+    presupuesto_base: f64,
+    estrategia_base: &EstrategiaLibertad,
+    sim_base: &SimulacionLibertad,
+    esc: &EscenarioAlternativo,
+) {
+    if esc.es_vacio() {
+        println!(
+            "  {} No has aplicado modificaciones. Agrega al menos una para comparar.",
+            "ℹ️".cyan()
+        );
+        return;
+    }
+    let alt = esc.rastreador_modificado(base);
+    let presupuesto_alt = esc.presupuesto_override.unwrap_or(presupuesto_base);
+    let estrategia_alt = esc.estrategia.clone().unwrap_or(estrategia_base.clone());
+    let sim_alt = alt.simular_libertad_editado(presupuesto_alt, &estrategia_alt, &esc.ajustes);
+
+    let meses_base = sim_base.meses.len();
+    let meses_alt = sim_alt.meses.len();
+    let deuda_base = base.deuda_total_actual();
+    let deuda_alt = alt.deuda_total_actual();
+    let minimos_base: f64 = base
+        .deudas_activas()
+        .iter()
+        .filter(|d| d.saldo_actual() > 0.01)
+        .map(|d| d.pago_pi_mensual())
+        .sum();
+    let minimos_alt: f64 = alt
+        .deudas_activas()
+        .iter()
+        .filter(|d| d.saldo_actual() > 0.01)
+        .map(|d| d.pago_pi_mensual())
+        .sum();
+
+    println!();
+    println!("  {} COMPARACIÓN BASE vs ALTERNATIVA", "📊".cyan().bold());
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Métrica".bold(),
+        "BASE".cyan().bold(),
+        "ALTERNATIVA".yellow().bold()
+    );
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Deuda total",
+        format!("${:.2}", deuda_base),
+        format!("${:.2}", deuda_alt)
+    );
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Presupuesto mensual",
+        format!("${:.2}", presupuesto_base),
+        format!("${:.2}", presupuesto_alt)
+    );
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Suma pagos mínimos",
+        format!("${:.2}", minimos_base),
+        format!("${:.2}", minimos_alt)
+    );
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Estrategia",
+        estrategia_base.nombre(),
+        estrategia_alt.nombre()
+    );
+    let plazo_str = |m: usize| {
+        if m == 0 {
+            "liquidado".to_string()
+        } else if m >= 600 {
+            "no converge".to_string()
+        } else {
+            formatear_plazo_meses(m)
+        }
+    };
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Plazo a libertad",
+        plazo_str(meses_base),
+        plazo_str(meses_alt)
+    );
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Total intereses",
+        format!("${:.2}", sim_base.total_intereses),
+        format!("${:.2}", sim_alt.total_intereses)
+    );
+    println!(
+        "     {:24} {:>18} {:>18}",
+        "Total pagado",
+        format!("${:.2}", sim_base.total_pagado),
+        format!("${:.2}", sim_alt.total_pagado)
+    );
+
+    // Aviso de mínimos no cubiertos (deudas "descubiertas" cuyo saldo crece)
+    if sim_base.meses_con_descubierto > 0 || sim_alt.meses_con_descubierto > 0 {
+        println!();
+        println!(
+            "  {} {}",
+            "⚠️".red().bold(),
+            "ALERTA: el presupuesto NO cubre todos los pagos mínimos."
+                .red()
+                .bold()
+        );
+        if sim_base.meses_con_descubierto > 0 {
+            println!(
+                "     BASE: {} mes(es) con mínimos descubiertos (faltante acumulado {}).",
+                sim_base.meses_con_descubierto,
+                format!("${:.2}", sim_base.minimos_no_cubiertos_total).red()
+            );
+            if let Some(primer) = sim_base
+                .meses
+                .iter()
+                .find(|m| m.minimos_no_cubiertos > 0.01)
+            {
+                let nombres: Vec<String> =
+                    primer.deudas_descubiertas.iter().take(4).cloned().collect();
+                println!(
+                    "       └ Ej. mes {}: {} (faltan ${:.2})",
+                    primer.mes_numero,
+                    nombres.join(", "),
+                    primer.minimos_no_cubiertos
+                );
+            }
+        }
+        if sim_alt.meses_con_descubierto > 0 {
+            println!(
+                "     ALT : {} mes(es) con mínimos descubiertos (faltante acumulado {}).",
+                sim_alt.meses_con_descubierto,
+                format!("${:.2}", sim_alt.minimos_no_cubiertos_total).red()
+            );
+        }
+        println!(
+            "     {} Sin cubrir el mínimo, esas deudas {} cada mes por intereses. No hay ahorro posible.",
+            "💡".yellow(),
+            "CRECEN".red().bold()
+        );
+    }
+
+    println!();
+    println!("  {} Diferencias (ALT − BASE):", "🔀".cyan().bold());
+
+    let pagable = presupuesto_alt + 0.01 >= minimos_alt && meses_alt > 0 && meses_alt < 600;
+    if minimos_alt > presupuesto_alt + 0.01 {
+        println!(
+            "     {} NO PAGABLE: los pagos mínimos (${:.2}) superan el presupuesto (${:.2}). Faltan {} /mes sólo para mínimos.",
+            "🔴".red().bold(),
+            minimos_alt,
+            presupuesto_alt,
+            format!("${:.2}", minimos_alt - presupuesto_alt).red().bold()
+        );
+    }
+
+    if meses_base > 0 && meses_base < 600 && meses_alt > 0 && meses_alt < 600 {
+        let diff = meses_alt as i32 - meses_base as i32;
+        if diff == 0 {
+            println!("     Plazo          : = igual plazo");
+        } else {
+            let abs = diff.unsigned_abs() as usize;
+            if diff > 0 {
+                println!(
+                    "     Plazo          : {}",
+                    format!("⏳ +{} más largo", formatear_plazo_meses(abs)).red()
+                );
+            } else {
+                println!(
+                    "     Plazo          : {}",
+                    format!("🚀 -{} más rápido", formatear_plazo_meses(abs)).green()
+                );
+            }
+        }
+    } else if meses_alt >= 600 {
+        println!(
+            "     Plazo          : {}",
+            "🔴 No converge (el presupuesto no cubre intereses)".red()
+        );
+    }
+
+    let diff_int = sim_alt.total_intereses - sim_base.total_intereses;
+    if diff_int > 0.01 {
+        println!(
+            "     Intereses      : {}",
+            format!("+${:.2} más en intereses pagados", diff_int).red()
+        );
+    } else if diff_int < -0.01 {
+        println!(
+            "     Intereses      : {}",
+            format!("-${:.2} ahorrados en intereses", diff_int.abs()).green()
+        );
+    } else {
+        println!("     Intereses      : = sin cambio");
+    }
+
+    let diff_pag = sim_alt.total_pagado - sim_base.total_pagado;
+    if diff_pag > 0.01 {
+        println!(
+            "     Desembolso     : {}",
+            format!("+${:.2} más en total pagado", diff_pag).yellow()
+        );
+    } else if diff_pag < -0.01 {
+        println!(
+            "     Desembolso     : {}",
+            format!("-${:.2} menos en total pagado", diff_pag.abs()).green()
+        );
+    }
+
+    println!();
+    if !pagable {
+        println!(
+            "  {} {}",
+            "🔴".red(),
+            "Veredicto: escenario ALT no es sostenible con el presupuesto actual."
+                .red()
+                .bold()
+        );
+    } else if meses_alt > meses_base + 6 {
+        println!(
+            "  {} {}",
+            "⚠️".yellow(),
+            format!(
+                "Veredicto: cambio SIGNIFICATIVO. Añade {} al camino a libertad.",
+                formatear_plazo_meses(meses_alt - meses_base)
+            )
+            .yellow()
+            .bold()
+        );
+    } else if meses_alt > meses_base {
+        println!(
+            "  {} Veredicto: cambio moderado. Extiende el plazo en {}.",
+            "🟡".yellow(),
+            formatear_plazo_meses(meses_alt - meses_base)
+        );
+    } else if meses_alt < meses_base {
+        println!(
+            "  {} Veredicto: este escenario ACELERA la libertad en {}.",
+            "✅".green(),
+            formatear_plazo_meses(meses_base - meses_alt)
+        );
+    } else {
+        println!("  {} Veredicto: sin diferencia en plazo.", "✅".green());
+    }
+}
+
+pub(crate) fn simulador_escenarios_libertad(state: &AppState, politica: &PoliticaFlujo) {
+    let ingreso_rastreador = state.asesor.rastreador.ingreso_mensual_total();
+    let ingreso_presupuesto = state.asesor.presupuesto.ingreso_mensual();
+    let ingreso = ingreso_rastreador.max(ingreso_presupuesto);
+    let gastos_fijos_plan = state.asesor.presupuesto.gastos_fijos_mensual();
+    let pagos_minimos: f64 = state
+        .asesor
+        .rastreador
+        .deudas_activas()
+        .iter()
+        .map(|d| d.pago_minimo)
+        .sum();
+    let tiene_deudas = state.asesor.rastreador.deuda_total_actual() > 0.01;
+    if !tiene_deudas {
+        limpiar();
+        separador("🧪 SIMULADOR DE ESCENARIOS");
+        println!(
+            "  {} No hay deudas activas registradas. El simulador no tiene datos sobre los que proyectar.",
+            "ℹ️".cyan()
+        );
+        pausa();
+        return;
+    }
+    let dist_base = calcular_distribucion_flujo(
+        ingreso,
+        pagos_minimos,
+        gastos_fijos_plan,
+        tiene_deudas,
+        politica,
+    );
+    let presupuesto_base = dist_base.comprometido_objetivo;
+    let estrategia_base = EstrategiaLibertad::Avalancha;
+    let sim_base =
+        state
+            .asesor
+            .rastreador
+            .simular_libertad_editado(presupuesto_base, &estrategia_base, &[]);
+    let meses_base = sim_base.meses.len();
+
+    let mut esc = EscenarioAlternativo::default();
+
+    loop {
+        limpiar();
+        separador("🧪 SIMULADOR DE ESCENARIOS — Camino a Libertad Financiera");
+        println!(
+            "  Ingreso mensual       : {}",
+            format!("${:.2}", ingreso).green()
+        );
+        println!(
+            "  Presupuesto base      : {} ({} del ingreso)",
+            format!("${:.2}", presupuesto_base).yellow().bold(),
+            format!("{:.0}%", dist_base.ratio_comprometido_aplicado * 100.0).yellow()
+        );
+        println!(
+            "  Flujo jugable actual  : {}",
+            format!("${:.2}", dist_base.flujo_jugable).cyan()
+        );
+        println!(
+            "  Deuda total           : {}",
+            format!("${:.2}", state.asesor.rastreador.deuda_total_actual())
+                .red()
+                .bold()
+        );
+        println!();
+        println!("  {} Plan BASE (sin modificaciones):", "📌".cyan().bold());
+        if meses_base == 0 {
+            println!("     Ya sin deudas.");
+        } else if meses_base >= 600 {
+            println!(
+                "     {} El presupuesto base no converge (no cubre intereses).",
+                "🔴".red()
+            );
+        } else {
+            println!(
+                "     Plazo              : {}",
+                formatear_plazo_meses(meses_base).bold()
+            );
+            println!(
+                "     Total intereses    : {}",
+                format!("${:.2}", sim_base.total_intereses).yellow()
+            );
+            println!(
+                "     Total pagado       : {}",
+                format!("${:.2}", sim_base.total_pagado).yellow()
+            );
+            println!("     Estrategia         : {}", estrategia_base.nombre());
+        }
+
+        if sim_base.meses_con_descubierto > 0 {
+            println!();
+            println!(
+                "  {} {}",
+                "⚠️".red().bold(),
+                "Presupuesto insuficiente para todos los mínimos en el plan BASE."
+                    .red()
+                    .bold()
+            );
+            println!(
+                "     {} mes(es) con descubierto, faltante acumulado {}.",
+                sim_base.meses_con_descubierto,
+                format!("${:.2}", sim_base.minimos_no_cubiertos_total).red()
+            );
+            if let Some(primer) = sim_base
+                .meses
+                .iter()
+                .find(|m| m.minimos_no_cubiertos > 0.01)
+            {
+                let nombres: Vec<String> =
+                    primer.deudas_descubiertas.iter().take(5).cloned().collect();
+                println!(
+                    "     Deudas descubiertas (mes {}): {}",
+                    primer.mes_numero,
+                    nombres.join(", ").red()
+                );
+            }
+            println!(
+                "     {} Estas deudas CRECEN por intereses → ningún ahorro hasta elevar ingreso o recortar gastos fijos.",
+                "💡".yellow()
+            );
+        }
+
+        if !esc.es_vacio() {
+            println!();
+            println!(
+                "  {} Modificaciones aplicadas al escenario alternativo:",
+                "🛠️".cyan()
+            );
+            for d in &esc.descripcion {
+                println!("     • {}", d);
+            }
+        }
+
+        println!();
+        let opciones = &[
+            "➕ Añadir deuda hipotética (ej: abogado, imprevisto)",
+            "💵 Cambiar abono mensual al plan",
+            "⏸️  Postergar pago de una deuda N meses",
+            "🎯 Cambiar estrategia de reparto (avalancha/bola de nieve)",
+            "🔍 Ver comparación BASE vs ALTERNATIVA",
+            "💰 ¿Cuánto más necesito para mantener el mismo plazo?",
+            "↩️  Reiniciar escenario alternativo",
+            "🚪 Salir del simulador",
+        ];
+        let sel = match menu("¿Qué quieres simular?", opciones) {
+            Some(s) => s,
+            None => return,
+        };
+        match sel {
+            0 => {
+                let nombre = match pedir_texto("Nombre de la deuda hipotética (ej: 'Abogado')") {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let monto = pedir_f64("Monto / saldo inicial ($)", 0.0).max(0.0);
+                if monto <= 0.01 {
+                    println!("  {} Monto inválido; se ignora.", "⚠️".yellow());
+                    pausa();
+                    continue;
+                }
+                let tasa = pedir_f64("Tasa anual (%) — 0 si no aplica interés", 0.0).max(0.0);
+                let pago_min_default = (monto * 0.03).max(25.0);
+                let pago_min = pedir_f64("Pago mínimo mensual ($)", pago_min_default).max(0.0);
+                let mut d = DeudaRastreada::nueva(&nombre, tasa, pago_min);
+                d.saldo_inicial = monto;
+                d.principal_interes_mensual = pago_min;
+                esc.descripcion.push(format!(
+                    "➕ Añadir '{}': ${:.2} al {:.1}% anual, mínimo ${:.2}",
+                    nombre, monto, tasa, pago_min
+                ));
+                esc.nuevas_deudas.push(d);
+            }
+            1 => {
+                let nuevo =
+                    pedir_f64("Nuevo abono mensual total al plan ($)", presupuesto_base).max(0.0);
+                esc.descripcion.push(format!(
+                    "💵 Cambiar abono mensual a ${:.2} (base era ${:.2})",
+                    nuevo, presupuesto_base
+                ));
+                esc.presupuesto_override = Some(nuevo);
+            }
+            2 => {
+                let alt_r = esc.rastreador_modificado(&state.asesor.rastreador);
+                let nombres: Vec<String> = alt_r
+                    .deudas_activas()
+                    .iter()
+                    .filter(|d| d.saldo_actual() > 0.01)
+                    .map(|d| d.nombre.clone())
+                    .collect();
+                if nombres.is_empty() {
+                    println!("  {} No hay deudas para postergar.", "ℹ️".cyan());
+                    pausa();
+                    continue;
+                }
+                let ops: Vec<&str> = nombres.iter().map(|s| s.as_str()).collect();
+                let idx = match menu("¿Qué deuda quieres postergar?", &ops) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let n_meses = pedir_usize("¿Cuántos meses postergar? (pagarás $0 a esa deuda)", 3);
+                let nombre = nombres[idx].clone();
+                for m in 1..=n_meses {
+                    esc.ajustes
+                        .push(AjusteMensualLibertad::nuevo(m, nombre.clone(), 0.0));
+                }
+                esc.descripcion.push(format!(
+                    "⏸️ Postergar '{}' durante {} mes(es) (pago $0)",
+                    nombre, n_meses
+                ));
+            }
+            3 => {
+                let ops = &[
+                    "Avalancha (tasa más alta primero)",
+                    "Bola de nieve (saldo más bajo primero)",
+                ];
+                let idx = match menu("Estrategia alternativa", ops) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let e = if idx == 0 {
+                    EstrategiaLibertad::Avalancha
+                } else {
+                    EstrategiaLibertad::BolaNieve
+                };
+                esc.descripcion
+                    .push(format!("🎯 Estrategia: {}", e.nombre()));
+                esc.estrategia = Some(e);
+            }
+            4 => {
+                mostrar_comparacion_escenarios(
+                    &state.asesor.rastreador,
+                    presupuesto_base,
+                    &estrategia_base,
+                    &sim_base,
+                    &esc,
+                );
+                pausa();
+            }
+            5 => {
+                if esc.es_vacio() {
+                    println!(
+                        "  {} Aún no has aplicado modificaciones; no hay diferencia contra el plan base.",
+                        "ℹ️".cyan()
+                    );
+                    pausa();
+                    continue;
+                }
+                if meses_base == 0 || meses_base >= 600 {
+                    println!(
+                        "  {} El plan base no converge; no hay un plazo objetivo comparable.",
+                        "⚠️".yellow()
+                    );
+                    pausa();
+                    continue;
+                }
+                let alt_r = esc.rastreador_modificado(&state.asesor.rastreador);
+                let alt_presupuesto = esc.presupuesto_override.unwrap_or(presupuesto_base);
+                let estrategia_alt = esc.estrategia.clone().unwrap_or(estrategia_base.clone());
+                let extra = aporte_extra_para_mantener_plazo(
+                    &alt_r,
+                    alt_presupuesto,
+                    &estrategia_alt,
+                    &esc.ajustes,
+                    meses_base,
+                );
+                println!();
+                match extra {
+                    Some(x) if x <= 0.5 => println!(
+                        "  {} ¡Perfecto! No necesitas abono extra; el escenario respeta el plazo base ({}).",
+                        "✅".green(),
+                        formatear_plazo_meses(meses_base)
+                    ),
+                    Some(x) => {
+                        println!(
+                            "  {} Necesitas aportar al menos {} adicionales al mes para mantener el mismo plazo ({}).",
+                            "💡".yellow().bold(),
+                            format!("${:.2}", x).yellow().bold(),
+                            formatear_plazo_meses(meses_base)
+                        );
+                        let flujo = dist_base.flujo_jugable.max(0.0);
+                        if flujo >= x - 0.01 {
+                            println!(
+                                "     Tu flujo jugable (${:.2}) cubre este extra, pero recortas el margen jugable a ${:.2}.",
+                                flujo,
+                                flujo - x
+                            );
+                        } else {
+                            let falta = x - flujo;
+                            println!(
+                                "     {} Tu flujo jugable (${:.2}) no alcanza: faltan {} / mes de ingreso adicional o recorte de gastos.",
+                                "🔴".red(),
+                                flujo,
+                                format!("${:.2}", falta).red().bold()
+                            );
+                        }
+                    }
+                    None => println!(
+                        "  {} No es posible mantener el plazo base con un aporte razonable; el escenario es demasiado costoso.",
+                        "🔴".red().bold()
+                    ),
+                }
+                pausa();
+            }
+            6 => {
+                esc = EscenarioAlternativo::default();
+                println!("  {} Escenario reiniciado.", "↩️".cyan());
+                pausa();
+            }
+            _ => return,
+        }
+    }
+}
+
 // ── Registrar acción / decisión ──
 
 pub(crate) fn menu_asesor_registrar_accion(state: &mut AppState) {
@@ -11620,6 +14031,26 @@ pub(crate) fn menu_asesor_registrar_accion(state: &mut AppState) {
         }
     }
     println!();
+
+    if tiene_deudas {
+        let explorar = TermConfirm::new()
+            .with_prompt(
+                "  🧪 ¿Quieres SIMULAR esta decisión en el camino a libertad financiera antes de registrarla?",
+            )
+            .default(false)
+            .interact()
+            .unwrap_or(false);
+        if explorar {
+            simulador_escenarios_libertad(state, &politica);
+            limpiar();
+            separador("📝 REGISTRAR ACCIÓN");
+            println!(
+                "  {} Ya regresaste del simulador. Ahora registra la decisión (ya con información).",
+                "ℹ️".cyan()
+            );
+            println!();
+        }
+    }
 
     let accion = match pedir_texto("¿Qué acción o decisión tomaste?") {
         Some(a) => a,

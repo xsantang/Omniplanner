@@ -869,10 +869,19 @@ pub struct DeudaRastreada {
     /// por ejemplo en hipotecas o préstamos pendientes de originarse.
     #[serde(default)]
     pub saldo_inicial: f64,
+    /// Frecuencia real del pago (mensual, anual, etc.).
+    /// Afecta el cálculo del equivalente mensual usado en el presupuesto.
+    /// `pago_minimo` siempre almacena el monto a la frecuencia declarada.
+    #[serde(default = "frecuencia_pago_default")]
+    pub frecuencia: FrecuenciaPago,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn frecuencia_pago_default() -> FrecuenciaPago {
+    FrecuenciaPago::Mensual
 }
 
 /// Registro de un mes para una deuda.
@@ -886,6 +895,13 @@ pub struct MesPago {
     pub nuevos_cargos: f64,
     pub intereses: f64,
     pub saldo_final: f64,
+    /// Meses calendarios que cubre este pago (ej: ["2026-03","2026-04"]).
+    /// Si está vacío se asume que cubre solo el mes del campo `mes`.
+    #[serde(default)]
+    pub meses_cubiertos: Vec<String>,
+    /// Nota libre del usuario sobre este pago.
+    #[serde(default)]
+    pub nota: String,
 }
 
 /// Diagnóstico de un mes: qué se pagó vs qué se debió pagar.
@@ -1113,16 +1129,19 @@ impl DeudaRastreada {
             principal_interes_mensual: pago_minimo,
             originada: true,
             saldo_inicial: 0.0,
+            frecuencia: FrecuenciaPago::Mensual,
         }
     }
 
     /// Pago mensual que realmente ataca la deuda (principal + intereses).
+    /// Para pagos no-mensuales (ej: anual) devuelve el equivalente mensual.
     pub fn pago_pi_mensual(&self) -> f64 {
-        if self.principal_interes_mensual > 0.01 {
+        let base = if self.principal_interes_mensual > 0.01 {
             self.principal_interes_mensual
         } else {
             self.pago_minimo.max(0.0)
-        }
+        };
+        self.frecuencia.a_mensual(base)
     }
 
     /// Pago total mensual (P&I + escrow), útil para flujo de caja.
@@ -1203,18 +1222,17 @@ impl DeudaRastreada {
     }
 
     /// ¿Es un pago corriente (renta, seguro, suscripción)?
-    /// Sin intereses, obligatorio, se paga completo cada mes, nunca se "liquida".
-    /// NO aplica si el saldo es significativamente mayor al pago mínimo
+    /// Sin intereses, obligatorio, se paga completo cada ciclo, nunca se "liquida".
+    /// NO aplica si el saldo es significativamente mayor al pago del período declarado
     /// (eso indica una deuda finita que se está pagando, no un gasto recurrente).
     pub fn es_pago_corriente(&self) -> bool {
         if !self.obligatoria || self.tasa_anual >= 0.01 {
             return false;
         }
-        // Si el saldo es mayor a 1.5× el pago mínimo, es una deuda real
-        // (ej: Navy Federal $1396 con pago $500 → deuda, no corriente)
-        // Un corriente tiene saldo ≈ pago_minimo o 0 (renta, celular, etc.)
+        // Usar el monto real del período (no el equivalente mensual) para comparar contra el saldo,
+        // así pagos anuales (ej: Northwestern Mutual $800/año) no se desclasifican.
+        let pago_ref = self.pago_minimo.max(self.principal_interes_mensual);
         let saldo = self.saldo_actual();
-        let pago_ref = self.pago_pi_mensual();
         if pago_ref > 0.01 && saldo > pago_ref * 1.5 {
             return false;
         }
@@ -1240,6 +1258,20 @@ impl DeudaRastreada {
         pago_escrow: f64,
         nuevos_cargos: f64,
     ) {
+        self.registrar_mes_completo(mes, saldo_inicio, pago_pi, pago_escrow, nuevos_cargos, vec![], String::new());
+    }
+
+    /// Versión completa con meses cubiertos y nota libre.
+    pub fn registrar_mes_completo(
+        &mut self,
+        mes: &str,
+        saldo_inicio: f64,
+        pago_pi: f64,
+        pago_escrow: f64,
+        nuevos_cargos: f64,
+        meses_cubiertos: Vec<String>,
+        nota: String,
+    ) {
         let tasa_mensual = self.tasa_anual / 100.0 / 12.0;
         let saldo_despues_pago = (saldo_inicio - pago_pi).max(0.0);
         let intereses = saldo_despues_pago * tasa_mensual;
@@ -1253,6 +1285,8 @@ impl DeudaRastreada {
             nuevos_cargos,
             intereses,
             saldo_final: if saldo_final < 0.01 { 0.0 } else { saldo_final },
+            meses_cubiertos,
+            nota,
         });
 
         self.activa = saldo_final >= 0.01;
@@ -1287,6 +1321,8 @@ impl DeudaRastreada {
                 nuevos_cargos: orig.nuevos_cargos,
                 intereses,
                 saldo_final: if saldo_final < 0.01 { 0.0 } else { saldo_final },
+                meses_cubiertos: vec![],
+                nota: String::new(),
             });
             saldo = saldo_final;
         }
@@ -1637,11 +1673,79 @@ pub struct RastreadorDeudas {
     /// Estado/territorio de residencia del usuario (ej: "TX", "FL", "NY")
     #[serde(default)]
     pub estado_residencia: String,
+    /// Vínculos entre deudas: cuando la principal recibe N cuotas, la dependiente
+    /// recibe N cuotas de su propia mensualidad (ej. hipoteca → escrow).
+    #[serde(default)]
+    pub vinculos: Vec<VinculoDeudas>,
+    /// Pagos futuros planificados pero aún no realizados.
+    #[serde(default)]
+    pub pagos_programados: Vec<PagoProgramado>,
     // ── Campos legacy para compatibilidad con datos guardados ──
     #[serde(default, alias = "ingreso_quincenal")]
     ingreso: f64,
     #[serde(default = "frecuencia_ingreso_default")]
     frecuencia_ingreso: FrecuenciaPago,
+}
+
+/// Pago futuro planificado: se sabe cuánto y para qué meses, pero aún no se ha pagado.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PagoProgramado {
+    /// Nombre de la deuda a la que aplica.
+    pub nombre_deuda: String,
+    /// Monto P&I que se planea pagar.
+    pub monto_pi: f64,
+    /// Monto escrow que se planea pagar (0 si no aplica).
+    #[serde(default)]
+    pub monto_escrow: f64,
+    /// Meses que cubre este pago (ej: ["2026-05", "2026-06"]).
+    pub meses_cubiertos: Vec<String>,
+    /// Mes en que se realizará el pago (ej: "2026-06").
+    pub fecha_pago_prevista: String,
+    /// Nota libre del usuario.
+    #[serde(default)]
+    pub nota: String,
+}
+
+impl PagoProgramado {
+    pub fn monto_total(&self) -> f64 {
+        self.monto_pi + self.monto_escrow
+    }
+
+    /// Etiqueta legible de los meses cubiertos: "may+jun 2026"
+    pub fn etiqueta_meses(&self) -> String {
+        if self.meses_cubiertos.is_empty() {
+            return "—".to_string();
+        }
+        let nombres: Vec<String> = self
+            .meses_cubiertos
+            .iter()
+            .map(|m| {
+                let partes: Vec<&str> = m.splitn(2, '-').collect();
+                let mes_num: u32 = partes.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let anio = partes.first().copied().unwrap_or("");
+                let nombre = match mes_num {
+                    1 => "ene", 2 => "feb", 3 => "mar", 4 => "abr",
+                    5 => "may", 6 => "jun", 7 => "jul", 8 => "ago",
+                    9 => "sep", 10 => "oct", 11 => "nov", 12 => "dic",
+                    _ => "?",
+                };
+                // Si todos del mismo año, omitir año excepto el último
+                format!("{} {}", nombre, anio)
+            })
+            .collect();
+        nombres.join(" + ")
+    }
+}
+
+/// Relación "cuando X recibe K cuotas, Y también recibe K cuotas (de su propia mensualidad)".
+/// Si el factor es 1.0 las cuotas se igualan; si es 0.5, Y recibe la mitad de cuotas que X (raro).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VinculoDeudas {
+    pub principal: String,
+    pub dependiente: String,
+    /// Factor multiplicador: nº de cuotas de la dependiente = nº de cuotas de la principal × factor.
+    /// Por defecto 1.0 (escrow sigue 1:1 a la hipoteca).
+    pub factor: f64,
 }
 
 fn frecuencia_ingreso_default() -> FrecuenciaPago {
@@ -1964,20 +2068,22 @@ impl RastreadorDeudas {
                 let tasa_mensual = d.tasa_anual / 100.0 / 12.0;
                 let interes_del_saldo = mp.saldo_inicio * tasa_mensual;
 
-                let (error, nota) = if mp.pago < 0.01 && mp.saldo_inicio > 0.01 {
+                let (error, nota) = if mp.pago < 0.01 && mp.saldo_inicio > 0.01 && d.tasa_anual > 0.01 {
+                    // Solo reportar error de no-pago si la deuda tiene tasa (tarjeta/préstamo)
                     (
                         ErrorPago::NoPagoNada,
-                        if d.obligatoria {
-                            format!(
-                                "⛔ NO PAGÓ — PAGO FIJO OBLIGATORIO. Se acumularon ${:.2} en intereses. ¡Riesgo de perder el bien!",
-                                mp.intereses
-                            )
-                        } else {
-                            format!(
-                                "No pagó nada. Se acumularon ${:.2} en intereses.",
-                                mp.intereses
-                            )
-                        },
+                        format!(
+                            "No pagó nada. Se acumularon ${:.2} en intereses.",
+                            mp.intereses
+                        ),
+                    )
+                } else if mp.pago < 0.01 && mp.saldo_inicio > 0.01 && d.obligatoria && d.tasa_anual < 0.01
+                    && !matches!(d.frecuencia, FrecuenciaPago::Anual | FrecuenciaPago::Semestral | FrecuenciaPago::Trimestral | FrecuenciaPago::UnaVez)
+                {
+                    // Pago fijo obligatorio mensual sin tasa (renta, celular mensual, etc.)
+                    (
+                        ErrorPago::NoPagoNada,
+                        "⛔ PAGO FIJO OBLIGATORIO sin registrar. ¡Riesgo de perder el bien!".to_string(),
                     )
                 } else if mp.nuevos_cargos > mp.pago && mp.saldo_inicio > 100.0 {
                     (
@@ -2355,6 +2461,8 @@ impl RastreadorDeudas {
                 orden_liquidacion: Vec::new(),
                 gastos_fijos,
                 total_gastos_fijos,
+                minimos_no_cubiertos_total: 0.0,
+                meses_con_descubierto: 0,
             };
         }
 
@@ -2402,17 +2510,58 @@ impl RastreadorDeudas {
             }
 
             // Paso 1: mínimos de deudas SIN ajuste, obligatorias primero.
-            for obligatoria_primero in [true, false] {
-                for d in deudas.iter() {
-                    if d.liquidada_mes.is_some()
-                        || d.obligatoria != obligatoria_primero
-                        || deudas_con_ajuste.contains(&d.nombre)
-                    {
-                        continue;
+            // Dentro de cada grupo (obligatorias y no obligatorias) ordenamos según
+            // la estrategia activa. Así, cuando el presupuesto NO alcanza para todos
+            // los mínimos, el dinero va primero a la deuda que la estrategia prioriza
+            // (avalancha → mayor tasa, bola de nieve → menor saldo, pesos → mayor peso).
+            // Evita el bug de repartir mínimos en orden de inserción del Vec, que
+            // dejaba descubierta la deuda más cara.
+            let orden_estrategia = |idx_a: usize, idx_b: usize| -> std::cmp::Ordering {
+                match estrategia {
+                    EstrategiaLibertad::Avalancha => deudas[idx_b]
+                        .tasa_anual
+                        .partial_cmp(&deudas[idx_a].tasa_anual)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    EstrategiaLibertad::BolaNieve => deudas[idx_a]
+                        .saldo
+                        .partial_cmp(&deudas[idx_b].saldo)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    EstrategiaLibertad::Pesos(pesos) => {
+                        let pa = pesos
+                            .iter()
+                            .find(|(nm, _)| *nm == deudas[idx_a].nombre)
+                            .map(|(_, p)| *p)
+                            .unwrap_or(0.0);
+                        let pb = pesos
+                            .iter()
+                            .find(|(nm, _)| *nm == deudas[idx_b].nombre)
+                            .map(|(_, p)| *p)
+                            .unwrap_or(0.0);
+                        pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
                     }
+                }
+            };
+            let mut minimos_no_cubiertos_mes = 0.0f64;
+            let mut deudas_descubiertas_mes: Vec<String> = Vec::new();
+            for obligatoria_primero in [true, false] {
+                let mut indices: Vec<usize> = (0..n)
+                    .filter(|&i| {
+                        deudas[i].liquidada_mes.is_none()
+                            && deudas[i].obligatoria == obligatoria_primero
+                            && !deudas_con_ajuste.contains(&deudas[i].nombre)
+                    })
+                    .collect();
+                indices.sort_by(|&a, &b| orden_estrategia(a, b));
+                for i in indices {
+                    let d = &deudas[i];
                     let minimo = d.pago_minimo.min(d.saldo);
                     let pago = minimo.min(disponible);
                     disponible -= pago;
+                    let faltante = (minimo - pago).max(0.0);
+                    if faltante > 0.01 {
+                        minimos_no_cubiertos_mes += faltante;
+                        deudas_descubiertas_mes.push(d.nombre.clone());
+                    }
                     pagos_mes.push((d.nombre.clone(), pago));
                 }
             }
@@ -2600,12 +2749,21 @@ impl RastreadorDeudas {
                 presupuesto_efectivo: presupuesto_deudas,
                 sobrante: disponible.max(0.0),
                 liberado_de_liquidadas: liberado,
+                minimos_no_cubiertos: minimos_no_cubiertos_mes,
+                deudas_descubiertas: deudas_descubiertas_mes,
             });
 
             if deuda_total < 0.01 {
                 break;
             }
         }
+
+        let minimos_no_cubiertos_total: f64 =
+            meses_resultado.iter().map(|m| m.minimos_no_cubiertos).sum();
+        let meses_con_descubierto = meses_resultado
+            .iter()
+            .filter(|m| m.minimos_no_cubiertos > 0.01)
+            .count();
 
         SimulacionLibertad {
             presupuesto_mensual,
@@ -2616,6 +2774,8 @@ impl RastreadorDeudas {
             orden_liquidacion,
             gastos_fijos,
             total_gastos_fijos,
+            minimos_no_cubiertos_total,
+            meses_con_descubierto,
         }
     }
 
@@ -2772,6 +2932,11 @@ pub struct MesSimulado {
     pub sobrante: f64,
     /// Dinero liberado de deudas ya liquidadas en meses anteriores.
     pub liberado_de_liquidadas: f64,
+    /// Suma de pagos mínimos que NO se pudieron cubrir este mes por falta de presupuesto.
+    /// Si > 0, al menos una deuda recibió menos que su mínimo → su saldo crece por intereses.
+    pub minimos_no_cubiertos: f64,
+    /// Nombres de las deudas que no recibieron su pago mínimo completo este mes.
+    pub deudas_descubiertas: Vec<String>,
 }
 
 /// Resultado de la simulación completa de libertad financiera.
@@ -2786,10 +2951,14 @@ pub struct SimulacionLibertad {
     /// Pagos corrientes (renta, seguro, etc.) que se restan del presupuesto cada mes.
     pub gastos_fijos: Vec<(String, f64)>,
     pub total_gastos_fijos: f64,
+    /// Suma acumulada (sobre todos los meses) de mínimos no cubiertos por insuficiencia de presupuesto.
+    pub minimos_no_cubiertos_total: f64,
+    /// Número de meses en los que al menos una deuda no recibió su mínimo.
+    pub meses_con_descubierto: usize,
 }
 
 /// Estrategia de reparto del sobrante sobre los pagos mínimos.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum EstrategiaLibertad {
     /// Tasa más alta primero (ahorra más intereses).
     Avalancha,
@@ -2827,7 +2996,7 @@ impl EstrategiaLibertad {
 
 /// Ajuste manual del usuario: fijar el pago a una deuda concreta en un mes concreto.
 /// El simulador lo respeta y re-reparte el resto del presupuesto entre las demás.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AjusteMensualLibertad {
     /// Mes 1-indexado (1 = primer mes de la simulación).
     pub mes: usize,
@@ -3223,6 +3392,30 @@ impl RegistroAsesor {
 //  Almacén del Asesor (persistencia)
 // ══════════════════════════════════════════════════════════════
 
+/// Borrador persistente del editor del Plan de Libertad Financiera.
+/// Sobrevive a salidas del editor, cierres de la app y reaperturas.
+/// Se borra al exportar a Excel (o cuando el usuario lo descarta explícitamente).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BorradorPlanLibertad {
+    pub presupuesto: f64,
+    pub estrategia: EstrategiaLibertad,
+    pub ajustes: Vec<AjusteMensualLibertad>,
+    /// Fecha/hora ISO del último cambio.
+    pub actualizado_en: String,
+    /// Cuántas ediciones acumula el borrador (informativo).
+    pub ediciones: u32,
+    /// Mes calendario "YYYY-MM" en que empieza el plan (mes 1 de la simulación).
+    /// Se asigna automáticamente al guardar el borrador por primera vez.
+    #[serde(default)]
+    pub mes_inicio: Option<String>,
+}
+
+impl Default for EstrategiaLibertad {
+    fn default() -> Self {
+        EstrategiaLibertad::Avalancha
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AlmacenAsesor {
     pub analisis_deudas: Vec<AnalisisDeuda>,
@@ -3235,6 +3428,8 @@ pub struct AlmacenAsesor {
     pub registros: Vec<RegistroAsesor>,
     #[serde(default)]
     pub rastreador: RastreadorDeudas,
+    #[serde(default)]
+    pub borrador_plan: Option<BorradorPlanLibertad>,
 }
 
 impl AlmacenAsesor {
@@ -3243,12 +3438,12 @@ impl AlmacenAsesor {
     }
 
     /// Directorio de exportación.
+    ///
+    /// Todas las exportaciones se guardan en `<raíz_del_proyecto>/exports`.
+    /// La raíz se resuelve en tiempo de compilación con `CARGO_MANIFEST_DIR`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn dir_exportacion() -> PathBuf {
-        let dir = dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("omniplanner")
-            .join("exports");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("exports");
         fs::create_dir_all(&dir).ok();
         dir
     }
