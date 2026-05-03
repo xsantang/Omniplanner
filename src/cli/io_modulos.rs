@@ -1216,8 +1216,9 @@ pub fn menu_io_bitacora(state: &mut AppState) {
 
 use omniplanner::io::parser::{parsear_texto, CategoriaItem, ItemDetectado};
 
-/// Lee un bloque de texto: por archivo `.txt` o pegándolo por consola
-/// (terminar con una línea que contenga sólo un `.`).
+/// Lee un bloque de texto: por archivo `.txt`, pegándolo por consola
+/// (terminar con una línea que contenga sólo un `.`), o por OCR sobre
+/// una imagen vía Tesseract.
 fn leer_texto_libre() -> Option<String> {
     crate::limpiar();
     println!("{}", "📝 Pegar texto libre".bold().cyan());
@@ -1225,11 +1226,13 @@ fn leer_texto_libre() -> Option<String> {
     let opciones = [
         "📄  Leer desde archivo .txt",
         "✍️   Pegar/escribir aquí (terminar con una línea con sólo \".\")",
+        "📷  OCR de imagen (requiere Tesseract instalado)",
         "🔙  Cancelar",
     ];
     match menu("¿Cómo deseas ingresar el texto?", &opciones) {
         Some(0) => leer_texto_desde_archivo(),
         Some(1) => leer_texto_desde_stdin(),
+        Some(2) => leer_texto_via_ocr(),
         _ => None,
     }
 }
@@ -1273,6 +1276,112 @@ fn leer_texto_desde_stdin() -> Option<String> {
         None
     } else {
         Some(lineas.join("\n"))
+    }
+}
+
+/// Lee texto desde una imagen invocando el binario externo `tesseract`.
+///
+/// Requiere que el usuario tenga instalado [Tesseract OCR](https://tesseract-ocr.github.io/).
+/// Soporta español e inglés (o ambos: `spa+eng`). Devuelve el texto plano
+/// reconocido, listo para alimentar al parser bilingüe.
+fn leer_texto_via_ocr() -> Option<String> {
+    use std::process::Command;
+
+    // 1. Verificar que tesseract está disponible
+    let version = Command::new("tesseract").arg("--version").output();
+    match version {
+        Ok(o) if o.status.success() => {
+            let v = String::from_utf8_lossy(&o.stdout);
+            let primera = v.lines().next().unwrap_or("tesseract").trim();
+            println!("  {} Detectado: {}", "✓".green(), primera.dimmed());
+        }
+        _ => {
+            println!(
+                "  {} {}",
+                "✗".red(),
+                "No se encontró el binario `tesseract` en el PATH.".bold()
+            );
+            println!(
+                "  {}",
+                "Instálalo desde https://tesseract-ocr.github.io/ y reintenta.".dimmed()
+            );
+            pausa();
+            return None;
+        }
+    }
+
+    // 2. Pedir ruta de la imagen
+    let path = pedir_texto("Ruta de la imagen (PNG/JPG/TIFF/BMP)")?;
+    let path = path.trim().trim_matches('"').to_string();
+    if !std::path::Path::new(&path).exists() {
+        println!("  {} El archivo no existe: {}", "✗".red(), path);
+        pausa();
+        return None;
+    }
+
+    // 3. Elegir idioma
+    let opc_idioma = [
+        "🇪🇸  Español (spa)",
+        "🇬🇧  Inglés (eng)",
+        "🌐  Ambos (spa+eng)",
+        "🔙  Cancelar",
+    ];
+    let lang = match menu("Idioma del OCR", &opc_idioma) {
+        Some(0) => "spa",
+        Some(1) => "eng",
+        Some(2) => "spa+eng",
+        _ => return None,
+    };
+
+    // 4. Ejecutar tesseract <imagen> stdout -l <lang>
+    println!();
+    println!("  {} Procesando OCR…", "⏳".cyan());
+    let salida = Command::new("tesseract")
+        .arg(&path)
+        .arg("stdout")
+        .arg("-l")
+        .arg(lang)
+        .output();
+
+    match salida {
+        Ok(o) if o.status.success() => {
+            let texto = String::from_utf8_lossy(&o.stdout).to_string();
+            let lineas_no_vacias = texto.lines().filter(|l| !l.trim().is_empty()).count();
+            if lineas_no_vacias == 0 {
+                println!("  {} OCR no extrajo texto.", "ℹ️".yellow());
+                pausa();
+                return None;
+            }
+            println!(
+                "  {} OCR completado: {} líneas reconocidas.",
+                "✅".green(),
+                lineas_no_vacias
+            );
+            println!();
+            println!("  {}", "── Texto extraído ──".dimmed());
+            for (i, l) in texto.lines().take(15).enumerate() {
+                println!("  {:>2}│ {}", i + 1, l.dimmed());
+            }
+            if texto.lines().count() > 15 {
+                println!("    │ {}", "…".dimmed());
+            }
+            println!();
+            if !confirmar("¿Usar este texto para detectar ítems?", true) {
+                return None;
+            }
+            Some(texto)
+        }
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            println!("  {} Tesseract falló: {}", "✗".red(), err.trim());
+            pausa();
+            None
+        }
+        Err(e) => {
+            println!("  {} No se pudo ejecutar tesseract: {}", "✗".red(), e);
+            pausa();
+            None
+        }
     }
 }
 
