@@ -20,3 +20,6 @@ android/app/src/main/jniLibs/
 
 # Web build artifacts (generados por wasm-bindgen)
 web/pkg/
+
+# Exports generados por la app
+exports/

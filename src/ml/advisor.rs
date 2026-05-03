@@ -2468,6 +2468,8 @@ impl RastreadorDeudas {
         // Construir ajustes efectivos = implícitos de pagos programados +
         // ajustes explícitos del usuario (estos últimos tienen prioridad).
         let mut ajustes_efectivos: Vec<AjusteMensualLibertad> = Vec::new();
+
+        // Paso 2: pagos programados a futuro.
         for pp in &self.pagos_programados {
             let aplica_a_deuda_real = self.deudas.iter().any(|d| {
                 d.nombre == pp.nombre_deuda
@@ -2509,6 +2511,27 @@ impl RastreadorDeudas {
                     pp.nombre_deuda.clone(),
                     0.0,
                 ));
+            }
+        }
+
+        // Paso 1: deudas que ya tienen pago registrado en el historial del
+        // mes corriente. saldo_actual() ya refleja esos pagos, por lo que
+        // el mes 1 de la simulación NO debe volver a aplicar pago a esas
+        // deudas (sería un doble pago en el mismo mes calendario).
+        // Se aplica DESPUÉS del paso 2 para sobrescribir cualquier pago
+        // programado vigente para el mes corriente que ya fue ejecutado.
+        let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
+        for d in &self.deudas {
+            if !d.activa || d.es_pago_corriente() {
+                continue;
+            }
+            let pagada_este_mes = d
+                .historial
+                .iter()
+                .any(|m| m.mes == etiqueta_mes_hoy && m.pago > 0.01);
+            if pagada_este_mes {
+                ajustes_efectivos.retain(|x| !(x.mes == 1 && x.nombre_deuda == d.nombre));
+                ajustes_efectivos.push(AjusteMensualLibertad::nuevo(1, d.nombre.clone(), 0.0));
             }
         }
 
@@ -4233,7 +4256,6 @@ mod tests {
             fecha_pago_prevista: mes_hoy,
             nota: String::new(),
         });
-        // El usuario override: en mes 1, Visa recibe sólo 30.
         let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
         let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let pago_visa = sim.meses[0]
@@ -4243,5 +4265,55 @@ mod tests {
             .unwrap()
             .1;
         assert!((pago_visa - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn pago_registrado_mes_corriente_no_duplica_en_mes_1() {
+        // Una deuda con pago ya hecho en el mes corriente debe tener pago=0
+        // en el mes 1 de la simulación (saldo_actual ya descontó el pago).
+        let mut r = rastreador_con_dos_tarjetas();
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        // Registrar un pago a Visa en el mes corriente.
+        if let Some(d) = r.deudas.iter_mut().find(|d| d.nombre == "Visa") {
+            d.registrar_mes(&mes_hoy, 2000.0, 500.0, 0.0);
+        }
+        let sim = r.simular_libertad(200.0, false);
+        let pago_visa_mes1 = sim.meses[0]
+            .pagos
+            .iter()
+            .find(|(n, _)| n == "Visa")
+            .map(|(_, p)| *p)
+            .unwrap_or(0.0);
+        assert!(pago_visa_mes1.abs() < 0.01);
+    }
+
+    #[test]
+    fn pago_registrado_mes_corriente_anula_programado_duplicado() {
+        // Caso real: existe un pago_programado vigente Y la deuda ya tiene
+        // pago registrado en el historial del mes corriente. El paso 1 debe
+        // ganar y forzar pago=0 en mes 1 para evitar doble cargo.
+        let mut r = rastreador_con_dos_tarjetas();
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        if let Some(d) = r.deudas.iter_mut().find(|d| d.nombre == "Visa") {
+            d.registrar_mes(&mes_hoy, 2000.0, 500.0, 0.0);
+        }
+        r.pagos_programados.push(PagoProgramado {
+            nombre_deuda: "Visa".into(),
+            monto_pi: 500.0,
+            monto_escrow: 0.0,
+            meses_cubiertos: vec![mes_hoy.clone()],
+            fecha_pago_prevista: mes_hoy,
+            nota: String::new(),
+        });
+        let sim = r.simular_libertad(200.0, false);
+        let pago_visa_mes1 = sim.meses[0]
+            .pagos
+            .iter()
+            .find(|(n, _)| n == "Visa")
+            .map(|(_, p)| *p)
+            .unwrap_or(0.0);
+        assert!(pago_visa_mes1.abs() < 0.01);
     }
 }
