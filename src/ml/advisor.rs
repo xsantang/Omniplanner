@@ -4,6 +4,7 @@
 //! presupuestos, y matriz de decisión multi-criterio — todo lo necesario
 //! para tomar decisiones informadas en la vida diaria.
 
+use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -2444,6 +2445,81 @@ impl RastreadorDeudas {
         estrategia: &EstrategiaLibertad,
         ajustes: &[AjusteMensualLibertad],
     ) -> SimulacionLibertad {
+        // Ancla: el mes 1 de la simulación es el mes corriente del sistema.
+        // A partir de aquí mapeamos `pagos_programados` (paso 2) al mes_num
+        // correspondiente, generando ajustes implícitos para que la simulación
+        // refleje los pagos que el usuario ya tiene planificados a futuro,
+        // en lugar de calcular pagos "estándar" según la estrategia.
+        let hoy = Local::now().date_naive();
+        let anio_hoy = hoy.year();
+        let mes_hoy = hoy.month() as i32;
+        let mes_a_indice = |yyyy_mm: &str| -> Option<usize> {
+            let mut it = yyyy_mm.split('-');
+            let y: i32 = it.next()?.trim().parse().ok()?;
+            let m: i32 = it.next()?.trim().parse().ok()?;
+            let delta = (y - anio_hoy) * 12 + (m - mes_hoy);
+            if delta < 0 {
+                None
+            } else {
+                Some(delta as usize + 1)
+            }
+        };
+
+        // Construir ajustes efectivos = implícitos de pagos programados +
+        // ajustes explícitos del usuario (estos últimos tienen prioridad).
+        let mut ajustes_efectivos: Vec<AjusteMensualLibertad> = Vec::new();
+        for pp in &self.pagos_programados {
+            let aplica_a_deuda_real = self.deudas.iter().any(|d| {
+                d.nombre == pp.nombre_deuda
+                    && d.activa
+                    && !d.es_pago_corriente()
+                    && d.saldo_actual() > 0.01
+            });
+            if !aplica_a_deuda_real {
+                continue;
+            }
+
+            let mut indices_cubiertos: Vec<usize> = pp
+                .meses_cubiertos
+                .iter()
+                .filter_map(|m| mes_a_indice(m))
+                .collect();
+            indices_cubiertos.sort_unstable();
+            indices_cubiertos.dedup();
+
+            let idx_pago = mes_a_indice(&pp.fecha_pago_prevista)
+                .or_else(|| indices_cubiertos.first().copied());
+            let Some(idx_pago) = idx_pago else { continue };
+
+            // Mes en que se desembolsa: pago forzado = monto P&I planeado.
+            ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                idx_pago,
+                pp.nombre_deuda.clone(),
+                pp.monto_pi.max(0.0),
+            ));
+
+            // Demás meses cubiertos por el mismo pago: pago forzado = 0,
+            // porque ya quedaron pagados por adelantado.
+            for &idx in &indices_cubiertos {
+                if idx == idx_pago {
+                    continue;
+                }
+                ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                    idx,
+                    pp.nombre_deuda.clone(),
+                    0.0,
+                ));
+            }
+        }
+
+        // Los ajustes explícitos del usuario sobrescriben cualquier implícito
+        // para el mismo (mes, deuda).
+        for a in ajustes {
+            ajustes_efectivos.retain(|x| !(x.mes == a.mes && x.nombre_deuda == a.nombre_deuda));
+            ajustes_efectivos.push(a.clone());
+        }
+        let ajustes: &[AjusteMensualLibertad] = &ajustes_efectivos;
+
         let gastos_fijos: Vec<(String, f64)> = {
             let mut v: Vec<(String, f64)> = self
                 .deudas
@@ -4100,5 +4176,72 @@ mod tests {
         let r = RastreadorDeudas::default();
         let sim = r.simular_libertad_editado(500.0, &EstrategiaLibertad::Avalancha, &[]);
         assert!(sim.meses.is_empty());
+    }
+
+    #[test]
+    fn pago_programado_a_futuro_se_inyecta_como_ajuste() {
+        // Construimos un rastreador con dos deudas y un pago programado a futuro
+        // para Visa que cubre el mes corriente y el siguiente. El simulador debe
+        // respetar ese pago en el mes correspondiente, en vez de aplicar mínimo.
+        let mut r = rastreador_con_dos_tarjetas();
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        let siguiente = if hoy.month() == 12 {
+            format!("{:04}-01", hoy.year() + 1)
+        } else {
+            format!("{:04}-{:02}", hoy.year(), hoy.month() + 1)
+        };
+        r.pagos_programados.push(PagoProgramado {
+            nombre_deuda: "Visa".into(),
+            monto_pi: 500.0,
+            monto_escrow: 0.0,
+            meses_cubiertos: vec![mes_hoy.clone(), siguiente.clone()],
+            fecha_pago_prevista: mes_hoy.clone(),
+            nota: String::new(),
+        });
+
+        let sim = r.simular_libertad(200.0, false);
+        let mes1 = &sim.meses[0];
+        let pago_visa_mes1 = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
+        // Mes 1: el pago programado de 500 debe aplicarse acotado por presupuesto/saldo.
+        // Como el presupuesto es 200, queda capado a 200.
+        assert!(pago_visa_mes1 >= 199.99);
+
+        // Mes 2: pago_forzado=0 para Visa (ya cubierto por adelantado).
+        if sim.meses.len() >= 2 {
+            let mes2 = &sim.meses[1];
+            let pago_visa_mes2 = mes2
+                .pagos
+                .iter()
+                .find(|(n, _)| n == "Visa")
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0);
+            assert!(pago_visa_mes2.abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn ajuste_explicito_sobrescribe_pago_programado() {
+        let mut r = rastreador_con_dos_tarjetas();
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        r.pagos_programados.push(PagoProgramado {
+            nombre_deuda: "Visa".into(),
+            monto_pi: 500.0,
+            monto_escrow: 0.0,
+            meses_cubiertos: vec![mes_hoy.clone()],
+            fecha_pago_prevista: mes_hoy,
+            nota: String::new(),
+        });
+        // El usuario override: en mes 1, Visa recibe sólo 30.
+        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
+        let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
+        let pago_visa = sim.meses[0]
+            .pagos
+            .iter()
+            .find(|(n, _)| n == "Visa")
+            .unwrap()
+            .1;
+        assert!((pago_visa - 30.0).abs() < 0.01);
     }
 }

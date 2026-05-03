@@ -3017,6 +3017,62 @@ pub fn rastreador_simulacion_libertad(state: &mut AppState) {
     );
     println!();
 
+    // Informar al usuario qué pagos ya empujados al historial y qué pagos
+    // programados a futuro se incorporarán automáticamente a la simulación.
+    let nombres_deudas_reales: std::collections::HashSet<String> =
+        deudas_reales.iter().map(|d| d.nombre.clone()).collect();
+    let mes_actual_etq = chrono::Local::now().format("%Y-%m").to_string();
+    let pagos_mes_aplicados: Vec<&DeudaRastreada> = deudas_reales
+        .iter()
+        .filter(|d| {
+            d.historial
+                .iter()
+                .any(|m| m.mes == mes_actual_etq && m.pago > 0.01)
+        })
+        .copied()
+        .collect();
+    let pagos_programados_relevantes: Vec<&omniplanner::ml::PagoProgramado> = state
+        .asesor
+        .rastreador
+        .pagos_programados
+        .iter()
+        .filter(|pp| nombres_deudas_reales.contains(&pp.nombre_deuda))
+        .collect();
+    if !pagos_mes_aplicados.is_empty() || !pagos_programados_relevantes.is_empty() {
+        println!(
+            "  {}",
+            "🧮 La simulación parte del estado actual:".cyan().bold()
+        );
+        if !pagos_mes_aplicados.is_empty() {
+            println!(
+                "     • Paso 1: pagos de {} ya aplicados a {} deuda(s) ({}).",
+                mes_actual_etq,
+                pagos_mes_aplicados.len(),
+                pagos_mes_aplicados
+                    .iter()
+                    .map(|d| d.nombre.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !pagos_programados_relevantes.is_empty() {
+            println!(
+                "     • Paso 2: {} pago(s) programado(s) a futuro inyectado(s) en la proyección:",
+                pagos_programados_relevantes.len()
+            );
+            for pp in &pagos_programados_relevantes {
+                println!(
+                    "        - {} → ${:.2} en {} (cubre {})",
+                    pp.nombre_deuda,
+                    pp.monto_pi,
+                    pp.fecha_pago_prevista,
+                    pp.etiqueta_meses()
+                );
+            }
+        }
+        println!();
+    }
+
     let sim = state
         .asesor
         .rastreador
