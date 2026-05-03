@@ -18,6 +18,8 @@
 //! - Los CSV usan cabeceras bilingües: `fecha/date`, `monto/amount`, etc.,
 //!   para que cualquier sistema (en español o inglés) los reconozca.
 
+pub mod parser;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 #[cfg(not(target_arch = "wasm32"))]

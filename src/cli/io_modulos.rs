@@ -998,19 +998,24 @@ fn submenu_io(
     state: &mut AppState,
     exportar: fn(&AppState),
     importar: fn(&mut AppState),
+    pegar: Option<fn(&mut AppState)>,
 ) {
     loop {
         crate::limpiar();
         println!("{}", titulo.bold().cyan());
         separador("Datos");
-        let opciones = [
+        let mut opciones: Vec<&str> = vec![
             "📤  Exportar (CSV / Markdown / JSON / Excel / SQL)",
             "📥  Importar desde CSV, JSON o Excel",
-            "🔙  Volver",
         ];
+        if pegar.is_some() {
+            opciones.push("📝  Pegar texto libre (ES/EN) → detectar y crear");
+        }
+        opciones.push("🔙  Volver");
         match menu("¿Qué deseas hacer?", &opciones) {
             Some(0) => exportar(state),
             Some(1) => importar(state),
+            Some(2) if pegar.is_some() => (pegar.unwrap())(state),
             _ => return,
         }
     }
@@ -1022,6 +1027,7 @@ pub fn menu_io_tareas(state: &mut AppState) {
         state,
         tareas_exportar,
         tareas_importar,
+        Some(pegar_texto_a_tareas),
     );
 }
 
@@ -1031,6 +1037,7 @@ pub fn menu_io_agenda(state: &mut AppState) {
         state,
         agenda_exportar,
         agenda_importar,
+        Some(pegar_texto_a_agenda),
     );
 }
 
@@ -1040,6 +1047,7 @@ pub fn menu_io_memoria(state: &mut AppState) {
         state,
         memoria_exportar,
         memoria_importar,
+        Some(pegar_texto_a_memoria),
     );
 }
 
@@ -1049,6 +1057,7 @@ pub fn menu_io_pagos(state: &mut AppState) {
         state,
         pagos_exportar,
         pagos_importar,
+        None,
     );
 }
 
@@ -1197,5 +1206,292 @@ pub fn menu_io_bitacora(state: &mut AppState) {
         state,
         bitacora_exportar,
         bitacora_importar,
+        None,
     );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  FASE 5.4 — Pegado de texto libre (parser bilingüe ES/EN)
+// ════════════════════════════════════════════════════════════════════════
+
+use omniplanner::io::parser::{parsear_texto, CategoriaItem, ItemDetectado};
+
+/// Lee un bloque de texto: por archivo `.txt` o pegándolo por consola
+/// (terminar con una línea que contenga sólo un `.`).
+fn leer_texto_libre() -> Option<String> {
+    crate::limpiar();
+    println!("{}", "📝 Pegar texto libre".bold().cyan());
+    separador("Origen");
+    let opciones = [
+        "📄  Leer desde archivo .txt",
+        "✍️   Pegar/escribir aquí (terminar con una línea con sólo \".\")",
+        "🔙  Cancelar",
+    ];
+    match menu("¿Cómo deseas ingresar el texto?", &opciones) {
+        Some(0) => leer_texto_desde_archivo(),
+        Some(1) => leer_texto_desde_stdin(),
+        _ => None,
+    }
+}
+
+fn leer_texto_desde_archivo() -> Option<String> {
+    let path = pedir_texto("Ruta del archivo .txt")?;
+    let path = path.trim().trim_matches('"');
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            println!("  {} No se pudo leer: {}", "✗".red(), e);
+            pausa();
+            None
+        }
+    }
+}
+
+fn leer_texto_desde_stdin() -> Option<String> {
+    use std::io::BufRead;
+    println!();
+    println!(
+        "  {}",
+        "Pega o escribe el texto. Termina con una línea con sólo \".\":".dimmed()
+    );
+    println!();
+    let stdin = std::io::stdin();
+    let mut lineas: Vec<String> = Vec::new();
+    let lock = stdin.lock();
+    for linea in lock.lines() {
+        match linea {
+            Ok(l) => {
+                if l.trim() == "." {
+                    break;
+                }
+                lineas.push(l);
+            }
+            Err(_) => break,
+        }
+    }
+    if lineas.is_empty() {
+        None
+    } else {
+        Some(lineas.join("\n"))
+    }
+}
+
+fn resumen_items(items: &[ItemDetectado]) {
+    let mut t = 0;
+    let mut e = 0;
+    let mut p = 0;
+    let mut n = 0;
+    for it in items {
+        match it.categoria {
+            CategoriaItem::Tarea => t += 1,
+            CategoriaItem::Evento => e += 1,
+            CategoriaItem::Pago => p += 1,
+            CategoriaItem::Nota => n += 1,
+        }
+    }
+    println!();
+    println!(
+        "  {} {} línea(s) detectada(s): {} tareas · {} eventos · {} pagos · {} notas",
+        "🔍".cyan(),
+        items.len(),
+        t,
+        e,
+        p,
+        n
+    );
+}
+
+fn mostrar_preview(items: &[ItemDetectado], filtro: Option<CategoriaItem>) {
+    let mut mostrados = 0;
+    for it in items {
+        if let Some(ref c) = filtro {
+            if &it.categoria != c {
+                continue;
+            }
+        }
+        let cat = match it.categoria {
+            CategoriaItem::Tarea => "TAREA".green(),
+            CategoriaItem::Evento => "EVENTO".cyan(),
+            CategoriaItem::Pago => "PAGO".yellow(),
+            CategoriaItem::Nota => "NOTA".dimmed(),
+        };
+        let fecha = it
+            .fecha
+            .map(|f| f.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "—".to_string());
+        let hora = it
+            .hora
+            .map(|h| format!(" {}", h.format("%H:%M")))
+            .unwrap_or_default();
+        let monto = it.monto.map(|m| format!(" ${:.2}", m)).unwrap_or_default();
+        println!(
+            "    [{}] {} · {}{}{}",
+            cat,
+            it.titulo.bold(),
+            fecha,
+            hora,
+            monto
+        );
+        mostrados += 1;
+        if mostrados >= 20 {
+            println!(
+                "    {}",
+                "… (más líneas omitidas en la vista previa)".dimmed()
+            );
+            break;
+        }
+    }
+}
+
+fn item_a_task(it: &ItemDetectado) -> Task {
+    let ahora = Local::now().naive_local();
+    let mut etiquetas = it.etiquetas.clone();
+    if !it.notas.is_empty() {
+        etiquetas.extend(it.notas.iter().cloned());
+    }
+    Task {
+        id: Uuid::new_v4().to_string()[..8].to_string(),
+        titulo: it.titulo.clone(),
+        descripcion: it.notas.join(" | "),
+        fecha: it.fecha.unwrap_or_else(|| ahora.date()),
+        hora: it
+            .hora
+            .unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+        estado: TaskStatus::Pendiente,
+        prioridad: parse_prioridad(it.prioridad.as_deref().unwrap_or("media")),
+        etiquetas,
+        follow_up: None,
+        creado: ahora,
+        actualizado: ahora,
+    }
+}
+
+fn item_a_evento(it: &ItemDetectado) -> Evento {
+    let ahora = Local::now().naive_local();
+    Evento {
+        id: Uuid::new_v4().to_string()[..8].to_string(),
+        titulo: it.titulo.clone(),
+        descripcion: it.notas.join(" | "),
+        tipo: TipoEvento::Recordatorio,
+        fecha: it.fecha.unwrap_or_else(|| ahora.date()),
+        hora_inicio: it
+            .hora
+            .unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+        hora_fin: None,
+        recurrente: false,
+        frecuencia: Frecuencia::UnaVez,
+        concepto: String::new(),
+        notas: it.notas.clone(),
+        creado: ahora,
+    }
+}
+
+fn item_a_recuerdo(it: &ItemDetectado) -> Recuerdo {
+    let ahora = Local::now().naive_local();
+    let mut palabras = it.etiquetas.clone();
+    if let Some(p) = &it.prioridad {
+        palabras.push(p.clone());
+    }
+    let mut contenido = it.titulo.clone();
+    if !it.notas.is_empty() {
+        contenido.push_str(" — ");
+        contenido.push_str(&it.notas.join(" | "));
+    }
+    if let Some(f) = it.fecha {
+        contenido.push_str(&format!(" ({})", f.format("%Y-%m-%d")));
+    }
+    Recuerdo {
+        id: Uuid::new_v4().to_string()[..8].to_string(),
+        contenido,
+        palabras_clave: palabras,
+        modulo_origen: Some("texto_libre".to_string()),
+        item_id: None,
+        creado: ahora,
+    }
+}
+
+fn obtener_items() -> Option<Vec<ItemDetectado>> {
+    let texto = leer_texto_libre()?;
+    let items = parsear_texto(&texto);
+    if items.is_empty() {
+        println!("  {} No se detectaron líneas con contenido.", "ℹ️".yellow());
+        pausa();
+        return None;
+    }
+    Some(items)
+}
+
+pub fn pegar_texto_a_tareas(state: &mut AppState) {
+    let Some(items) = obtener_items() else { return };
+    resumen_items(&items);
+    println!();
+    println!("  {} Vista previa (sólo tareas):", "📋".cyan());
+    mostrar_preview(&items, Some(CategoriaItem::Tarea));
+    let candidatas: Vec<&ItemDetectado> = items
+        .iter()
+        .filter(|it| it.categoria == CategoriaItem::Tarea)
+        .collect();
+    if candidatas.is_empty() {
+        println!(
+            "  {} Ninguna línea fue clasificada como tarea.",
+            "ℹ️".yellow()
+        );
+        pausa();
+        return;
+    }
+    if !confirmar(&format!("¿Crear {} tarea(s)?", candidatas.len()), true) {
+        return;
+    }
+    let n = candidatas.len();
+    let nuevas: Vec<Task> = candidatas.iter().map(|it| item_a_task(it)).collect();
+    state.tasks.tareas.extend(nuevas);
+    println!("  {} {} tarea(s) creada(s).", "✅".green(), n);
+    pausa();
+}
+
+pub fn pegar_texto_a_agenda(state: &mut AppState) {
+    let Some(items) = obtener_items() else { return };
+    resumen_items(&items);
+    println!();
+    println!("  {} Vista previa (sólo eventos):", "📋".cyan());
+    mostrar_preview(&items, Some(CategoriaItem::Evento));
+    let candidatos: Vec<&ItemDetectado> = items
+        .iter()
+        .filter(|it| it.categoria == CategoriaItem::Evento)
+        .collect();
+    if candidatos.is_empty() {
+        println!(
+            "  {} Ninguna línea fue clasificada como evento.",
+            "ℹ️".yellow()
+        );
+        pausa();
+        return;
+    }
+    if !confirmar(&format!("¿Crear {} evento(s)?", candidatos.len()), true) {
+        return;
+    }
+    let n = candidatos.len();
+    let nuevos: Vec<Evento> = candidatos.iter().map(|it| item_a_evento(it)).collect();
+    state.agenda.eventos.extend(nuevos);
+    println!("  {} {} evento(s) creado(s).", "✅".green(), n);
+    pausa();
+}
+
+pub fn pegar_texto_a_memoria(state: &mut AppState) {
+    let Some(items) = obtener_items() else { return };
+    resumen_items(&items);
+    println!();
+    println!(
+        "  {} Vista previa: TODAS las líneas se guardarán como recuerdos.",
+        "📋".cyan()
+    );
+    mostrar_preview(&items, None);
+    if !confirmar(&format!("¿Guardar {} recuerdo(s)?", items.len()), true) {
+        return;
+    }
+    let n = items.len();
+    let nuevos: Vec<Recuerdo> = items.iter().map(item_a_recuerdo).collect();
+    state.memoria.recuerdos.extend(nuevos);
+    println!("  {} {} recuerdo(s) guardado(s).", "✅".green(), n);
+    pausa();
 }
