@@ -15,6 +15,7 @@ use crate::agenda::Agenda;
 use crate::canvas::Canvas;
 use crate::contrasenias::AlmacenContrasenias;
 use crate::diagrams::Diagrama;
+use crate::eventos::BusEventos;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
 use crate::ml::{AlmacenAsesor, AlmacenML, AlmacenPresupuesto};
@@ -50,6 +51,9 @@ pub struct AppState {
     pub presupuesto: AlmacenPresupuesto,
     #[serde(default)]
     pub contrasenias: AlmacenContrasenias,
+    /// Bus de eventos central — paper trail de todas las acciones del sistema.
+    #[serde(default)]
+    pub bus: BusEventos,
     /// Timestamp de última modificación (epoch secs)
     #[serde(default)]
     pub ultima_modificacion: i64,
@@ -71,6 +75,7 @@ impl AppState {
             asesor: AlmacenAsesor::default(),
             presupuesto: AlmacenPresupuesto::default(),
             contrasenias: AlmacenContrasenias::default(),
+            bus: BusEventos::default(),
             ultima_modificacion: 0,
         }
     }

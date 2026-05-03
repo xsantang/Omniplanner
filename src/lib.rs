@@ -23,6 +23,7 @@ pub mod canvas;
 pub mod contrasenias;
 pub mod cripto;
 pub mod diagrams;
+pub mod eventos;
 pub mod mapper;
 pub mod memoria;
 pub mod ml;

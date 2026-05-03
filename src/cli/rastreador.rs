@@ -253,6 +253,7 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             "🔧  Gestionar deudas (activar/desactivar, obligatoria)",
             "🔗  Vincular deudas (cuotas espejo: hipoteca ↔ escrow, etc.)",
             "🗑️   Eliminar una deuda",
+            "�  Bitácora del sistema (paper trail completo)",
             "🔙  Volver",
         ];
 
@@ -277,6 +278,7 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             Some(17) => rastreador_gestionar_deudas(state),
             Some(18) => rastreador_gestionar_vinculos(state),
             Some(19) => rastreador_eliminar(state),
+            Some(20) => rastreador_bitacora(state),
             _ => return,
         }
     }
@@ -553,6 +555,8 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
                 DecisionPago::Aceptar => {}
             }
 
+            let meses_cubiertos_clon = meses_cubiertos.clone();
+            let nota_clon = nota.clone();
             state.asesor.rastreador.deudas[idx].registrar_mes_completo(
                 &mes,
                 saldo_inicio,
@@ -564,6 +568,38 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
             );
 
             let nuevo_saldo = state.asesor.rastreador.deudas[idx].saldo_actual();
+            let nombre_deuda_evt = state.asesor.rastreador.deudas[idx].nombre.clone();
+            // ── Emitir evento al bus central ────────────────────────────────
+            {
+                use omniplanner::eventos::{
+                    EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
+                };
+                let etiq_meses = if meses_cubiertos_clon.is_empty() {
+                    mes.clone()
+                } else {
+                    meses_cubiertos_clon.join(" + ")
+                };
+                let mut ev = EventoSistema::nuevo(
+                    Modulo::Rastreador,
+                    TipoEvento::PagoRealizado,
+                    format!("Pago {} ({})", nombre_deuda_evt, etiq_meses),
+                )
+                .con_monto(pago + pago_escrow)
+                .con_contraparte(nombre_deuda_evt.clone())
+                .con_estado(EstadoEvento::Realizado)
+                .con_referencia(Referencia::nueva(
+                    "rastreador",
+                    "deuda",
+                    &nombre_deuda_evt,
+                    &nombre_deuda_evt,
+                ))
+                .con_etiqueta("pago")
+                .con_etiqueta(mes.clone());
+                if !nota_clon.is_empty() {
+                    ev = ev.con_nota(nota_clon);
+                }
+                state.bus.emitir(ev);
+            }
             println!();
             if nuevo_saldo < saldo_act {
                 println!(
@@ -848,18 +884,56 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                 };
                 let nota = pedir_texto_opcional("Nota (vacío=ninguna)");
                 let nombre_deuda = state.asesor.rastreador.deudas[idx].nombre.clone();
+                let meses_clon = meses_cubiertos.clone();
+                let nota_clon = nota.clone();
                 state
                     .asesor
                     .rastreador
                     .pagos_programados
                     .push(omniplanner::ml::PagoProgramado {
-                        nombre_deuda,
+                        nombre_deuda: nombre_deuda.clone(),
                         monto_pi,
                         monto_escrow,
                         meses_cubiertos,
                         fecha_pago_prevista: fecha_pago.clone(),
                         nota,
                     });
+                // ── Emitir evento ───────────────────────────────────────
+                {
+                    use omniplanner::eventos::{
+                        EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
+                    };
+                    let fecha_evt = chrono::NaiveDate::parse_from_str(
+                        &format!("{}-01", fecha_pago),
+                        "%Y-%m-%d",
+                    )
+                    .unwrap_or_else(|_| chrono::Local::now().date_naive());
+                    let etiq_meses = if meses_clon.is_empty() {
+                        fecha_pago.clone()
+                    } else {
+                        meses_clon.join(" + ")
+                    };
+                    let mut ev = EventoSistema::nuevo(
+                        Modulo::Rastreador,
+                        TipoEvento::PagoProgramado,
+                        format!("Programado: {} ({})", nombre_deuda, etiq_meses),
+                    )
+                    .con_fecha(fecha_evt)
+                    .con_monto(monto_pi + monto_escrow)
+                    .con_contraparte(nombre_deuda.clone())
+                    .con_estado(EstadoEvento::Pendiente)
+                    .con_referencia(Referencia::nueva(
+                        "rastreador",
+                        "deuda",
+                        &nombre_deuda,
+                        &nombre_deuda,
+                    ))
+                    .con_etiqueta("programado");
+                    if !nota_clon.is_empty() {
+                        ev = ev.con_nota(nota_clon);
+                    }
+                    state.bus.emitir(ev);
+                }
                 println!(
                     "  {} Pago programado para {}.",
                     "✅".green(),
@@ -934,6 +1008,38 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                     prog.meses_cubiertos.clone(),
                     prog.nota.clone(),
                 );
+                // ── Emitir evento PagoRealizado (conversión programado→real) ──
+                {
+                    use omniplanner::eventos::{
+                        EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
+                    };
+                    let etiq_meses = if prog.meses_cubiertos.is_empty() {
+                        mes_registro.clone()
+                    } else {
+                        prog.meses_cubiertos.join(" + ")
+                    };
+                    let mut ev = EventoSistema::nuevo(
+                        Modulo::Rastreador,
+                        TipoEvento::PagoRealizado,
+                        format!("Pago {} ({})", prog.nombre_deuda, etiq_meses),
+                    )
+                    .con_monto(prog.monto_pi + prog.monto_escrow)
+                    .con_contraparte(prog.nombre_deuda.clone())
+                    .con_estado(EstadoEvento::Realizado)
+                    .con_referencia(Referencia::nueva(
+                        "rastreador",
+                        "deuda",
+                        &prog.nombre_deuda,
+                        &prog.nombre_deuda,
+                    ))
+                    .con_etiqueta("pago")
+                    .con_etiqueta("desde-programado")
+                    .con_etiqueta(mes_registro.clone());
+                    if !prog.nota.is_empty() {
+                        ev = ev.con_nota(prog.nota.clone());
+                    }
+                    state.bus.emitir(ev);
+                }
                 // Sincronizar presupuesto
                 if let Some(mes_fmt) = crate::mes_a_yyyy_mm(&mes_registro) {
                     crate::sincronizar_presupuesto_desde_rastreador(
@@ -7909,4 +8015,107 @@ pub fn rastreador_seguimiento_plan(state: &AppState) {
 
     println!();
     pausa();
+}
+
+/// Bitácora del sistema — vista unificada del bus de eventos (paper trail).
+pub fn rastreador_bitacora(state: &mut AppState) {
+    use omniplanner::eventos::{EstadoEvento, EventoSistema};
+    loop {
+        limpiar();
+        println!("{}", "📰 Bitácora del sistema (paper trail)".bold().cyan());
+        separador("Eventos");
+        let total = state.bus.total();
+        let pendientes = state.bus.pendientes().len();
+        let vencidos = state.bus.vencidos().len();
+        let hoy = state.bus.de_hoy().len();
+        println!(
+            "  Total: {}   Hoy: {}   Pendientes: {}   Vencidos: {}",
+            total.to_string().bold(),
+            hoy.to_string().green(),
+            pendientes.to_string().yellow(),
+            vencidos.to_string().red()
+        );
+        println!();
+
+        let opciones = [
+            "📅  Eventos de hoy",
+            "⏭️   Próximos 20 eventos",
+            "⚠️   Pendientes",
+            "🚨  Vencidos",
+            "🗂️   Todos (últimos 30)",
+            "🔙  Volver",
+        ];
+
+        let render = |evs: &[&EventoSistema]| {
+            if evs.is_empty() {
+                println!("  {} (vacío)", "·".dimmed());
+                return;
+            }
+            for ev in evs {
+                let modulo_etq = format!("[{:?}]", ev.origen);
+                let estado_col = match ev.estado {
+                    EstadoEvento::Realizado => "✓".green().to_string(),
+                    EstadoEvento::Pendiente => "⏳".yellow().to_string(),
+                    EstadoEvento::EnCurso => "▶".cyan().to_string(),
+                    EstadoEvento::Cancelado => "✗".dimmed().to_string(),
+                    EstadoEvento::Fallido => "✗".red().to_string(),
+                };
+                let monto_str = ev.monto.map(|m| format!(" ${:.2}", m)).unwrap_or_default();
+                let fecha_str = ev.fecha.format("%Y-%m-%d").to_string();
+                println!(
+                    "  {} {} {} {}{}",
+                    estado_col,
+                    fecha_str.dimmed(),
+                    modulo_etq.cyan(),
+                    ev.titulo,
+                    monto_str.bold()
+                );
+                if !ev.notas.is_empty() {
+                    let nota_join = ev.notas.join(" / ");
+                    println!("       · {}", nota_join.dimmed());
+                }
+            }
+        };
+
+        match menu("¿Qué ver?", &opciones) {
+            Some(0) => {
+                println!("{}", "── Eventos de hoy ──".bold());
+                let evs = state.bus.de_hoy();
+                render(&evs);
+                println!();
+                pausa();
+            }
+            Some(1) => {
+                println!("{}", "── Próximos 20 ──".bold());
+                let evs = state.bus.proximos(20);
+                render(&evs);
+                println!();
+                pausa();
+            }
+            Some(2) => {
+                println!("{}", "── Pendientes ──".bold());
+                let evs = state.bus.pendientes();
+                render(&evs);
+                println!();
+                pausa();
+            }
+            Some(3) => {
+                println!("{}", "── Vencidos ──".bold());
+                let evs = state.bus.vencidos();
+                render(&evs);
+                println!();
+                pausa();
+            }
+            Some(4) => {
+                println!("{}", "── Últimos 30 ──".bold());
+                let mut todos: Vec<&EventoSistema> = state.bus.todos().iter().collect();
+                todos.sort_by(|a, b| b.creado.cmp(&a.creado));
+                let recortado: Vec<&EventoSistema> = todos.into_iter().take(30).collect();
+                render(&recortado);
+                println!();
+                pausa();
+            }
+            _ => return,
+        }
+    }
 }
