@@ -1113,6 +1113,23 @@ pub(crate) fn nueva_tarea(state: &mut AppState) {
     }
 
     println!("\n  {} {}", "✓ Tarea creada:".green().bold(), tarea);
+    // ── Emitir evento en bus ─────────────────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let ev = BusEvento::nuevo(
+            BusModulo::Tareas,
+            BusTipo::Tarea,
+            format!("Tarea: {}", tarea.titulo),
+        )
+        .con_fecha(tarea.fecha)
+        .con_estado(BusEstado::Pendiente)
+        .con_referencia(BusRef::nueva("tareas", "task", &tarea.id, &tarea.titulo))
+        .con_etiqueta("tarea");
+        state.bus.emitir(ev);
+    }
     state.tasks.agregar(tarea);
     pausa();
 }
@@ -1370,6 +1387,25 @@ pub(crate) fn finalizar_tarea(state: &mut AppState, idx: usize) {
     let titulo = tarea.titulo.clone();
     let tarea_id = tarea.id.clone();
     let etiquetas_existentes = tarea.etiquetas.clone();
+
+    // ── Emitir evento de tarea completada en bus ─────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let ev = BusEvento::nuevo(
+            BusModulo::Tareas,
+            BusTipo::Tarea,
+            format!("✓ Tarea completada: {}", titulo),
+        )
+        .con_fecha(chrono::Local::now().date_naive())
+        .con_estado(BusEstado::Realizado)
+        .con_referencia(BusRef::nueva("tareas", "task", &tarea_id, &titulo))
+        .con_etiqueta("tarea")
+        .con_etiqueta("completada");
+        state.bus.emitir(ev);
+    }
 
     println!();
     println!(
@@ -1751,6 +1787,35 @@ pub(crate) fn nuevo_evento(state: &mut AppState) {
     }
 
     println!("\n  {} {}", "✓ Evento creado:".green().bold(), evento);
+    // ── Emitir evento en bus ─────────────────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let bus_tipo = match &evento.tipo {
+            TipoEvento::Reunion | TipoEvento::Cita => BusTipo::Reunion,
+            TipoEvento::Recordatorio | TipoEvento::FollowUp => BusTipo::Recordatorio,
+            TipoEvento::Pago => BusTipo::PagoProgramado,
+            TipoEvento::Cumpleanos => BusTipo::Otro("cumpleaños".into()),
+            TipoEvento::Otro(s) => BusTipo::Otro(s.clone()),
+        };
+        let ev = BusEvento::nuevo(
+            BusModulo::Agenda,
+            bus_tipo,
+            format!("{}: {}", evento.tipo, evento.titulo),
+        )
+        .con_fecha(evento.fecha)
+        .con_estado(BusEstado::Pendiente)
+        .con_referencia(BusRef::nueva(
+            "agenda",
+            "evento",
+            &evento.id,
+            &evento.titulo,
+        ))
+        .con_etiqueta("agenda");
+        state.bus.emitir(ev);
+    }
     state.agenda.agregar_evento(evento);
     pausa();
 }
@@ -5076,6 +5141,26 @@ pub(crate) fn crear_recuerdo(state: &mut AppState) {
     println!("  {} Apunte guardado:", "🧠".to_string().green().bold());
     println!("    \"{}\"", contenido.cyan());
     println!("    🏷️  {}", tags.join(", ").yellow());
+    // ── Emitir evento en bus ─────────────────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let resumen: String = contenido.chars().take(80).collect();
+        let mut ev = BusEvento::nuevo(
+            BusModulo::Memoria,
+            BusTipo::Nota,
+            format!("Nota: {}", resumen),
+        )
+        .con_fecha(chrono::Local::now().date_naive())
+        .con_estado(BusEstado::Realizado)
+        .con_referencia(BusRef::nueva("memoria", "recuerdo", &recuerdo.id, &resumen));
+        for t in &tags {
+            ev = ev.con_etiqueta(t.clone());
+        }
+        state.bus.emitir(ev);
+    }
     state.memoria.agregar_recuerdo(recuerdo);
     pausa();
 }
