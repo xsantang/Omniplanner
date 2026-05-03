@@ -1051,3 +1051,151 @@ pub fn menu_io_pagos(state: &mut AppState) {
         pagos_importar,
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════
+//  BITÁCORA — export / import unificado (Fase 5.3)
+// ════════════════════════════════════════════════════════════════════════
+
+use omniplanner::eventos::EventoSistema;
+
+fn cabeceras_bitacora() -> Vec<String> {
+    vec![
+        "id".to_string(),
+        io::bil("fecha", "date"),
+        io::bil("creado", "created"),
+        io::bil("modulo", "module"),
+        io::bil("tipo", "type"),
+        io::bil("estado", "status"),
+        io::bil("titulo", "title"),
+        io::bil("descripcion", "description"),
+        io::bil("monto", "amount"),
+        io::bil("contraparte", "counterparty"),
+        io::bil("etiquetas", "tags"),
+        io::bil("notas", "notes"),
+        io::bil("relacionados", "related"),
+    ]
+}
+
+fn fila_evento_bus(ev: &EventoSistema) -> Vec<String> {
+    vec![
+        ev.id.clone(),
+        ev.fecha.format("%Y-%m-%d").to_string(),
+        ev.creado.format("%Y-%m-%d %H:%M:%S").to_string(),
+        ev.origen.to_string(),
+        format!("{:?}", ev.tipo),
+        format!("{:?}", ev.estado),
+        ev.titulo.clone(),
+        ev.descripcion.clone(),
+        ev.monto.map(|m| format!("{:.2}", m)).unwrap_or_default(),
+        ev.contraparte.clone(),
+        ev.etiquetas.join(";"),
+        ev.notas.join(" | "),
+        ev.eventos_relacionados.join(";"),
+    ]
+}
+
+pub fn bitacora_exportar(state: &AppState) {
+    let formato = match pedir_formato_export() {
+        Some(f) => f,
+        None => return,
+    };
+    let cabs = cabeceras_bitacora();
+    let filas: Vec<Vec<String>> = state.bus.todos().iter().map(fila_evento_bus).collect();
+    // Para JSON serializamos los EventoSistema completos (ida y vuelta perfecta)
+    let json = serde_json::to_string_pretty(state.bus.todos()).unwrap_or_default();
+    let salidas = exportar_segun_formato(
+        "bitacora",
+        "bitacora",
+        "bitacora",
+        "Bitácora del sistema",
+        &cabs,
+        &filas,
+        &json,
+        formato,
+    );
+    escribir_resultado(&salidas, filas.len());
+}
+
+pub fn bitacora_importar(state: &mut AppState) {
+    let ruta = match pedir_archivo_para_importar("bitacora") {
+        Some(r) => r,
+        None => return,
+    };
+    let ext = ruta
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    // Sólo JSON permite restaurar fielmente los enums TipoEvento/Modulo/Estado
+    // y las referencias/adjuntos. CSV/Excel se aplazan a una importación futura
+    // más permisiva si hace falta.
+    let nuevos: Vec<EventoSistema> = match ext.as_str() {
+        "json" => match io::leer_json::<Vec<EventoSistema>>(&ruta) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("  {} JSON inválido: {}", "✗".red(), e);
+                pausa();
+                return;
+            }
+        },
+        _ => {
+            println!(
+                "  {} Por ahora la bitácora sólo importa desde JSON (los enums",
+                "ℹ️".cyan()
+            );
+            println!("      Modulo/TipoEvento/EstadoEvento exigen ida-y-vuelta exacta).");
+            pausa();
+            return;
+        }
+    };
+
+    if nuevos.is_empty() {
+        println!("  {} El archivo no contenía eventos.", "ℹ️".cyan());
+        pausa();
+        return;
+    }
+    let n = nuevos.len();
+    if !confirmar(
+        &format!(
+            "¿Importar {} evento(s) (se omiten los IDs ya existentes)?",
+            n
+        ),
+        true,
+    ) {
+        return;
+    }
+
+    let mut anexados = 0usize;
+    let mut omitidos = 0usize;
+    for ev in nuevos {
+        if state.bus.buscar(&ev.id).is_some() {
+            omitidos += 1;
+            continue;
+        }
+        let _ = state.bus.emitir(ev);
+        anexados += 1;
+    }
+    println!(
+        "  {} {} evento(s) anexado(s)",
+        "✅".green(),
+        anexados.to_string().bold()
+    );
+    if omitidos > 0 {
+        println!(
+            "  {} {} evento(s) omitido(s) por ID duplicado",
+            "ℹ️".cyan(),
+            omitidos
+        );
+    }
+    pausa();
+}
+
+pub fn menu_io_bitacora(state: &mut AppState) {
+    submenu_io(
+        "📤 Importar / Exportar Bitácora",
+        state,
+        bitacora_exportar,
+        bitacora_importar,
+    );
+}

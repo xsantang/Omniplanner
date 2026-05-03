@@ -8056,8 +8056,7 @@ pub fn rastreador_bitacora(state: &mut AppState) {
             "🏷️   Filtrar por módulo",
             "🏷️   Filtrar por etiqueta",
             "🔎  Ver detalle de un evento (y relacionados)",
-            "📤  Exportar a CSV",
-            "📤  Exportar a Markdown",
+            "📤  Importar / Exportar (CSV / MD / JSON / Excel / SQL)",
             "🔙  Volver",
         ];
 
@@ -8104,8 +8103,7 @@ pub fn rastreador_bitacora(state: &mut AppState) {
             Some(6) => bitacora_filtrar_modulo(state),
             Some(7) => bitacora_filtrar_etiqueta(state),
             Some(8) => bitacora_ver_detalle(state),
-            Some(9) => bitacora_exportar_csv(state),
-            Some(10) => bitacora_exportar_markdown(state),
+            Some(9) => crate::cli::io_modulos::menu_io_bitacora(state),
             _ => return,
         }
     }
@@ -8379,132 +8377,4 @@ fn bitacora_ver_detalle(state: &AppState) {
         };
         id_actual = ids[sel].clone();
     }
-}
-
-/// Exporta todos los eventos a CSV en `~/.omniplanner/bitacora_<timestamp>.csv`.
-fn bitacora_exportar_csv(state: &AppState) {
-    use std::io::Write;
-    let dir = match dirs::home_dir() {
-        Some(h) => h.join(".omniplanner"),
-        None => {
-            println!("  {} No se pudo determinar HOME.", "✗".red());
-            pausa();
-            return;
-        }
-    };
-    let _ = std::fs::create_dir_all(&dir);
-    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let path = dir.join(format!("bitacora_{}.csv", stamp));
-    let mut f = match std::fs::File::create(&path) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("  {} No se pudo crear el archivo: {}", "✗".red(), e);
-            pausa();
-            return;
-        }
-    };
-    let _ = writeln!(
-        f,
-        "id;fecha;creado;modulo;tipo;estado;titulo;monto;contraparte;etiquetas;notas;relacionados"
-    );
-    let escape = |s: &str| s.replace('"', "''").replace(['\n', '\r', ';'], " ");
-    let mut n = 0usize;
-    for ev in state.bus.todos() {
-        let _ = writeln!(
-            f,
-            "{};{};{};{};{};{};\"{}\";{};\"{}\";\"{}\";\"{}\";{}",
-            ev.id,
-            ev.fecha.format("%Y-%m-%d"),
-            ev.creado.format("%Y-%m-%d %H:%M:%S"),
-            ev.origen,
-            ev.tipo,
-            ev.estado,
-            escape(&ev.titulo),
-            ev.monto.map(|m| format!("{:.2}", m)).unwrap_or_default(),
-            escape(&ev.contraparte),
-            escape(&ev.etiquetas.join(",")),
-            escape(&ev.notas.join(" | ")),
-            ev.eventos_relacionados.len()
-        );
-        n += 1;
-    }
-    println!();
-    println!(
-        "  {} {} eventos exportados a {}",
-        "✅".green(),
-        n,
-        path.display().to_string().cyan()
-    );
-    pausa();
-}
-
-/// Exporta todos los eventos a Markdown en `~/.omniplanner/bitacora_<timestamp>.md`.
-fn bitacora_exportar_markdown(state: &AppState) {
-    use omniplanner::eventos::EventoSistema;
-    use std::io::Write;
-    let dir = match dirs::home_dir() {
-        Some(h) => h.join(".omniplanner"),
-        None => {
-            println!("  {} No se pudo determinar HOME.", "✗".red());
-            pausa();
-            return;
-        }
-    };
-    let _ = std::fs::create_dir_all(&dir);
-    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let path = dir.join(format!("bitacora_{}.md", stamp));
-    let mut f = match std::fs::File::create(&path) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("  {} No se pudo crear el archivo: {}", "✗".red(), e);
-            pausa();
-            return;
-        }
-    };
-    let _ = writeln!(
-        f,
-        "# Bitácora del sistema — {}",
-        chrono::Local::now().format("%Y-%m-%d %H:%M")
-    );
-    let _ = writeln!(f, "\nTotal de eventos: **{}**\n", state.bus.total());
-
-    // Agrupar por fecha descendente
-    let mut lista: Vec<&EventoSistema> = state.bus.todos().iter().collect();
-    lista.sort_by(|a, b| b.fecha.cmp(&a.fecha).then(b.creado.cmp(&a.creado)));
-    let mut fecha_actual: Option<chrono::NaiveDate> = None;
-    for ev in &lista {
-        if Some(ev.fecha) != fecha_actual {
-            let _ = writeln!(f, "\n## {}\n", ev.fecha.format("%A %Y-%m-%d"));
-            fecha_actual = Some(ev.fecha);
-        }
-        let monto = ev
-            .monto
-            .map(|m| format!(" — **${:.2}**", m))
-            .unwrap_or_default();
-        let _ = writeln!(
-            f,
-            "- [{}] **{}** {} _({})_{}",
-            ev.estado, ev.titulo, ev.origen, ev.tipo, monto
-        );
-        if !ev.contraparte.is_empty() {
-            let _ = writeln!(f, "  - Contraparte: {}", ev.contraparte);
-        }
-        if !ev.etiquetas.is_empty() {
-            let _ = writeln!(f, "  - Etiquetas: `{}`", ev.etiquetas.join("`, `"));
-        }
-        for n in &ev.notas {
-            let _ = writeln!(f, "  - 📝 {}", n);
-        }
-        if !ev.eventos_relacionados.is_empty() {
-            let _ = writeln!(f, "  - 🔗 {} relacionado(s)", ev.eventos_relacionados.len());
-        }
-    }
-    println!();
-    println!(
-        "  {} {} eventos exportados a {}",
-        "✅".green(),
-        state.bus.total(),
-        path.display().to_string().cyan()
-    );
-    pausa();
 }
