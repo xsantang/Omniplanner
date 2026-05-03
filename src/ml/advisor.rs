@@ -1270,6 +1270,7 @@ impl DeudaRastreada {
     }
 
     /// Versión completa con meses cubiertos y nota libre.
+    #[allow(clippy::too_many_arguments)]
     pub fn registrar_mes_completo(
         &mut self,
         mes: &str,
@@ -3438,6 +3439,7 @@ pub struct BorradorPlanLibertad {
     pub mes_inicio: Option<String>,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for EstrategiaLibertad {
     fn default() -> Self {
         EstrategiaLibertad::Avalancha

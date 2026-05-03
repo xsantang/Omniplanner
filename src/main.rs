@@ -2,7 +2,15 @@
     clippy::while_let_loop,
     clippy::format_in_format_args,
     clippy::needless_range_loop,
-    clippy::single_element_loop
+    clippy::single_element_loop,
+    clippy::to_string_in_format_args,
+    clippy::print_literal,
+    clippy::nonminimal_bool,
+    clippy::double_ended_iterator_last,
+    clippy::redundant_locals,
+    clippy::unnecessary_sort_by,
+    clippy::collapsible_match,
+    clippy::useless_format
 )]
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
@@ -10462,7 +10470,12 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
                 {
                     d.pago_minimo = monto;
                     d.principal_interes_mensual = monto;
-                    println!("      {} {} = ${:.2}/mes (guardado en Rastreador)", "✓".green(), nombre, monto);
+                    println!(
+                        "      {} {} = ${:.2}/mes (guardado en Rastreador)",
+                        "✓".green(),
+                        nombre,
+                        monto
+                    );
                 }
             }
         }
@@ -10500,7 +10513,10 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
             if pi > 0.0 {
                 // Para pagos no-mensuales (anual, semestral, etc.) usar el monto
                 // completo del período (pago_minimo), NO el equivalente mensual.
-                let es_mensual = matches!(d.frecuencia, FrecuenciaPago::Mensual | FrecuenciaPago::Semanal | FrecuenciaPago::Quincenal);
+                let es_mensual = matches!(
+                    d.frecuencia,
+                    FrecuenciaPago::Mensual | FrecuenciaPago::Semanal | FrecuenciaPago::Quincenal
+                );
                 let monto_linea = if es_mensual {
                     (pi * 100.0).round() / 100.0
                 } else {
@@ -10513,10 +10529,15 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
                     println!();
                     println!(
                         "  📅 '{}' es un pago {} de ${:.2}.",
-                        d.nombre, d.frecuencia.nombre(), monto_linea
+                        d.nombre,
+                        d.frecuencia.nombre(),
+                        monto_linea
                     );
                     let mes_input = pedir_f64(
-                        &format!("     ¿En qué mes del año se paga? (1-12, Enter={}) ", mes_actual_num),
+                        &format!(
+                            "     ¿En qué mes del año se paga? (1-12, Enter={}) ",
+                            mes_actual_num
+                        ),
                         mes_actual_num as f64,
                     )
                     .clamp(1.0, 12.0) as u8;
@@ -11063,12 +11084,32 @@ pub(crate) fn mes_a_yyyy_mm(s: &str) -> Option<String> {
     }
     // Formato "May 2026" o "Mar 2024"
     let meses_en = [
-        ("Jan", 1), ("Feb", 2), ("Mar", 3), ("Apr", 4), ("May", 5), ("Jun", 6),
-        ("Jul", 7), ("Aug", 8), ("Sep", 9), ("Oct", 10), ("Nov", 11), ("Dec", 12),
+        ("Jan", 1),
+        ("Feb", 2),
+        ("Mar", 3),
+        ("Apr", 4),
+        ("May", 5),
+        ("Jun", 6),
+        ("Jul", 7),
+        ("Aug", 8),
+        ("Sep", 9),
+        ("Oct", 10),
+        ("Nov", 11),
+        ("Dec", 12),
     ];
     let meses_es = [
-        ("Ene", 1), ("Feb", 2), ("Mar", 3), ("Abr", 4), ("May", 5), ("Jun", 6),
-        ("Jul", 7), ("Ago", 8), ("Sep", 9), ("Oct", 10), ("Nov", 11), ("Dic", 12),
+        ("Ene", 1),
+        ("Feb", 2),
+        ("Mar", 3),
+        ("Abr", 4),
+        ("May", 5),
+        ("Jun", 6),
+        ("Jul", 7),
+        ("Ago", 8),
+        ("Sep", 9),
+        ("Oct", 10),
+        ("Nov", 11),
+        ("Dic", 12),
     ];
     let partes: Vec<&str> = s.splitn(2, ' ').collect();
     if partes.len() == 2 {
@@ -11096,13 +11137,17 @@ pub(crate) fn sincronizar_presupuesto_desde_rastreador(
 ) {
     let needle = nombre_deuda.to_lowercase();
     // Buscar el mes en el presupuesto
-    let Some(pres) = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes) else { return };
+    let Some(pres) = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes) else {
+        return;
+    };
 
     // Buscar la línea cuyo nombre coincide con la deuda
     let Some(linea) = pres.lineas.iter_mut().find(|l| {
         let ln = l.nombre.to_lowercase();
         ln == needle || ln.contains(&needle) || needle.contains(&ln)
-    }) else { return };
+    }) else {
+        return;
+    };
 
     linea.monto_pagado_real = monto_nuevo;
     linea.pagado = monto_nuevo >= linea.monto * 0.95;
@@ -11124,9 +11169,7 @@ pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
             .lineas
             .iter()
             .enumerate()
-            .filter(|(_, l)| {
-                l.categoria != Categoria::Ingreso && l.monto_pagado_real > 0.001
-            })
+            .filter(|(_, l)| l.categoria != Categoria::Ingreso && l.monto_pagado_real > 0.001)
             .map(|(i, _)| i)
             .collect();
 
@@ -11184,10 +11227,7 @@ pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
             Some(0) => pagado_actual,
             Some(1) => {
                 let m = pedir_f64(
-                    &format!(
-                        "  ¿Cuánto devolver? (máx ${:.2})",
-                        pagado_actual
-                    ),
+                    &format!("  ¿Cuánto devolver? (máx ${:.2})", pagado_actual),
                     pagado_actual,
                 );
                 m.max(0.0).min(pagado_actual)
@@ -11261,9 +11301,9 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
             std::collections::HashSet::new();
         for d in &state.asesor.rastreador.deudas {
             let periodo: i32 = match d.frecuencia {
-                FrecuenciaPago::Semanal
-                | FrecuenciaPago::Quincenal
-                | FrecuenciaPago::Mensual => continue,
+                FrecuenciaPago::Semanal | FrecuenciaPago::Quincenal | FrecuenciaPago::Mensual => {
+                    continue
+                }
                 FrecuenciaPago::Trimestral => 3,
                 FrecuenciaPago::Semestral => 6,
                 FrecuenciaPago::Anual => 12,
@@ -11307,7 +11347,11 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                 };
                 let saldo = if !es_corriente {
                     let s = d.saldo_actual();
-                    if s > 0.0 { Some(s) } else { None }
+                    if s > 0.0 {
+                        Some(s)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -11387,7 +11431,13 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                         && ing.monto_mensual() > 0.01
                         && !nombres_en_mes.contains(&ing.concepto)
                 })
-                .map(|ing| (ing.concepto.clone(), ing.monto_mensual(), ing.frecuencia.clone()))
+                .map(|ing| {
+                    (
+                        ing.concepto.clone(),
+                        ing.monto_mensual(),
+                        ing.frecuencia.clone(),
+                    )
+                })
                 .collect();
 
             if !ingresos_faltantes.is_empty() {
@@ -11635,7 +11685,11 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
     }
 
     if let Err(e) = state.guardar() {
-        println!("  {} No se pudo guardar el estado final: {}", "⚠".yellow(), e);
+        println!(
+            "  {} No se pudo guardar el estado final: {}",
+            "⚠".yellow(),
+            e
+        );
     }
 }
 
@@ -11744,14 +11798,20 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
         .map(|p| {
             p.lineas
                 .iter()
-                .filter(|l| l.categoria == Categoria::PagoDeuda || l.categoria == Categoria::GastoFijo)
+                .filter(|l| {
+                    l.categoria == Categoria::PagoDeuda || l.categoria == Categoria::GastoFijo
+                })
                 .map(|l| (l.nombre.clone(), l.monto_pagado_real))
                 .collect()
         })
         .unwrap_or_default();
 
     if lineas_pago.is_empty() {
-        println!("  {} No hay líneas de pago en el presupuesto de {}.", "ℹ️".cyan(), mes);
+        println!(
+            "  {} No hay líneas de pago en el presupuesto de {}.",
+            "ℹ️".cyan(),
+            mes
+        );
         pausa();
         return;
     }
@@ -11759,16 +11819,26 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
     limpiar();
     separador("🔗  EMPUJAR PRESUPUESTO → RASTREADOR");
     println!();
-    println!("  Esto sobreescribirá los pagos del Rastreador para {} con los del Presupuesto.", mes.bold());
+    println!(
+        "  Esto sobreescribirá los pagos del Rastreador para {} con los del Presupuesto.",
+        mes.bold()
+    );
     println!();
 
     for (nombre, monto) in &lineas_pago {
-        let etiqueta = if *monto > 0.01 { format!("${:.2}", monto).green().to_string() } else { "sin pago".dimmed().to_string() };
+        let etiqueta = if *monto > 0.01 {
+            format!("${:.2}", monto).green().to_string()
+        } else {
+            "sin pago".dimmed().to_string()
+        };
         println!("    • {:<32} {}", nombre, etiqueta);
     }
     println!();
 
-    if !confirmar("¿Confirmar? Esto reemplaza los datos del Rastreador para este mes.", false) {
+    if !confirmar(
+        "¿Confirmar? Esto reemplaza los datos del Rastreador para este mes.",
+        false,
+    ) {
         println!("  Cancelado.");
         pausa();
         return;
@@ -11779,7 +11849,10 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
 
     for (nombre, monto_real) in &lineas_pago {
         let needle = nombre.to_lowercase();
-        let (nombre_base, es_escrow) = if let Some(pos) = needle.rfind("— escrow").or_else(|| needle.rfind("- escrow")) {
+        let (nombre_base, es_escrow) = if let Some(pos) = needle
+            .rfind("— escrow")
+            .or_else(|| needle.rfind("- escrow"))
+        {
             (needle[..pos].trim().to_string(), true)
         } else {
             (needle.clone(), false)
@@ -11790,21 +11863,31 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
             dn == nombre_base || dn.contains(&nombre_base) || nombre_base.contains(&dn)
         });
 
-        let Some(idx) = idx else { omitidas += 1; continue };
+        let Some(idx) = idx else {
+            omitidas += 1;
+            continue;
+        };
 
         // Primero eliminar cualquier entrada existente para este mes
-        state.asesor.rastreador.deudas[idx].historial.retain(|m| m.mes != mes);
+        state.asesor.rastreador.deudas[idx]
+            .historial
+            .retain(|m| m.mes != mes);
 
         if *monto_real > 0.01 {
             let d = &state.asesor.rastreador.deudas[idx];
             let saldo_i = d.saldo_actual();
             let tasa_m = d.tasa_anual / 100.0 / 12.0;
-            let (pago_pi, pago_escrow) = if es_escrow { (0.0, *monto_real) } else { (*monto_real, 0.0) };
+            let (pago_pi, pago_escrow) = if es_escrow {
+                (0.0, *monto_real)
+            } else {
+                (*monto_real, 0.0)
+            };
             let interes = (saldo_i - pago_pi).max(0.0) * tasa_m;
             let saldo_f = ((saldo_i - pago_pi).max(0.0) + interes).max(0.0);
 
-            state.asesor.rastreador.deudas[idx].historial.push(
-                omniplanner::ml::MesPago {
+            state.asesor.rastreador.deudas[idx]
+                .historial
+                .push(omniplanner::ml::MesPago {
                     mes: mes.to_string(),
                     saldo_inicio: saldo_i,
                     pago: pago_pi,
@@ -11814,8 +11897,7 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
                     saldo_final: saldo_f,
                     meses_cubiertos: vec![],
                     nota: String::new(),
-                }
-            );
+                });
             actualizadas += 1;
         } else {
             // monto=0 → no hubo pago, no se registra nada
@@ -11825,9 +11907,17 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
 
     let _ = state.guardar();
     println!();
-    println!("  {} {} líneas sincronizadas al Rastreador.", "✅".green(), actualizadas);
+    println!(
+        "  {} {} líneas sincronizadas al Rastreador.",
+        "✅".green(),
+        actualizadas
+    );
     if omitidas > 0 {
-        println!("  {} {} líneas no encontraron deuda coincidente en el Rastreador.", "⚠️".yellow(), omitidas);
+        println!(
+            "  {} {} líneas no encontraron deuda coincidente en el Rastreador.",
+            "⚠️".yellow(),
+            omitidas
+        );
     }
     pausa();
 }
@@ -11845,11 +11935,15 @@ pub(crate) fn sincronizar_ingresos_rastreador(state: &mut AppState, mes: &str) {
         .ingresos
         .iter()
         .filter(|ing| {
-            ing.confirmado
-                && ing.monto_mensual() > 0.01
-                && !nombres_en_mes.contains(&ing.concepto)
+            ing.confirmado && ing.monto_mensual() > 0.01 && !nombres_en_mes.contains(&ing.concepto)
         })
-        .map(|ing| (ing.concepto.clone(), ing.monto_mensual(), ing.frecuencia.clone()))
+        .map(|ing| {
+            (
+                ing.concepto.clone(),
+                ing.monto_mensual(),
+                ing.frecuencia.clone(),
+            )
+        })
         .collect();
 
     limpiar();
@@ -11858,7 +11952,8 @@ pub(crate) fn sincronizar_ingresos_rastreador(state: &mut AppState, mes: &str) {
     if ingresos_faltantes.is_empty() {
         println!(
             "  {} Todos los ingresos del Rastreador ya están en {}.",
-            "✅".green(), mes
+            "✅".green(),
+            mes
         );
         pausa();
         return;
@@ -12032,19 +12127,12 @@ pub(crate) fn ver_pagos_realizados(state: &AppState, mes: &str) {
         .collect();
 
     println!();
-    println!(
-        "  💵 Ingresos del mes:        ${:>12.2}",
-        ingresos
-    );
+    println!("  💵 Ingresos del mes:        ${:>12.2}", ingresos);
     println!("  ✅ Pagado hasta ahora:      ${:>12.2}", pagado);
     let lbl_disp = if disponible >= 0.0 {
         format!("  💰 Te queda:                ${:>12.2}", disponible).green()
     } else {
-        format!(
-            "  🔴 SOBREGIRO:               ${:>12.2}",
-            disponible.abs()
-        )
-        .red()
+        format!("  🔴 SOBREGIRO:               ${:>12.2}", disponible.abs()).red()
     };
     println!("{}", lbl_disp);
     println!();
@@ -12082,7 +12170,9 @@ pub(crate) fn ver_pagos_realizados(state: &AppState, mes: &str) {
         println!("  ─────────────────────────────────────────────────────────");
         for l in &pendientes {
             let badge = if l.meses_atrasados > 0 {
-                format!(" 🔴 {}m atras", l.meses_atrasados).red().to_string()
+                format!(" 🔴 {}m atras", l.meses_atrasados)
+                    .red()
+                    .to_string()
             } else {
                 String::new()
             };
@@ -12145,15 +12235,13 @@ pub(crate) fn exportar_pagos_csv(state: &AppState, mes: &str) {
         "{},RESUMEN,\"Totales\",{:.2},,{:.2},{:.2},{:.2},,\n",
         mes,
         pres.total_ingresos(),
-        pres
-            .lineas
+        pres.lineas
             .iter()
             .filter(|l| l.categoria != Categoria::Ingreso)
             .map(|l| l.monto_a_pagar())
             .sum::<f64>(),
         pres.total_pagado_real(),
-        pres
-            .lineas
+        pres.lineas
             .iter()
             .filter(|l| l.categoria != Categoria::Ingreso)
             .map(|l| l.pendiente_real())
@@ -12162,11 +12250,7 @@ pub(crate) fn exportar_pagos_csv(state: &AppState, mes: &str) {
 
     match std::fs::write(&archivo, csv) {
         Ok(_) => {
-            println!(
-                "  {} CSV exportado: {}",
-                "✓".green(),
-                archivo.display()
-            );
+            println!("  {} CSV exportado: {}", "✓".green(), archivo.display());
             println!(
                 "  💡 Ábrelo en Excel / Google Sheets para tu cuadro de planificación mensual."
             );

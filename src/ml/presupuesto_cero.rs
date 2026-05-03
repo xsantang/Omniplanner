@@ -5,8 +5,8 @@
 //! Sistema quincenal inspirado en el método "zero-based budget":
 //! Ingreso total - Gastos fijos - Gastos variables - Pagos deuda - Ahorro = 0
 
-use serde::{Deserialize, Serialize};
 use super::advisor::FrecuenciaPago;
+use serde::{Deserialize, Serialize};
 
 fn frecuencia_mensual_default() -> FrecuenciaPago {
     FrecuenciaPago::Mensual
@@ -377,7 +377,9 @@ impl LineaPlantilla {
             Some(base) => {
                 let base = base.clamp(1, 12);
                 let diff = (mes_num as i32 - base as i32).rem_euclid(12) as u8;
-                diff % periodo == 0
+                #[allow(clippy::manual_is_multiple_of)]
+                let es_multiplo = diff % periodo == 0;
+                es_multiplo
             }
         }
     }
