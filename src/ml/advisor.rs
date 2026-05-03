@@ -2518,6 +2518,11 @@ impl RastreadorDeudas {
         // mes corriente. saldo_actual() ya refleja esos pagos, por lo que
         // el mes 1 de la simulación NO debe volver a aplicar pago a esas
         // deudas (sería un doble pago en el mismo mes calendario).
+        //
+        // Además, si el MesPago registrado declara `meses_cubiertos` con
+        // meses futuros (ej: pago doble de hipoteca que cubre mayo+junio),
+        // también anulamos pagos en esos meses para no duplicarlos.
+        //
         // Se aplica DESPUÉS del paso 2 para sobrescribir cualquier pago
         // programado vigente para el mes corriente que ya fue ejecutado.
         let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
@@ -2525,13 +2530,30 @@ impl RastreadorDeudas {
             if !d.activa || d.es_pago_corriente() {
                 continue;
             }
-            let pagada_este_mes = d
-                .historial
-                .iter()
-                .any(|m| m.mes == etiqueta_mes_hoy && m.pago > 0.01);
-            if pagada_este_mes {
-                ajustes_efectivos.retain(|x| !(x.mes == 1 && x.nombre_deuda == d.nombre));
-                ajustes_efectivos.push(AjusteMensualLibertad::nuevo(1, d.nombre.clone(), 0.0));
+            // Recolectar todos los meses (corriente + futuros) cubiertos por
+            // pagos ya registrados en el historial cuyo `mes` sea el mes
+            // corriente. Solo nos interesan los del mes corriente para no
+            // contar dos veces meses pasados que ya quedaron fuera del rango
+            // de la simulación.
+            let mut meses_a_anular: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for m in &d.historial {
+                if m.mes == etiqueta_mes_hoy && m.pago > 0.01 {
+                    meses_a_anular.insert(m.mes.clone());
+                    for cubierto in &m.meses_cubiertos {
+                        meses_a_anular.insert(cubierto.clone());
+                    }
+                }
+            }
+            for etq in meses_a_anular {
+                if let Some(idx) = mes_a_indice(&etq) {
+                    ajustes_efectivos.retain(|x| !(x.mes == idx && x.nombre_deuda == d.nombre));
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        idx,
+                        d.nombre.clone(),
+                        0.0,
+                    ));
+                }
             }
         }
 
@@ -4315,5 +4337,48 @@ mod tests {
             .map(|(_, p)| *p)
             .unwrap_or(0.0);
         assert!(pago_visa_mes1.abs() < 0.01);
+    }
+
+    #[test]
+    fn pago_registrado_que_cubre_dos_meses_anula_ambos() {
+        // Caso real reportado: pago doble de hipoteca registrado en el mes
+        // corriente que cubre mayo+junio. La simulación debe poner pago=0
+        // tanto en mes 1 como en mes 2 (no solo en mes 1).
+        let mut r = rastreador_con_dos_tarjetas();
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        let siguiente = if hoy.month() == 12 {
+            format!("{:04}-01", hoy.year() + 1)
+        } else {
+            format!("{:04}-{:02}", hoy.year(), hoy.month() + 1)
+        };
+        if let Some(d) = r.deudas.iter_mut().find(|d| d.nombre == "Visa") {
+            d.registrar_mes_completo(
+                &mes_hoy,
+                2000.0,
+                1000.0,
+                0.0,
+                0.0,
+                vec![mes_hoy.clone(), siguiente.clone()],
+                String::new(),
+            );
+        }
+        let sim = r.simular_libertad(200.0, false);
+        let pago_mes1 = sim.meses[0]
+            .pagos
+            .iter()
+            .find(|(n, _)| n == "Visa")
+            .map(|(_, p)| *p)
+            .unwrap_or(0.0);
+        assert!(pago_mes1.abs() < 0.01, "mes 1 debería ser 0");
+        if sim.meses.len() >= 2 {
+            let pago_mes2 = sim.meses[1]
+                .pagos
+                .iter()
+                .find(|(n, _)| n == "Visa")
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0);
+            assert!(pago_mes2.abs() < 0.01, "mes 2 debería ser 0 (cubierto)");
+        }
     }
 }
