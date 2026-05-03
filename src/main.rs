@@ -13060,6 +13060,38 @@ pub(crate) fn agregar_movimiento(state: &mut AppState, es_ingreso: bool) {
         state.asesor.presupuesto.gastos.push(mov);
     }
 
+    // ── Emitir evento en bus ─────────────────────────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let titulo = if es_ingreso {
+            format!("Ingreso: {}", concepto)
+        } else {
+            format!("Gasto: {}", concepto)
+        };
+        let mut ev = BusEvento::nuevo(
+            BusModulo::Presupuesto,
+            BusTipo::Otro(tipo_str.into()),
+            titulo,
+        )
+        .con_fecha(chrono::Local::now().date_naive())
+        .con_monto(monto)
+        .con_estado(BusEstado::Realizado)
+        .con_referencia(BusRef::nueva(
+            "presupuesto",
+            if es_ingreso { "ingreso" } else { "gasto" },
+            &concepto,
+            &concepto,
+        ))
+        .con_etiqueta(if es_ingreso { "ingreso" } else { "gasto" });
+        if fijo {
+            ev = ev.con_etiqueta("fijo");
+        }
+        state.bus.emitir(ev);
+    }
+
     println!(
         "  {} {} '{}' (${:.2}) agregado",
         "✓".green(),
@@ -14568,6 +14600,35 @@ pub(crate) fn menu_asesor_registrar_accion(state: &mut AppState) {
         }),
     );
     state.asesor.registros.push(reg);
+
+    // ── Emitir evento Decision en bus ────────────────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let id_str = id.to_string();
+        let mut ev = BusEvento::nuevo(
+            BusModulo::Sistema,
+            BusTipo::Decision,
+            format!("Decisión: {}", accion),
+        )
+        .con_estado(BusEstado::Realizado)
+        .con_referencia(BusRef::nueva("asesor", "registro", &id_str, &accion))
+        .con_etiqueta("decision")
+        .con_etiqueta(categoria.clone())
+        .con_etiqueta(impacto.nombre());
+        if let Some(m) = monto {
+            ev = ev.con_monto(m);
+        }
+        if !notas.is_empty() {
+            ev = ev.con_nota(notas.clone());
+        }
+        if let Ok(f) = chrono::NaiveDate::parse_from_str(&hoy, "%Y-%m-%d") {
+            ev = ev.con_fecha(f);
+        }
+        state.bus.emitir(ev);
+    }
 
     println!();
     println!(
