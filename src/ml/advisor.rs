@@ -1258,7 +1258,15 @@ impl DeudaRastreada {
         pago_escrow: f64,
         nuevos_cargos: f64,
     ) {
-        self.registrar_mes_completo(mes, saldo_inicio, pago_pi, pago_escrow, nuevos_cargos, vec![], String::new());
+        self.registrar_mes_completo(
+            mes,
+            saldo_inicio,
+            pago_pi,
+            pago_escrow,
+            nuevos_cargos,
+            vec![],
+            String::new(),
+        );
     }
 
     /// Versión completa con meses cubiertos y nota libre.
@@ -1724,9 +1732,18 @@ impl PagoProgramado {
                 let mes_num: u32 = partes.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                 let anio = partes.first().copied().unwrap_or("");
                 let nombre = match mes_num {
-                    1 => "ene", 2 => "feb", 3 => "mar", 4 => "abr",
-                    5 => "may", 6 => "jun", 7 => "jul", 8 => "ago",
-                    9 => "sep", 10 => "oct", 11 => "nov", 12 => "dic",
+                    1 => "ene",
+                    2 => "feb",
+                    3 => "mar",
+                    4 => "abr",
+                    5 => "may",
+                    6 => "jun",
+                    7 => "jul",
+                    8 => "ago",
+                    9 => "sep",
+                    10 => "oct",
+                    11 => "nov",
+                    12 => "dic",
                     _ => "?",
                 };
                 // Si todos del mismo año, omitir año excepto el último
@@ -2068,58 +2085,69 @@ impl RastreadorDeudas {
                 let tasa_mensual = d.tasa_anual / 100.0 / 12.0;
                 let interes_del_saldo = mp.saldo_inicio * tasa_mensual;
 
-                let (error, nota) = if mp.pago < 0.01 && mp.saldo_inicio > 0.01 && d.tasa_anual > 0.01 {
-                    // Solo reportar error de no-pago si la deuda tiene tasa (tarjeta/préstamo)
-                    (
-                        ErrorPago::NoPagoNada,
-                        format!(
-                            "No pagó nada. Se acumularon ${:.2} en intereses.",
-                            mp.intereses
-                        ),
-                    )
-                } else if mp.pago < 0.01 && mp.saldo_inicio > 0.01 && d.obligatoria && d.tasa_anual < 0.01
-                    && !matches!(d.frecuencia, FrecuenciaPago::Anual | FrecuenciaPago::Semestral | FrecuenciaPago::Trimestral | FrecuenciaPago::UnaVez)
-                {
-                    // Pago fijo obligatorio mensual sin tasa (renta, celular mensual, etc.)
-                    (
-                        ErrorPago::NoPagoNada,
-                        "⛔ PAGO FIJO OBLIGATORIO sin registrar. ¡Riesgo de perder el bien!".to_string(),
-                    )
-                } else if mp.nuevos_cargos > mp.pago && mp.saldo_inicio > 100.0 {
-                    (
-                        ErrorPago::SiguioUsandoTarjeta,
-                        format!(
-                            "Pagó ${:.2} pero cargó ${:.2} nuevos. La deuda creció ${:.2}.",
-                            mp.pago,
-                            mp.nuevos_cargos,
-                            mp.nuevos_cargos - mp.pago
-                        ),
-                    )
-                } else if mp.pago < interes_del_saldo && interes_del_saldo > 1.0 {
-                    (
-                        ErrorPago::PagoInsuficiente,
-                        format!(
-                            "Pago de ${:.2} no cubre intereses de ${:.2}. Deuda creciendo.",
-                            mp.pago, interes_del_saldo
-                        ),
-                    )
-                } else if mp.saldo_final < 0.01 {
-                    (ErrorPago::PagoExcelente, "¡Deuda liquidada!".to_string())
-                } else if mp.pago >= mp.saldo_inicio * 0.1 {
-                    (
-                        ErrorPago::PagoExcelente,
-                        format!(
-                            "Buen pago de ${:.2} ({:.0}% del saldo).",
-                            mp.pago,
-                            mp.pago / mp.saldo_inicio * 100.0
-                        ),
-                    )
-                } else {
-                    (
-                        ErrorPago::PagoCorrecto,
-                        format!("Pago aceptable de ${:.2}.", mp.pago),
-                    )
-                };
+                let (error, nota) =
+                    if mp.pago < 0.01 && mp.saldo_inicio > 0.01 && d.tasa_anual > 0.01 {
+                        // Solo reportar error de no-pago si la deuda tiene tasa (tarjeta/préstamo)
+                        (
+                            ErrorPago::NoPagoNada,
+                            format!(
+                                "No pagó nada. Se acumularon ${:.2} en intereses.",
+                                mp.intereses
+                            ),
+                        )
+                    } else if mp.pago < 0.01
+                        && mp.saldo_inicio > 0.01
+                        && d.obligatoria
+                        && d.tasa_anual < 0.01
+                        && !matches!(
+                            d.frecuencia,
+                            FrecuenciaPago::Anual
+                                | FrecuenciaPago::Semestral
+                                | FrecuenciaPago::Trimestral
+                                | FrecuenciaPago::UnaVez
+                        )
+                    {
+                        // Pago fijo obligatorio mensual sin tasa (renta, celular mensual, etc.)
+                        (
+                            ErrorPago::NoPagoNada,
+                            "⛔ PAGO FIJO OBLIGATORIO sin registrar. ¡Riesgo de perder el bien!"
+                                .to_string(),
+                        )
+                    } else if mp.nuevos_cargos > mp.pago && mp.saldo_inicio > 100.0 {
+                        (
+                            ErrorPago::SiguioUsandoTarjeta,
+                            format!(
+                                "Pagó ${:.2} pero cargó ${:.2} nuevos. La deuda creció ${:.2}.",
+                                mp.pago,
+                                mp.nuevos_cargos,
+                                mp.nuevos_cargos - mp.pago
+                            ),
+                        )
+                    } else if mp.pago < interes_del_saldo && interes_del_saldo > 1.0 {
+                        (
+                            ErrorPago::PagoInsuficiente,
+                            format!(
+                                "Pago de ${:.2} no cubre intereses de ${:.2}. Deuda creciendo.",
+                                mp.pago, interes_del_saldo
+                            ),
+                        )
+                    } else if mp.saldo_final < 0.01 {
+                        (ErrorPago::PagoExcelente, "¡Deuda liquidada!".to_string())
+                    } else if mp.pago >= mp.saldo_inicio * 0.1 {
+                        (
+                            ErrorPago::PagoExcelente,
+                            format!(
+                                "Buen pago de ${:.2} ({:.0}% del saldo).",
+                                mp.pago,
+                                mp.pago / mp.saldo_inicio * 100.0
+                            ),
+                        )
+                    } else {
+                        (
+                            ErrorPago::PagoCorrecto,
+                            format!("Pago aceptable de ${:.2}.", mp.pago),
+                        )
+                    };
 
                 // Solo registrar errores y pagos excelentes significativos
                 let recomendado = (interes_del_saldo * 2.0).max(d.pago_pi_mensual());
@@ -3871,6 +3899,8 @@ mod tests {
             nuevos_cargos: 0.0,
             intereses: 0.0,
             saldo_final: saldo,
+            meses_cubiertos: vec![],
+            nota: String::new(),
         });
         d.activa = saldo > 0.01;
         d

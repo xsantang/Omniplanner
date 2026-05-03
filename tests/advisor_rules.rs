@@ -26,6 +26,8 @@ fn deuda(nombre: &str, saldo: f64, tasa_anual: f64, pago_min: f64) -> DeudaRastr
         nuevos_cargos: 0.0,
         intereses: 0.0,
         saldo_final: saldo,
+        meses_cubiertos: vec![],
+        nota: String::new(),
     });
     d.activa = saldo > 0.01;
     d
