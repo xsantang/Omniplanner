@@ -24,6 +24,7 @@ pub mod contrasenias;
 pub mod cripto;
 pub mod diagrams;
 pub mod eventos;
+pub mod io;
 pub mod mapper;
 pub mod memoria;
 pub mod ml;
