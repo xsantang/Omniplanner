@@ -871,17 +871,43 @@ pub(crate) fn dashboard(state: &AppState) {
     );
     println!();
 
-    // Tareas de hoy
-    let tareas_hoy = state.tasks.listar_por_fecha(hoy);
-    let pendientes = state.tasks.listar_pendientes();
-    if !tareas_hoy.is_empty() || !pendientes.is_empty() {
+    // Tareas: separar vencidas (pasadas) de activas (futuras)
+    let vencidas = state.tasks.listar_vencidas();
+    let activas = state.tasks.listar_activas();
+    let tareas_hoy: Vec<&&Task> = activas.iter().filter(|t| t.fecha == hoy).collect();
+    let proximas: Vec<&&Task> = activas.iter().filter(|t| t.fecha > hoy).take(3).collect();
+
+    // Alerta de vencidas — siempre visible si las hay
+    if !vencidas.is_empty() {
+        println!(
+            "  {} {} — entra a Tareas para reagendar o cerrar",
+            "⚠️  Tareas vencidas:".red().bold(),
+            format!("{}", vencidas.len()).white().bold()
+        );
+        for t in vencidas.iter().take(3) {
+            println!(
+                "    ❗ {} {} · {}  [{}]",
+                t.fecha.format("%d/%m"),
+                t.hora.format("%H:%M"),
+                t.titulo,
+                t.prioridad
+            );
+        }
+        if vencidas.len() > 3 {
+            println!("    {} más…", vencidas.len() - 3);
+        }
+        println!();
+    }
+
+    // Tareas activas de hoy
+    if !tareas_hoy.is_empty() {
         println!(
             "  {} {}",
-            "📋 Tareas:".yellow().bold(),
+            "📋 Tareas hoy:".yellow().bold(),
             format!(
-                "({} hoy, {} pendientes)",
+                "({} pendiente{})",
                 tareas_hoy.len(),
-                pendientes.len()
+                if tareas_hoy.len() == 1 { "" } else { "s" }
             )
             .white()
         );
@@ -898,6 +924,22 @@ pub(crate) fn dashboard(state: &AppState) {
                 t.hora.format("%H:%M"),
                 t.titulo,
                 format!("[{}]", t.prioridad).dimmed()
+            );
+        }
+    } else if !proximas.is_empty() {
+        // No hay nada hoy, pero hay próximas → mostrar cuándo
+        println!(
+            "  {} {}",
+            "📋 Tareas:".yellow().bold(),
+            "ninguna hoy — próximas:".dimmed()
+        );
+        for t in &proximas {
+            println!(
+                "    🗓️  {} {}  ·  {}  [{}]",
+                t.fecha.format("%d/%m"),
+                t.hora.format("%H:%M"),
+                t.titulo,
+                t.prioridad
             );
         }
     }
@@ -976,18 +1018,63 @@ pub(crate) fn dashboard(state: &AppState) {
         }
     }
 
-    // Resumen rápido
-    println!();
-    println!(
-        "  📋 {} tareas  📅 {} eventos  📊 {} diagramas  ✏️ {} canvas  🧠 {} recuerdos",
-        state.tasks.tareas.len(),
-        state.agenda.eventos.len(),
-        state.diagramas.len(),
-        state.canvases.len(),
-        state.memoria.recuerdos.len(),
-    );
+    // Resumen rápido — con contexto real
+    {
+        // Tareas: activas vs vencidas
+        let n_act = activas.len();
+        let n_ven = vencidas.len();
+        let tareas_str = if n_ven > 0 {
+            format!(
+                "{} activa{}  {}",
+                n_act,
+                if n_act == 1 { "" } else { "s" },
+                format!("⚠ {} vencida{}", n_ven, if n_ven == 1 { "" } else { "s" }).red()
+            )
+        } else if n_act == 0 {
+            "sin pendientes 🎉".to_string()
+        } else {
+            format!("{} activa{}", n_act, if n_act == 1 { "" } else { "s" })
+        };
+
+        // Eventos futuros + próximo
+        let mut futuros: Vec<&omniplanner::agenda::Evento> = state
+            .agenda
+            .eventos
+            .iter()
+            .filter(|e| e.fecha >= hoy)
+            .collect();
+        futuros.sort_by_key(|e| (e.fecha, e.hora_inicio));
+        let eventos_str = if futuros.is_empty() {
+            "sin eventos futuros".to_string()
+        } else {
+            let prox = &futuros[0];
+            let titulo_corto = if prox.titulo.len() > 22 {
+                format!("{}…", &prox.titulo[..22])
+            } else {
+                prox.titulo.clone()
+            };
+            format!(
+                "{} futuro{}  ·  próx: {} \"{}\"",
+                futuros.len(),
+                if futuros.len() == 1 { "" } else { "s" },
+                prox.fecha.format("%d/%m"),
+                titulo_corto
+            )
+        };
+
+        println!();
+        println!(
+            "  📋 {}   📅 {}   📊 {}   ✏️ {}   🧠 {}",
+            tareas_str,
+            eventos_str,
+            state.diagramas.len(),
+            state.canvases.len(),
+            state.memoria.recuerdos.len(),
+        );
+    }
 
     if tareas_hoy.is_empty()
+        && vencidas.is_empty()
         && eventos_hoy.is_empty()
         && horarios.is_empty()
         && follow_ups.is_empty()
@@ -1020,8 +1107,41 @@ pub(crate) fn menu_tareas(state: &mut AppState) {
         limpiar();
         separador("📋 TAREAS");
 
-        if !state.tasks.tareas.is_empty() {
-            for t in &state.tasks.tareas {
+        let ahora = chrono::Local::now().naive_local();
+        let vencidas: Vec<&Task> = state.tasks.listar_vencidas();
+        let activas: Vec<&Task> = state.tasks.listar_activas();
+
+        // ── Alerta de vencidas ─────────────────────────────────
+        if !vencidas.is_empty() {
+            println!(
+                "  {}",
+                format!(
+                    "⚠️  {} tarea{} vencida{} — requieren atención:",
+                    vencidas.len(),
+                    if vencidas.len() == 1 { "" } else { "s" },
+                    if vencidas.len() == 1 { "" } else { "s" }
+                )
+                .red()
+                .bold()
+            );
+            for t in &vencidas {
+                println!(
+                    "    ❗ {}  {}  ·  {}",
+                    t.fecha.format("%d/%m/%Y"),
+                    t.hora.format("%H:%M"),
+                    t.titulo.bold()
+                );
+            }
+            println!();
+        }
+
+        // ── Tareas activas (futuras) ───────────────────────────
+        if activas.is_empty() && vencidas.is_empty() {
+            println!("  {}", "✨ Sin tareas pendientes".dimmed());
+        } else if activas.is_empty() {
+            println!("  {}", "(sin tareas activas futuras)".dimmed());
+        } else {
+            for t in &activas {
                 let icono = match t.estado {
                     TaskStatus::Completada => "✅",
                     TaskStatus::EnProgreso => "🔄",
@@ -1032,38 +1152,60 @@ pub(crate) fn menu_tareas(state: &mut AppState) {
                     .follow_up
                     .map(|f| format!(" 🔔{}", f.format("%d/%m %H:%M")))
                     .unwrap_or_default();
+                let dias = (NaiveDateTime::new(t.fecha, t.hora) - ahora).num_days();
+                let cuando = if dias == 0 {
+                    "hoy".green().to_string()
+                } else if dias == 1 {
+                    "mañana".yellow().to_string()
+                } else {
+                    format!("en {} días", dias)
+                };
                 println!(
-                    "  {} {} | {} {} | {} | {}{}",
+                    "  {} {} | {} {} | {} | {} · {}{}",
                     icono,
                     t.id.dimmed(),
                     t.fecha.format("%d/%m"),
                     t.hora.format("%H:%M"),
                     t.titulo,
                     t.prioridad,
+                    cuando,
                     fu,
                 );
             }
-        } else {
-            println!("  {}", "(vacío — crea tu primera tarea)".dimmed());
         }
 
-        let opciones = &[
+        println!();
+
+        // ── Opciones dinámicas ─────────────────────────────────
+        let lbl_vencidas = if vencidas.is_empty() {
+            "✅ Tareas vencidas (ninguna — todo al día)".to_string()
+        } else {
+            format!(
+                "⚠️  Tareas vencidas ({}) — reagendar o cerrar",
+                vencidas.len()
+            )
+        };
+        let opciones: Vec<&str> = vec![
             "➕ Nueva tarea",
             "✏️  Editar tarea (estado, fecha, hora, prioridad)",
             "🔔 Programar follow-up",
             "🏷️  Agregar etiqueta / recordar",
             "🗑️  Eliminar tarea",
+            lbl_vencidas.as_str(),
+            "📁 Historial (completadas / canceladas)",
             "📤 Importar / Exportar (CSV, MD, JSON, Excel, SQL)",
             "← Volver al menú",
         ];
 
-        match menu("¿Qué deseas hacer?", opciones) {
+        match menu("¿Qué deseas hacer?", &opciones) {
             Some(0) => nueva_tarea(state),
             Some(1) => editar_tarea(state),
             Some(2) => follow_up_tarea(state),
             Some(3) => recordar_tarea(state),
             Some(4) => eliminar_tarea(state),
-            Some(5) => menu_io_tareas(state),
+            Some(5) => ver_tareas_vencidas(state),
+            Some(6) => ver_historial_tareas(state),
+            Some(7) => menu_io_tareas(state),
             _ => return,
         }
     }
@@ -1380,6 +1522,203 @@ pub(crate) fn eliminar_tarea(state: &mut AppState) {
         state.tasks.tareas.remove(idx);
         println!("  {} Tarea eliminada", "✓".green());
     }
+    pausa();
+}
+
+/// Muestra las tareas cuya fecha/hora ya pasó y ofrece reagendar, completar o cancelar.
+pub(crate) fn ver_tareas_vencidas(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("⚠️  TAREAS VENCIDAS");
+
+        let ids_vencidas: Vec<String> = state
+            .tasks
+            .listar_vencidas()
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+
+        if ids_vencidas.is_empty() {
+            println!("  {}", "✅ ¡Sin tareas vencidas — todo al día!".green());
+            pausa();
+            return;
+        }
+
+        println!(
+            "  {}",
+            "Estas tareas pasaron su fecha/hora y siguen pendientes:".dimmed()
+        );
+        println!();
+
+        for id in &ids_vencidas {
+            if let Some(t) = state.tasks.buscar(id) {
+                let dias_atraso = (chrono::Local::now().date_naive() - t.fecha).num_days();
+                let atraso_str = if dias_atraso == 0 {
+                    "hoy (pasó la hora)".yellow().to_string()
+                } else if dias_atraso == 1 {
+                    "ayer".red().to_string()
+                } else {
+                    format!("hace {} días", dias_atraso).red().to_string()
+                };
+                println!(
+                    "  ❗ [{}]  {} {}  ·  {}  [{}] · {}",
+                    t.id.dimmed(),
+                    t.fecha.format("%d/%m/%Y"),
+                    t.hora.format("%H:%M"),
+                    t.titulo.bold(),
+                    t.prioridad,
+                    atraso_str
+                );
+            }
+        }
+        println!();
+
+        // Seleccionar cuál atender
+        let etiquetas: Vec<String> = ids_vencidas
+            .iter()
+            .filter_map(|id| state.tasks.buscar(id))
+            .map(|t| {
+                format!(
+                    "{} · {} {}",
+                    t.titulo,
+                    t.fecha.format("%d/%m"),
+                    t.hora.format("%H:%M")
+                )
+            })
+            .collect();
+        let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+
+        let mut opc_menu = refs;
+        opc_menu.push("← Volver");
+
+        let idx = match menu("¿Cuál tarea deseas atender?", &opc_menu) {
+            Some(i) if i < ids_vencidas.len() => i,
+            _ => return,
+        };
+
+        let id_sel = ids_vencidas[idx].clone();
+
+        // Acción sobre la tarea seleccionada
+        let t = state.tasks.buscar(&id_sel).unwrap();
+        println!();
+        println!(
+            "  {} — programada para {} {}",
+            t.titulo.bold().yellow(),
+            t.fecha.format("%d/%m/%Y"),
+            t.hora.format("%H:%M")
+        );
+        println!();
+
+        let acciones = &[
+            "📅 Reagendar (nueva fecha y hora)",
+            "✅ Ya la realicé — marcar completada",
+            "❌ Cancelar esta tarea",
+            "⏭️  Ignorar por ahora",
+        ];
+        match menu("¿Qué deseas hacer?", acciones) {
+            Some(0) => {
+                // Reagendar
+                let nueva_fecha = match pedir_fecha("Nueva fecha") {
+                    Some(f) => f,
+                    None => continue,
+                };
+                let nueva_hora = match pedir_hora("Nueva hora") {
+                    Some(h) => h,
+                    None => continue,
+                };
+                if let Some(t) = state.tasks.buscar_mut(&id_sel) {
+                    t.fecha = nueva_fecha;
+                    t.hora = nueva_hora;
+                    t.actualizado = chrono::Local::now().naive_local();
+                    println!(
+                        "  {} Reagendada para {} {}",
+                        "✓".green().bold(),
+                        nueva_fecha.format("%d/%m/%Y"),
+                        nueva_hora.format("%H:%M")
+                    );
+                }
+                pausa();
+            }
+            Some(1) => {
+                // Completar
+                if let Some(t) = state.tasks.buscar_mut(&id_sel) {
+                    t.cambiar_estado(TaskStatus::Completada);
+                }
+                let idx_tarea = state.tasks.tareas.iter().position(|t| t.id == id_sel);
+                if let Some(i) = idx_tarea {
+                    finalizar_tarea(state, i);
+                }
+            }
+            Some(2) => {
+                // Cancelar
+                if confirmar("¿Seguro que deseas cancelar esta tarea?", false) {
+                    if let Some(t) = state.tasks.buscar_mut(&id_sel) {
+                        t.cambiar_estado(TaskStatus::Cancelada);
+                        println!("  {} Tarea cancelada.", "✓".green());
+                    }
+                    pausa();
+                }
+            }
+            _ => {} // Ignorar → volver al loop (la deja como está)
+        }
+    }
+}
+
+/// Muestra el historial de tareas completadas y canceladas (sólo lectura).
+pub(crate) fn ver_historial_tareas(state: &AppState) {
+    limpiar();
+    separador("📁 HISTORIAL DE TAREAS");
+
+    let historial: Vec<&Task> = state
+        .tasks
+        .tareas
+        .iter()
+        .filter(|t| t.estado == TaskStatus::Completada || t.estado == TaskStatus::Cancelada)
+        .collect();
+
+    if historial.is_empty() {
+        println!("  {}", "(sin tareas completadas o canceladas aún)".dimmed());
+        pausa();
+        return;
+    }
+
+    let mut ordenado = historial.clone();
+    ordenado.sort_by(|a, b| b.actualizado.cmp(&a.actualizado));
+
+    println!(
+        "  {} {}",
+        "Total:".dimmed(),
+        format!("{} tarea(s)", ordenado.len()).white()
+    );
+    println!();
+
+    for t in &ordenado {
+        let icono = match t.estado {
+            TaskStatus::Completada => "✅",
+            TaskStatus::Cancelada => "❌",
+            _ => "⬜",
+        };
+        let tags = if t.etiquetas.is_empty() {
+            String::new()
+        } else {
+            format!("  🏷️  {}", t.etiquetas.join(", ").dimmed())
+        };
+        println!(
+            "  {} {} {}  ·  {}  [{}]{}",
+            icono,
+            t.fecha.format("%d/%m/%Y"),
+            t.hora.format("%H:%M"),
+            t.titulo,
+            t.prioridad,
+            tags
+        );
+        println!(
+            "       {} {}",
+            "Cerrada:".dimmed(),
+            t.actualizado.format("%d/%m/%Y %H:%M").to_string().dimmed()
+        );
+    }
+
     pausa();
 }
 

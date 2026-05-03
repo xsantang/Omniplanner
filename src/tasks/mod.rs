@@ -156,6 +156,30 @@ impl TaskManager {
             .collect()
     }
 
+    /// Tareas cuya fecha/hora ya pasó y siguen pendientes (sin completar ni cancelar).
+    pub fn listar_vencidas(&self) -> Vec<&Task> {
+        let ahora = chrono::Local::now().naive_local();
+        self.tareas
+            .iter()
+            .filter(|t| {
+                (t.estado == TaskStatus::Pendiente || t.estado == TaskStatus::EnProgreso)
+                    && NaiveDateTime::new(t.fecha, t.hora) < ahora
+            })
+            .collect()
+    }
+
+    /// Tareas pendientes cuya fecha/hora es ahora o en el futuro.
+    pub fn listar_activas(&self) -> Vec<&Task> {
+        let ahora = chrono::Local::now().naive_local();
+        self.tareas
+            .iter()
+            .filter(|t| {
+                (t.estado == TaskStatus::Pendiente || t.estado == TaskStatus::EnProgreso)
+                    && NaiveDateTime::new(t.fecha, t.hora) >= ahora
+            })
+            .collect()
+    }
+
     pub fn listar_follow_ups(&self) -> Vec<&Task> {
         self.tareas
             .iter()
