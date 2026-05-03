@@ -960,6 +960,9 @@ pub(crate) fn dashboard(state: &AppState) {
             let icono = match e.tipo {
                 TipoEvento::Cumpleanos => "🎂",
                 TipoEvento::Pago => "💰",
+                TipoEvento::FollowUp => "🔔",
+                TipoEvento::Reunion => "🤝",
+                TipoEvento::Cita => "🩺",
                 _ => "📌",
             };
             let concepto_txt = if e.concepto.is_empty() {
@@ -1445,8 +1448,85 @@ pub(crate) fn follow_up_tarea(state: &mut AppState) {
     };
     let fh = NaiveDateTime::new(fecha, hora);
 
+    // Guardar en la tarea
     state.tasks.tareas[idx].programar_follow_up(fh);
+
+    let tarea_id = state.tasks.tareas[idx].id.clone();
+    let tarea_titulo = state.tasks.tareas[idx].titulo.clone();
+    let tarea_desc = state.tasks.tareas[idx].descripcion.clone();
+    let tarea_etiquetas = state.tasks.tareas[idx].etiquetas.clone();
+
+    // ── Crear evento en la Agenda ─────────────────────────────────────────
+    let titulo_evento = format!("🔔 Follow-up: {}", tarea_titulo);
+    let mut evento = Evento::new(
+        titulo_evento.clone(),
+        if tarea_desc.is_empty() {
+            format!("Follow-up de la tarea '{}'", tarea_titulo)
+        } else {
+            tarea_desc.clone()
+        },
+        TipoEvento::FollowUp,
+        fecha,
+        hora,
+        None,
+    );
+    evento.concepto = "follow-up".to_string();
+    evento
+        .notas
+        .push(format!("Tarea origen: {} ({})", tarea_titulo, tarea_id));
+    let evento_id = evento.id.clone();
+    state.agenda.agregar_evento(evento);
+
+    // ── Crear recuerdo en Memoria ─────────────────────────────────────────
+    let mut palabras = vec![
+        "follow-up".to_string(),
+        "recordatorio".to_string(),
+        tarea_titulo.clone(),
+    ];
+    palabras.extend(tarea_etiquetas.clone());
+    let recuerdo = Recuerdo::new(
+        format!(
+            "Follow-up '{}' programado para {} {}",
+            tarea_titulo,
+            fecha.format("%d/%m/%Y"),
+            hora.format("%H:%M")
+        ),
+        palabras,
+    )
+    .con_origen("tarea", &tarea_id);
+    state.memoria.agregar_recuerdo(recuerdo);
+
+    // ── Emitir al bus de eventos ──────────────────────────────────────────
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let mut ev = BusEvento::nuevo(
+            BusModulo::Tareas,
+            BusTipo::Recordatorio,
+            titulo_evento.clone(),
+        )
+        .con_fecha(fecha)
+        .con_estado(BusEstado::Pendiente)
+        .con_referencia(BusRef::nueva(
+            "agenda",
+            "evento",
+            &evento_id,
+            &titulo_evento,
+        ))
+        .con_etiqueta("follow-up")
+        .con_etiqueta("tarea");
+        for etq in &tarea_etiquetas {
+            ev = ev.con_etiqueta(etq);
+        }
+        state.bus.emitir(ev);
+    }
+
+    println!();
     println!("  🔔 Follow-up programado: {}", fh.format("%d/%m/%Y %H:%M"));
+    println!("  {} Evento creado en la Agenda", "✓".green());
+    println!("  {} Recuerdo guardado en Memoria", "✓".green());
     pausa();
 }
 
@@ -1947,6 +2027,9 @@ pub(crate) fn menu_agenda(state: &mut AppState) {
                 let icono = match e.tipo {
                     TipoEvento::Cumpleanos => "🎂",
                     TipoEvento::Pago => "💰",
+                    TipoEvento::FollowUp => "🔔",
+                    TipoEvento::Reunion => "🤝",
+                    TipoEvento::Cita => "🩺",
                     _ => "📌",
                 };
                 println!(
@@ -2833,6 +2916,9 @@ pub(crate) fn ver_mes_detallado(state: &AppState) {
                 let icono = match e.tipo {
                     TipoEvento::Cumpleanos => "🎂",
                     TipoEvento::Pago => "💰",
+                    TipoEvento::FollowUp => "🔔",
+                    TipoEvento::Reunion => "🤝",
+                    TipoEvento::Cita => "🩺",
                     _ => "📅",
                 };
                 let recur = e.etiqueta_recurrencia();
@@ -5069,6 +5155,9 @@ pub(crate) fn buscar_memoria(state: &AppState) {
                     let icono_tipo = match e.tipo {
                         TipoEvento::Cumpleanos => "🎂",
                         TipoEvento::Pago => "💰",
+                        TipoEvento::FollowUp => "🔔",
+                        TipoEvento::Reunion => "🤝",
+                        TipoEvento::Cita => "🩺",
                         _ => "📅",
                     };
                     let detalle_futuro = if matches!(e.tipo, TipoEvento::Cumpleanos) {
@@ -5099,6 +5188,9 @@ pub(crate) fn buscar_memoria(state: &AppState) {
                     let icono_tipo = match e.tipo {
                         TipoEvento::Cumpleanos => "🎂",
                         TipoEvento::Pago => "💰",
+                        TipoEvento::FollowUp => "🔔",
+                        TipoEvento::Reunion => "🤝",
+                        TipoEvento::Cita => "🩺",
                         _ => "📅",
                     };
                     let detalle_pasado = if matches!(e.tipo, TipoEvento::Cumpleanos) {
