@@ -254,6 +254,7 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             "🔗  Vincular deudas (cuotas espejo: hipoteca ↔ escrow, etc.)",
             "🗑️   Eliminar una deuda",
             "�  Bitácora del sistema (paper trail completo)",
+            "�  Importar / Exportar pagos (CSV, MD, JSON, Excel, SQL)",
             "🔙  Volver",
         ];
 
@@ -279,6 +280,7 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             Some(18) => rastreador_gestionar_vinculos(state),
             Some(19) => rastreador_eliminar(state),
             Some(20) => rastreador_bitacora(state),
+            Some(21) => crate::cli::io_modulos::menu_io_pagos(state),
             _ => return,
         }
     }

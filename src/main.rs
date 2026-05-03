@@ -43,6 +43,7 @@ use omniplanner::sync;
 use omniplanner::tasks::{Prioridad, Task, TaskStatus};
 
 mod cli;
+use cli::io_modulos::{menu_io_agenda, menu_io_memoria, menu_io_tareas};
 use cli::rastreador::menu_asesor_rastreador;
 
 // ══════════════════════════════════════════════════════════════
@@ -1052,6 +1053,7 @@ pub(crate) fn menu_tareas(state: &mut AppState) {
             "🔔 Programar follow-up",
             "🏷️  Agregar etiqueta / recordar",
             "🗑️  Eliminar tarea",
+            "📤 Importar / Exportar (CSV, MD, JSON, Excel, SQL)",
             "← Volver al menú",
         ];
 
@@ -1061,6 +1063,7 @@ pub(crate) fn menu_tareas(state: &mut AppState) {
             Some(2) => follow_up_tarea(state),
             Some(3) => recordar_tarea(state),
             Some(4) => eliminar_tarea(state),
+            Some(5) => menu_io_tareas(state),
             _ => return,
         }
     }
@@ -1650,6 +1653,7 @@ pub(crate) fn menu_agenda(state: &mut AppState) {
             "� Calendario anual",
             "🗑️  Eliminar evento",
             "🏷️  Recordar evento",
+            "📤 Importar / Exportar (CSV, MD, JSON, Excel, SQL)",
             "← Volver al menú",
         ];
 
@@ -1659,6 +1663,7 @@ pub(crate) fn menu_agenda(state: &mut AppState) {
             Some(2) => menu_calendario(state),
             Some(3) => eliminar_evento(state),
             Some(4) => recordar_evento(state),
+            Some(5) => menu_io_agenda(state),
             _ => return,
         }
     }
@@ -3723,6 +3728,7 @@ pub(crate) fn menu_memoria(state: &mut AppState) {
             "🔗 Enlazar dos elementos",
             "🗑️  Eliminar un recuerdo",
             "🔐 Contraseñas y claves",
+            "📤 Importar / Exportar (CSV, MD, JSON, Excel, SQL)",
             "← Volver al menú",
         ];
 
@@ -3736,6 +3742,7 @@ pub(crate) fn menu_memoria(state: &mut AppState) {
             Some(6) => enlazar_elementos(state),
             Some(7) => eliminar_recuerdo(state),
             Some(8) => menu_contrasenias(state),
+            Some(9) => menu_io_memoria(state),
             _ => return,
         }
     }

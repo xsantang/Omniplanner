@@ -3,4 +3,5 @@
 //! Se van extrayendo progresivamente desde `main.rs` para reducir su tamaño
 //! y mejorar mantenibilidad sin alterar el comportamiento.
 
+pub mod io_modulos;
 pub mod rastreador;
