@@ -8027,7 +8027,6 @@ pub fn rastreador_seguimiento_plan(state: &AppState) {
 
 /// Bitácora del sistema — vista unificada del bus de eventos (paper trail).
 pub fn rastreador_bitacora(state: &mut AppState) {
-    use omniplanner::eventos::{EstadoEvento, EventoSistema};
     loop {
         limpiar();
         println!("{}", "📰 Bitácora del sistema (paper trail)".bold().cyan());
@@ -8051,85 +8050,459 @@ pub fn rastreador_bitacora(state: &mut AppState) {
             "⚠️   Pendientes",
             "🚨  Vencidos",
             "🗂️   Todos (últimos 30)",
+            "🔍  Buscar por texto",
+            "🏷️   Filtrar por módulo",
+            "🏷️   Filtrar por etiqueta",
+            "🔎  Ver detalle de un evento (y relacionados)",
+            "📤  Exportar a CSV",
+            "📤  Exportar a Markdown",
             "🔙  Volver",
         ];
-
-        let render = |evs: &[&EventoSistema]| {
-            if evs.is_empty() {
-                println!("  {} (vacío)", "·".dimmed());
-                return;
-            }
-            for ev in evs {
-                let modulo_etq = format!("[{:?}]", ev.origen);
-                let estado_col = match ev.estado {
-                    EstadoEvento::Realizado => "✓".green().to_string(),
-                    EstadoEvento::Pendiente => "⏳".yellow().to_string(),
-                    EstadoEvento::EnCurso => "▶".cyan().to_string(),
-                    EstadoEvento::Cancelado => "✗".dimmed().to_string(),
-                    EstadoEvento::Fallido => "✗".red().to_string(),
-                };
-                let monto_str = ev.monto.map(|m| format!(" ${:.2}", m)).unwrap_or_default();
-                let fecha_str = ev.fecha.format("%Y-%m-%d").to_string();
-                println!(
-                    "  {} {} {} {}{}",
-                    estado_col,
-                    fecha_str.dimmed(),
-                    modulo_etq.cyan(),
-                    ev.titulo,
-                    monto_str.bold()
-                );
-                if !ev.eventos_relacionados.is_empty() {
-                    println!(
-                        "       🔗 {} evento(s) relacionado(s)",
-                        ev.eventos_relacionados.len()
-                    );
-                }
-                if !ev.notas.is_empty() {
-                    let nota_join = ev.notas.join(" / ");
-                    println!("       · {}", nota_join.dimmed());
-                }
-            }
-        };
 
         match menu("¿Qué ver?", &opciones) {
             Some(0) => {
                 println!("{}", "── Eventos de hoy ──".bold());
                 let evs = state.bus.de_hoy();
-                render(&evs);
+                bitacora_render(&evs);
                 println!();
                 pausa();
             }
             Some(1) => {
                 println!("{}", "── Próximos 20 ──".bold());
                 let evs = state.bus.proximos(20);
-                render(&evs);
+                bitacora_render(&evs);
                 println!();
                 pausa();
             }
             Some(2) => {
                 println!("{}", "── Pendientes ──".bold());
                 let evs = state.bus.pendientes();
-                render(&evs);
+                bitacora_render(&evs);
                 println!();
                 pausa();
             }
             Some(3) => {
                 println!("{}", "── Vencidos ──".bold());
                 let evs = state.bus.vencidos();
-                render(&evs);
+                bitacora_render(&evs);
                 println!();
                 pausa();
             }
             Some(4) => {
+                use omniplanner::eventos::EventoSistema;
                 println!("{}", "── Últimos 30 ──".bold());
                 let mut todos: Vec<&EventoSistema> = state.bus.todos().iter().collect();
                 todos.sort_by(|a, b| b.creado.cmp(&a.creado));
                 let recortado: Vec<&EventoSistema> = todos.into_iter().take(30).collect();
-                render(&recortado);
+                bitacora_render(&recortado);
                 println!();
                 pausa();
             }
+            Some(5) => bitacora_buscar_texto(state),
+            Some(6) => bitacora_filtrar_modulo(state),
+            Some(7) => bitacora_filtrar_etiqueta(state),
+            Some(8) => bitacora_ver_detalle(state),
+            Some(9) => bitacora_exportar_csv(state),
+            Some(10) => bitacora_exportar_markdown(state),
             _ => return,
         }
     }
+}
+
+/// Renderiza una lista de eventos con formato uniforme.
+fn bitacora_render(evs: &[&omniplanner::eventos::EventoSistema]) {
+    use omniplanner::eventos::EstadoEvento;
+    if evs.is_empty() {
+        println!("  {} (vacío)", "·".dimmed());
+        return;
+    }
+    for ev in evs {
+        let modulo_etq = format!("[{}]", ev.origen);
+        let estado_col = match ev.estado {
+            EstadoEvento::Realizado => "✓".green().to_string(),
+            EstadoEvento::Pendiente => "⏳".yellow().to_string(),
+            EstadoEvento::EnCurso => "▶".cyan().to_string(),
+            EstadoEvento::Cancelado => "✗".dimmed().to_string(),
+            EstadoEvento::Fallido => "✗".red().to_string(),
+        };
+        let monto_str = ev.monto.map(|m| format!(" ${:.2}", m)).unwrap_or_default();
+        let fecha_str = ev.fecha.format("%Y-%m-%d").to_string();
+        println!(
+            "  {} {} {} {}{}",
+            estado_col,
+            fecha_str.dimmed(),
+            modulo_etq.cyan(),
+            ev.titulo,
+            monto_str.bold()
+        );
+        if !ev.eventos_relacionados.is_empty() {
+            println!(
+                "       🔗 {} evento(s) relacionado(s)",
+                ev.eventos_relacionados.len()
+            );
+        }
+        if !ev.notas.is_empty() {
+            let nota_join = ev.notas.join(" / ");
+            println!("       · {}", nota_join.dimmed());
+        }
+    }
+}
+
+/// Búsqueda libre en título, contraparte, descripción y notas.
+fn bitacora_buscar_texto(state: &AppState) {
+    use omniplanner::eventos::EventoSistema;
+    println!();
+    let q = match pedir_texto("Texto a buscar (mín. 2 caracteres)") {
+        Some(s) if s.trim().len() >= 2 => s.trim().to_lowercase(),
+        _ => {
+            println!("  {} Búsqueda cancelada.", "ℹ️".cyan());
+            pausa();
+            return;
+        }
+    };
+    let resultados: Vec<&EventoSistema> = state
+        .bus
+        .todos()
+        .iter()
+        .filter(|e| {
+            e.titulo.to_lowercase().contains(&q)
+                || e.descripcion.to_lowercase().contains(&q)
+                || e.contraparte.to_lowercase().contains(&q)
+                || e.notas.iter().any(|n| n.to_lowercase().contains(&q))
+                || e.etiquetas.iter().any(|t| t.to_lowercase().contains(&q))
+        })
+        .collect();
+    println!();
+    println!(
+        "{} ({} coincidencia(s))",
+        format!("── Resultados: \"{}\" ──", q).bold(),
+        resultados.len()
+    );
+    bitacora_render(&resultados);
+    println!();
+    pausa();
+}
+
+/// Filtro por módulo emisor.
+fn bitacora_filtrar_modulo(state: &AppState) {
+    use omniplanner::eventos::Modulo;
+    let modulos = [
+        Modulo::Rastreador,
+        Modulo::Presupuesto,
+        Modulo::Agenda,
+        Modulo::Tareas,
+        Modulo::Memoria,
+        Modulo::Cartera,
+        Modulo::Contactos,
+        Modulo::Facturas,
+        Modulo::Sync,
+        Modulo::Sistema,
+    ];
+    let etiquetas: Vec<String> = modulos.iter().map(|m| m.to_string()).collect();
+    let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+    let i = match menu("¿Qué módulo?", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+    let evs = state.bus.por_modulo(&modulos[i]);
+    println!();
+    println!(
+        "{}",
+        format!("── Módulo: {} ({} eventos) ──", modulos[i], evs.len()).bold()
+    );
+    bitacora_render(&evs);
+    println!();
+    pausa();
+}
+
+/// Filtro por etiqueta exacta.
+fn bitacora_filtrar_etiqueta(state: &AppState) {
+    use omniplanner::eventos::EventoSistema;
+    // Recolectar etiquetas únicas con conteo
+    let mut tally: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for ev in state.bus.todos() {
+        for t in &ev.etiquetas {
+            *tally.entry(t.clone()).or_insert(0) += 1;
+        }
+    }
+    if tally.is_empty() {
+        println!("  {} No hay etiquetas registradas todavía.", "ℹ️".cyan());
+        pausa();
+        return;
+    }
+    let etiquetas: Vec<String> = tally
+        .iter()
+        .map(|(t, c)| format!("{} ({})", t, c))
+        .collect();
+    let claves: Vec<String> = tally.keys().cloned().collect();
+    let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+    let i = match menu("¿Qué etiqueta?", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+    let etq = &claves[i];
+    let evs: Vec<&EventoSistema> = state
+        .bus
+        .todos()
+        .iter()
+        .filter(|e| e.etiquetas.iter().any(|t| t == etq))
+        .collect();
+    println!();
+    println!(
+        "{}",
+        format!("── Etiqueta: {} ({} eventos) ──", etq, evs.len()).bold()
+    );
+    bitacora_render(&evs);
+    println!();
+    pausa();
+}
+
+/// Vista detallada de un evento, navegando a sus relacionados.
+fn bitacora_ver_detalle(state: &AppState) {
+    use omniplanner::eventos::EventoSistema;
+    if state.bus.total() == 0 {
+        println!("  {} La bitácora está vacía.", "ℹ️".cyan());
+        pausa();
+        return;
+    }
+    // Mostrar últimos 30 ordenados por fecha de creación descendente para elegir
+    let mut lista: Vec<&EventoSistema> = state.bus.todos().iter().collect();
+    lista.sort_by(|a, b| b.creado.cmp(&a.creado));
+    lista.truncate(30);
+    let etiquetas: Vec<String> = lista
+        .iter()
+        .map(|e| {
+            format!(
+                "[{}] {} — {} {}",
+                e.fecha.format("%Y-%m-%d"),
+                e.origen,
+                e.titulo,
+                e.monto.map(|m| format!("${:.2}", m)).unwrap_or_default()
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+    let i = match menu("¿Qué evento?", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+    let mut id_actual = lista[i].id.clone();
+    drop(lista);
+    drop(etiquetas);
+
+    loop {
+        let ev = match state.bus.buscar(&id_actual) {
+            Some(e) => e,
+            None => return,
+        };
+        limpiar();
+        println!("{}", "🔎 Detalle del evento".bold().cyan());
+        separador("Detalle");
+        println!("  ID:           {}", ev.id.dimmed());
+        println!("  Módulo:       {}", ev.origen.to_string().cyan());
+        println!("  Tipo:         {}", ev.tipo);
+        println!("  Estado:       {}", ev.estado);
+        println!("  Título:       {}", ev.titulo.bold());
+        if !ev.descripcion.is_empty() {
+            println!("  Descripción:  {}", ev.descripcion);
+        }
+        println!(
+            "  Fecha:        {}",
+            ev.fecha.format("%Y-%m-%d").to_string().yellow()
+        );
+        println!(
+            "  Creado:       {}",
+            ev.creado.format("%Y-%m-%d %H:%M").to_string().dimmed()
+        );
+        if let Some(m) = ev.monto {
+            println!("  Monto:        {}", format!("${:.2}", m).bold().green());
+        }
+        if !ev.contraparte.is_empty() {
+            println!("  Contraparte:  {}", ev.contraparte);
+        }
+        if !ev.etiquetas.is_empty() {
+            println!("  Etiquetas:    {}", ev.etiquetas.join(", ").yellow());
+        }
+        if !ev.referencias.is_empty() {
+            println!("  Referencias:");
+            for r in &ev.referencias {
+                println!("    · {}/{}/{} → {}", r.modulo, r.tipo, r.id, r.etiqueta);
+            }
+        }
+        if !ev.adjuntos.is_empty() {
+            println!("  Adjuntos:");
+            for a in &ev.adjuntos {
+                println!("    · [{}] {} → {}", a.tipo, a.nombre, a.ruta);
+            }
+        }
+        if !ev.notas.is_empty() {
+            println!("  Notas:");
+            for n in &ev.notas {
+                println!("    · {}", n);
+            }
+        }
+        println!();
+
+        // Listar relacionados si los hay
+        if ev.eventos_relacionados.is_empty() {
+            println!("  {} Sin eventos relacionados.", "·".dimmed());
+            println!();
+            pausa();
+            return;
+        }
+
+        println!(
+            "  🔗 {} evento(s) relacionado(s):",
+            ev.eventos_relacionados.len()
+        );
+        let ids: Vec<String> = ev.eventos_relacionados.clone();
+        let mut etqs: Vec<String> = Vec::new();
+        for rid in &ids {
+            if let Some(rev) = state.bus.buscar(rid) {
+                etqs.push(format!(
+                    "[{}] {} — {}",
+                    rev.fecha.format("%Y-%m-%d"),
+                    rev.origen,
+                    rev.titulo
+                ));
+            } else {
+                etqs.push(format!("(huérfano: {})", rid));
+            }
+        }
+        let mut opcs: Vec<&str> = etqs.iter().map(|s| s.as_str()).collect();
+        opcs.push("🔙 Volver");
+        let sel = match menu("¿Navegar a cuál?", &opcs) {
+            Some(i) if i < ids.len() => i,
+            _ => return,
+        };
+        id_actual = ids[sel].clone();
+    }
+}
+
+/// Exporta todos los eventos a CSV en `~/.omniplanner/bitacora_<timestamp>.csv`.
+fn bitacora_exportar_csv(state: &AppState) {
+    use std::io::Write;
+    let dir = match dirs::home_dir() {
+        Some(h) => h.join(".omniplanner"),
+        None => {
+            println!("  {} No se pudo determinar HOME.", "✗".red());
+            pausa();
+            return;
+        }
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let path = dir.join(format!("bitacora_{}.csv", stamp));
+    let mut f = match std::fs::File::create(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("  {} No se pudo crear el archivo: {}", "✗".red(), e);
+            pausa();
+            return;
+        }
+    };
+    let _ = writeln!(
+        f,
+        "id;fecha;creado;modulo;tipo;estado;titulo;monto;contraparte;etiquetas;notas;relacionados"
+    );
+    let escape = |s: &str| s.replace('"', "''").replace(['\n', '\r', ';'], " ");
+    let mut n = 0usize;
+    for ev in state.bus.todos() {
+        let _ = writeln!(
+            f,
+            "{};{};{};{};{};{};\"{}\";{};\"{}\";\"{}\";\"{}\";{}",
+            ev.id,
+            ev.fecha.format("%Y-%m-%d"),
+            ev.creado.format("%Y-%m-%d %H:%M:%S"),
+            ev.origen,
+            ev.tipo,
+            ev.estado,
+            escape(&ev.titulo),
+            ev.monto.map(|m| format!("{:.2}", m)).unwrap_or_default(),
+            escape(&ev.contraparte),
+            escape(&ev.etiquetas.join(",")),
+            escape(&ev.notas.join(" | ")),
+            ev.eventos_relacionados.len()
+        );
+        n += 1;
+    }
+    println!();
+    println!(
+        "  {} {} eventos exportados a {}",
+        "✅".green(),
+        n,
+        path.display().to_string().cyan()
+    );
+    pausa();
+}
+
+/// Exporta todos los eventos a Markdown en `~/.omniplanner/bitacora_<timestamp>.md`.
+fn bitacora_exportar_markdown(state: &AppState) {
+    use omniplanner::eventos::EventoSistema;
+    use std::io::Write;
+    let dir = match dirs::home_dir() {
+        Some(h) => h.join(".omniplanner"),
+        None => {
+            println!("  {} No se pudo determinar HOME.", "✗".red());
+            pausa();
+            return;
+        }
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let path = dir.join(format!("bitacora_{}.md", stamp));
+    let mut f = match std::fs::File::create(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("  {} No se pudo crear el archivo: {}", "✗".red(), e);
+            pausa();
+            return;
+        }
+    };
+    let _ = writeln!(
+        f,
+        "# Bitácora del sistema — {}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M")
+    );
+    let _ = writeln!(f, "\nTotal de eventos: **{}**\n", state.bus.total());
+
+    // Agrupar por fecha descendente
+    let mut lista: Vec<&EventoSistema> = state.bus.todos().iter().collect();
+    lista.sort_by(|a, b| b.fecha.cmp(&a.fecha).then(b.creado.cmp(&a.creado)));
+    let mut fecha_actual: Option<chrono::NaiveDate> = None;
+    for ev in &lista {
+        if Some(ev.fecha) != fecha_actual {
+            let _ = writeln!(f, "\n## {}\n", ev.fecha.format("%A %Y-%m-%d"));
+            fecha_actual = Some(ev.fecha);
+        }
+        let monto = ev
+            .monto
+            .map(|m| format!(" — **${:.2}**", m))
+            .unwrap_or_default();
+        let _ = writeln!(
+            f,
+            "- [{}] **{}** {} _({})_{}",
+            ev.estado, ev.titulo, ev.origen, ev.tipo, monto
+        );
+        if !ev.contraparte.is_empty() {
+            let _ = writeln!(f, "  - Contraparte: {}", ev.contraparte);
+        }
+        if !ev.etiquetas.is_empty() {
+            let _ = writeln!(f, "  - Etiquetas: `{}`", ev.etiquetas.join("`, `"));
+        }
+        for n in &ev.notas {
+            let _ = writeln!(f, "  - 📝 {}", n);
+        }
+        if !ev.eventos_relacionados.is_empty() {
+            let _ = writeln!(f, "  - 🔗 {} relacionado(s)", ev.eventos_relacionados.len());
+        }
+    }
+    println!();
+    println!(
+        "  {} {} eventos exportados a {}",
+        "✅".green(),
+        state.bus.total(),
+        path.display().to_string().cyan()
+    );
+    pausa();
 }
