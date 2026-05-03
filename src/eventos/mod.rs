@@ -441,6 +441,30 @@ impl BusEventos {
         self.eventos.len()
     }
 
+    /// Vincula dos eventos en ambas direcciones (si no estaban ya enlazados).
+    /// Retorna true si ambos existen y la relación quedó establecida.
+    pub fn relacionar_eventos(&mut self, id_a: &str, id_b: &str) -> bool {
+        if id_a == id_b {
+            return false;
+        }
+        let exists_a = self.eventos.iter().any(|e| e.id == id_a);
+        let exists_b = self.eventos.iter().any(|e| e.id == id_b);
+        if !exists_a || !exists_b {
+            return false;
+        }
+        if let Some(ev) = self.eventos.iter_mut().find(|e| e.id == id_a) {
+            if !ev.eventos_relacionados.iter().any(|x| x == id_b) {
+                ev.eventos_relacionados.push(id_b.to_string());
+            }
+        }
+        if let Some(ev) = self.eventos.iter_mut().find(|e| e.id == id_b) {
+            if !ev.eventos_relacionados.iter().any(|x| x == id_a) {
+                ev.eventos_relacionados.push(id_a.to_string());
+            }
+        }
+        true
+    }
+
     /// Acceso de solo lectura a todos los eventos almacenados.
     pub fn todos(&self) -> &[EventoSistema] {
         &self.eventos
@@ -557,5 +581,30 @@ mod tests {
         ));
         assert!(bus.marcar_realizado(&id));
         assert_eq!(bus.buscar(&id).unwrap().estado, EstadoEvento::Realizado);
+    }
+
+    #[test]
+    fn bus_relacionar_eventos() {
+        let mut bus = BusEventos::nuevo();
+        let a = bus.emitir(EventoSistema::nuevo(
+            Modulo::Rastreador,
+            TipoEvento::PagoRealizado,
+            "A",
+        ));
+        let b = bus.emitir(EventoSistema::nuevo(
+            Modulo::Presupuesto,
+            TipoEvento::PagoRealizado,
+            "B",
+        ));
+        assert!(bus.relacionar_eventos(&a, &b));
+        assert!(bus.buscar(&a).unwrap().eventos_relacionados.contains(&b));
+        assert!(bus.buscar(&b).unwrap().eventos_relacionados.contains(&a));
+        // idempotente
+        assert!(bus.relacionar_eventos(&a, &b));
+        assert_eq!(bus.buscar(&a).unwrap().eventos_relacionados.len(), 1);
+        // ids inexistentes
+        assert!(!bus.relacionar_eventos(&a, "no-existe"));
+        // mismo id
+        assert!(!bus.relacionar_eventos(&a, &a));
     }
 }

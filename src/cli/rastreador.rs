@@ -422,6 +422,8 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
             mes
         };
 
+        let mut id_pago_bus_opt: Option<String> = None;
+
         if es_corriente {
             // Pago corriente: el saldo siempre es el monto fijo, se paga completo
             if !matches!(d.frecuencia, FrecuenciaPago::Mensual) {
@@ -570,7 +572,7 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
             let nuevo_saldo = state.asesor.rastreador.deudas[idx].saldo_actual();
             let nombre_deuda_evt = state.asesor.rastreador.deudas[idx].nombre.clone();
             // ── Emitir evento al bus central ────────────────────────────────
-            {
+            id_pago_bus_opt = Some({
                 use omniplanner::eventos::{
                     EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
                 };
@@ -598,8 +600,8 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
                 if !nota_clon.is_empty() {
                     ev = ev.con_nota(nota_clon);
                 }
-                state.bus.emitir(ev);
-            }
+                state.bus.emitir(ev)
+            });
             println!();
             if nuevo_saldo < saldo_act {
                 println!(
@@ -635,12 +637,16 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
             .map(|m| m.pago + m.pago_escrow)
             .unwrap_or(0.0);
         if let Some(mes_fmt) = crate::mes_a_yyyy_mm(&mes) {
-            crate::sincronizar_presupuesto_desde_rastreador(
+            if let Some(id_pres) = crate::sincronizar_presupuesto_desde_rastreador(
                 state,
                 &nombre_deuda,
                 &mes_fmt,
                 monto_total,
-            );
+            ) {
+                if let Some(id_pago) = &id_pago_bus_opt {
+                    state.bus.relacionar_eventos(id_pago, &id_pres);
+                }
+            }
         }
 
         pausa();
@@ -1009,7 +1015,7 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                     prog.nota.clone(),
                 );
                 // ── Emitir evento PagoRealizado (conversión programado→real) ──
-                {
+                let id_pago_bus = {
                     use omniplanner::eventos::{
                         EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
                     };
@@ -1038,16 +1044,18 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                     if !prog.nota.is_empty() {
                         ev = ev.con_nota(prog.nota.clone());
                     }
-                    state.bus.emitir(ev);
-                }
+                    state.bus.emitir(ev)
+                };
                 // Sincronizar presupuesto
                 if let Some(mes_fmt) = crate::mes_a_yyyy_mm(&mes_registro) {
-                    crate::sincronizar_presupuesto_desde_rastreador(
+                    if let Some(id_pres) = crate::sincronizar_presupuesto_desde_rastreador(
                         state,
                         &prog.nombre_deuda,
                         &mes_fmt,
                         prog.monto_total(),
-                    );
+                    ) {
+                        state.bus.relacionar_eventos(&id_pago_bus, &id_pres);
+                    }
                 }
                 let nuevo_saldo = state.asesor.rastreador.deudas[didx].saldo_actual();
                 println!(
@@ -8070,6 +8078,12 @@ pub fn rastreador_bitacora(state: &mut AppState) {
                     ev.titulo,
                     monto_str.bold()
                 );
+                if !ev.eventos_relacionados.is_empty() {
+                    println!(
+                        "       🔗 {} evento(s) relacionado(s)",
+                        ev.eventos_relacionados.len()
+                    );
+                }
                 if !ev.notas.is_empty() {
                     let nota_join = ev.notas.join(" / ");
                     println!("       · {}", nota_join.dimmed());

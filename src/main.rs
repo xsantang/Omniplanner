@@ -11219,23 +11219,47 @@ pub(crate) fn sincronizar_presupuesto_desde_rastreador(
     nombre_deuda: &str,
     mes: &str,
     monto_nuevo: f64,
-) {
+) -> Option<String> {
     let needle = nombre_deuda.to_lowercase();
     // Buscar el mes en el presupuesto
-    let Some(pres) = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes) else {
-        return;
-    };
+    let pres = state.presupuesto.meses.iter_mut().find(|m| m.mes == mes)?;
 
     // Buscar la línea cuyo nombre coincide con la deuda
-    let Some(linea) = pres.lineas.iter_mut().find(|l| {
+    let linea = pres.lineas.iter_mut().find(|l| {
         let ln = l.nombre.to_lowercase();
         ln == needle || ln.contains(&needle) || needle.contains(&ln)
-    }) else {
-        return;
-    };
+    })?;
 
     linea.monto_pagado_real = monto_nuevo;
     linea.pagado = monto_nuevo >= linea.monto * 0.95;
+    let nombre_linea = linea.nombre.clone();
+
+    // ── Emitir evento de pago en presupuesto y devolver su ID ──
+    use omniplanner::eventos::{
+        EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+        Referencia as BusRef, TipoEvento as BusTipo,
+    };
+    let fecha = chrono::NaiveDate::parse_from_str(&format!("{}-01", mes), "%Y-%m-%d")
+        .unwrap_or_else(|_| chrono::Local::now().date_naive());
+    let ev = BusEvento::nuevo(
+        BusModulo::Presupuesto,
+        BusTipo::PagoRealizado,
+        format!("Presupuesto: pago {} ({})", nombre_linea, mes),
+    )
+    .con_fecha(fecha)
+    .con_monto(monto_nuevo)
+    .con_contraparte(nombre_linea.clone())
+    .con_estado(BusEstado::Realizado)
+    .con_referencia(BusRef::nueva(
+        "presupuesto",
+        "linea",
+        &nombre_linea,
+        &nombre_linea,
+    ))
+    .con_etiqueta("pago")
+    .con_etiqueta("sincronizado")
+    .con_etiqueta(mes.to_string());
+    Some(state.bus.emitir(ev))
 }
 
 pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
