@@ -50,6 +50,8 @@ lettre = { version = "0.11", optional = true }
 open = { version = "5", optional = true }
 calamine = { version = "0.26", optional = true }
 rust_xlsxwriter = { version = "0.94.0", optional = true }
+umya_spreadsheet = { package = "umya-spreadsheet", version = "2.3.3", optional = true }
+excelstream = { version = "0.20.1", optional = true }
 
 # Android
 jni = { version = "0.21", optional = true }
@@ -75,6 +77,8 @@ desktop = [
     "dep:open",
     "dep:calamine",
     "dep:rust_xlsxwriter",
+    "dep:umya_spreadsheet",
+    "dep:excelstream",
 ]
 android = ["dep:dirs", "dep:jni"]
 web = ["dep:wasm-bindgen"]
