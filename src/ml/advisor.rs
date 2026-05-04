@@ -2516,11 +2516,99 @@ impl RastreadorDeudas {
             }
         };
 
-        // Construir ajustes efectivos = implícitos de pagos programados +
-        // ajustes explícitos del usuario (estos últimos tienen prioridad).
+        // Construir ajustes efectivos con prioridad:
+        //   Paso 1 (historial del mes corriente) → base
+        //   Paso 2 (pagos programados a futuro)  → sobrescribe paso 1 EXCEPTO
+        //           cuando paso 1 confirmó que el mes ya fue pagado efectivamente
+        //   Ajustes explícitos del usuario       → prioridad máxima
+        //
+        // Motivación: sin esta regla un pago doble de catch-up en mayo
+        // (p.ej. pagando marzo+abril sin llenar meses_cubiertos) dispara la
+        // heurística "pagó 2× → anular mayo+junio" y destruye el ajuste del
+        // pago programado de junio, dejando ambos meses en cero.
         let mut ajustes_efectivos: Vec<AjusteMensualLibertad> = Vec::new();
+        // Índices (mes_num, nombre_deuda) donde paso 1 detectó pago real en
+        // historial. Paso 2 no puede sobrescribir el idx_pago de un programado
+        // si ese mes ya fue confirmado como pagado por historial.
+        let mut meses_ya_pagados_historial: std::collections::HashSet<(usize, String)> =
+            std::collections::HashSet::new();
 
-        // Paso 2: pagos programados a futuro.
+        // ── Paso 1: historial del mes corriente ─────────────────────────
+        // Si el usuario ya pagó una deuda este mes (p.ej. mayo), el
+        // simulador no debe volver a aplicarle pago en mes 1 — sería
+        // doble cargo. Usamos saldo_actual() como punto de partida y
+        // sólo anulamos los meses que el pago realmente cubre.
+        //
+        // Regla: si `meses_cubiertos` está definido, usamos exactamente
+        // esos meses (y NO insertamos m.mes por default — puede ser un
+        // pago de catch-up para meses pasados). Si está vacío, asumimos
+        // que el pago cubre m.mes y aplicamos heurística de doble/triple
+        // cuota para meses siguientes.
+        let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
+        let avanzar_mes = |yyyy_mm: &str, n: usize| -> Option<String> {
+            let mut it = yyyy_mm.split('-');
+            let mut y: i32 = it.next()?.parse().ok()?;
+            let mut m: i32 = it.next()?.parse().ok()?;
+            m += n as i32;
+            y += (m - 1) / 12;
+            m = ((m - 1) % 12) + 1;
+            Some(format!("{:04}-{:02}", y, m))
+        };
+        for d in &self.deudas {
+            if !d.activa || d.es_pago_corriente() {
+                continue;
+            }
+            let pago_pi_ref = d.pago_pi_mensual().max(0.01);
+            let mut meses_a_anular: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for m in &d.historial {
+                if m.mes != etiqueta_mes_hoy || m.pago <= 0.01 {
+                    continue;
+                }
+                if !m.meses_cubiertos.is_empty() {
+                    // El usuario declaró explícitamente los meses cubiertos.
+                    // Sólo anulamos esos (pueden ser meses pasados: no importa,
+                    // mes_a_indice devolverá None para ellos sin efecto).
+                    // No insertamos m.mes a menos que esté en la lista —
+                    // evita anular el mes actual si el pago fue de catch-up
+                    // para meses anteriores.
+                    for cubierto in &m.meses_cubiertos {
+                        meses_a_anular.insert(cubierto.clone());
+                    }
+                } else {
+                    // Sin meses_cubiertos: asumimos que el pago es para el
+                    // mes corriente y aplicamos heurística de N cuotas.
+                    meses_a_anular.insert(m.mes.clone());
+                    let ratio = m.pago / pago_pi_ref;
+                    let n_meses = ratio.round() as i64;
+                    if n_meses >= 2 && (ratio - n_meses as f64).abs() < 0.1 {
+                        for k in 1..n_meses as usize {
+                            if let Some(etq) = avanzar_mes(&m.mes, k) {
+                                meses_a_anular.insert(etq);
+                            }
+                        }
+                    }
+                }
+            }
+            for etq in meses_a_anular {
+                if let Some(idx) = mes_a_indice(&etq) {
+                    ajustes_efectivos.retain(|x| !(x.mes == idx && x.nombre_deuda == d.nombre));
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        idx,
+                        d.nombre.clone(),
+                        0.0,
+                    ));
+                    meses_ya_pagados_historial.insert((idx, d.nombre.clone()));
+                }
+            }
+        }
+
+        // ── Paso 2: pagos programados a futuro ──────────────────────────
+        // Traduce `pagos_programados` en ajustes implícitos. Para el mes
+        // de desembolso (idx_pago): sobrescribe paso 1 SÓLO si ese mes NO
+        // fue marcado como ya-pagado por historial. Para los meses cubiertos
+        // (pago forzado=0): siempre sobrescribe (el resultado es 0 de todos
+        // modos, pero dedup evita entradas duplicadas).
         for pp in &self.pagos_programados {
             let aplica_a_deuda_real = self.deudas.iter().any(|d| {
                 d.nombre == pp.nombre_deuda
@@ -2544,89 +2632,29 @@ impl RastreadorDeudas {
                 .or_else(|| indices_cubiertos.first().copied());
             let Some(idx_pago) = idx_pago else { continue };
 
-            // Mes en que se desembolsa: pago forzado = monto P&I planeado.
-            ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
-                idx_pago,
-                pp.nombre_deuda.clone(),
-                pp.monto_pi.max(0.0),
-            ));
+            // Mes de desembolso: sólo sobrescribe si paso 1 NO lo marcó
+            // como ya-pagado en historial (lo cual significaría doble cargo).
+            if !meses_ya_pagados_historial.contains(&(idx_pago, pp.nombre_deuda.clone())) {
+                ajustes_efectivos
+                    .retain(|x| !(x.mes == idx_pago && x.nombre_deuda == pp.nombre_deuda));
+                ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                    idx_pago,
+                    pp.nombre_deuda.clone(),
+                    pp.monto_pi.max(0.0),
+                ));
+            }
 
-            // Demás meses cubiertos por el mismo pago: pago forzado = 0,
-            // porque ya quedaron pagados por adelantado.
+            // Meses cubiertos distintos al de pago: pago forzado = 0.
             for &idx in &indices_cubiertos {
                 if idx == idx_pago {
                     continue;
                 }
+                ajustes_efectivos.retain(|x| !(x.mes == idx && x.nombre_deuda == pp.nombre_deuda));
                 ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
                     idx,
                     pp.nombre_deuda.clone(),
                     0.0,
                 ));
-            }
-        }
-
-        // Paso 1: deudas que ya tienen pago registrado en el historial del
-        // mes corriente. saldo_actual() ya refleja esos pagos, por lo que
-        // el mes 1 de la simulación NO debe volver a aplicar pago a esas
-        // deudas (sería un doble pago en el mismo mes calendario).
-        //
-        // Si el MesPago declara `meses_cubiertos`, lo respetamos. Si está
-        // vacío pero el monto pagado equivale a N veces el pago mensual
-        // estándar (ej: hipoteca pagada doble que cubre mayo+junio aunque
-        // el usuario no haya completado el campo opcional), deducimos N y
-        // anulamos esos meses futuros también.
-        //
-        // Se aplica DESPUÉS del paso 2 para sobrescribir cualquier pago
-        // programado vigente para el mes corriente que ya fue ejecutado.
-        let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
-        let avanzar_mes = |yyyy_mm: &str, n: usize| -> Option<String> {
-            let mut it = yyyy_mm.split('-');
-            let mut y: i32 = it.next()?.parse().ok()?;
-            let mut m: i32 = it.next()?.parse().ok()?;
-            m += n as i32;
-            y += (m - 1) / 12;
-            m = ((m - 1) % 12) + 1;
-            Some(format!("{:04}-{:02}", y, m))
-        };
-        for d in &self.deudas {
-            if !d.activa || d.es_pago_corriente() {
-                continue;
-            }
-            let pago_pi_ref = d.pago_pi_mensual().max(0.01);
-            let mut meses_a_anular: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
-            for m in &d.historial {
-                if m.mes != etiqueta_mes_hoy || m.pago <= 0.01 {
-                    continue;
-                }
-                meses_a_anular.insert(m.mes.clone());
-                if !m.meses_cubiertos.is_empty() {
-                    for cubierto in &m.meses_cubiertos {
-                        meses_a_anular.insert(cubierto.clone());
-                    }
-                } else {
-                    // Inferir n_meses por monto: pagó ≈ N × pago_pi mensual.
-                    // Usamos round con tolerancia de 5% del pago mensual.
-                    let ratio = m.pago / pago_pi_ref;
-                    let n_meses = ratio.round() as i64;
-                    if n_meses >= 2 && (ratio - n_meses as f64).abs() < 0.1 {
-                        for k in 1..n_meses as usize {
-                            if let Some(etq) = avanzar_mes(&m.mes, k) {
-                                meses_a_anular.insert(etq);
-                            }
-                        }
-                    }
-                }
-            }
-            for etq in meses_a_anular {
-                if let Some(idx) = mes_a_indice(&etq) {
-                    ajustes_efectivos.retain(|x| !(x.mes == idx && x.nombre_deuda == d.nombre));
-                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
-                        idx,
-                        d.nombre.clone(),
-                        0.0,
-                    ));
-                }
             }
         }
 
