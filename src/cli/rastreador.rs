@@ -912,14 +912,24 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                     };
                     format!("{}-{:02}", y, m)
                 };
-                let fecha_pago = pedir_texto_opcional(&format!(
-                    "¿En qué mes harás el pago? (vacío={})",
-                    hoy_sig
-                ));
-                let fecha_pago = if fecha_pago.is_empty() {
-                    hoy_sig
-                } else {
-                    fecha_pago
+                let fecha_pago = loop {
+                    let raw = pedir_texto_opcional(&format!(
+                        "¿En qué mes harás el pago? (vacío={})",
+                        hoy_sig
+                    ));
+                    let candidate = if raw.is_empty() { hoy_sig.clone() } else { raw };
+                    let partes: Vec<&str> = candidate.splitn(2, '-').collect();
+                    let ok = partes.len() == 2
+                        && partes[0].len() == 4
+                        && partes[0].chars().all(|c| c.is_ascii_digit())
+                        && partes[1]
+                            .parse::<u32>()
+                            .is_ok_and(|m| (1..=12).contains(&m));
+                    if ok {
+                        break candidate;
+                    }
+                    println!("  ⚠️  Formato inválido. Usa YYYY-MM (ej: 2026-06).");
+                    println!("     Si cubre varios meses, anótalos en 'Meses cubiertos'.");
                 };
                 let nota = pedir_texto_opcional("Nota (vacío=ninguna)");
 
@@ -5996,6 +6006,13 @@ fn editor_plan_libertad(
             }
             Some(6) => {
                 // Inyectar pagos programados al plan
+                let fn_fecha_valida = |s: &str| -> bool {
+                    let p: Vec<&str> = s.splitn(2, '-').collect();
+                    p.len() == 2
+                        && p[0].len() == 4
+                        && p[0].chars().all(|c| c.is_ascii_digit())
+                        && p[1].parse::<u32>().is_ok_and(|m| (1..=12).contains(&m))
+                };
                 let programados: Vec<&omniplanner::ml::PagoProgramado> = rastreador
                     .pagos_programados
                     .iter()
@@ -6018,6 +6035,29 @@ fn editor_plan_libertad(
                     );
                     pausa();
                     continue;
+                }
+
+                // Advertir sobre pagos con fecha inválida
+                let invalidos: Vec<&omniplanner::ml::PagoProgramado> = programados
+                    .iter()
+                    .filter(|pp| !fn_fecha_valida(&pp.fecha_pago_prevista))
+                    .copied()
+                    .collect();
+                if !invalidos.is_empty() {
+                    println!();
+                    println!(
+                        "  {} {} pago(s) tienen fecha inválida y serán ignorados:",
+                        "⚠️".yellow().bold(),
+                        invalidos.len()
+                    );
+                    for pp in &invalidos {
+                        println!(
+                            "    • {} → fecha: {:?}",
+                            pp.nombre_deuda.yellow(),
+                            pp.fecha_pago_prevista
+                        );
+                        println!("      Elimina y vuelve a crear ese pago con formato YYYY-MM.");
+                    }
                 }
 
                 println!();
@@ -6068,6 +6108,10 @@ fn editor_plan_libertad(
                 let ajustes_antes = ajustes.clone();
                 let mut inyectados = 0usize;
                 for pp in &programados {
+                    // Saltar entradas con fecha inválida
+                    if !fn_fecha_valida(&pp.fecha_pago_prevista) {
+                        continue;
+                    }
                     // Mes de desembolso → monto real
                     let fecha = &pp.fecha_pago_prevista;
                     ajustes.retain(|a| !(a.mes == *fecha && a.nombre_deuda == pp.nombre_deuda));
