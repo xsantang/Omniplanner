@@ -6065,6 +6065,7 @@ fn editor_plan_libertad(
                     continue;
                 }
 
+                let ajustes_antes = ajustes.clone();
                 let mut inyectados = 0usize;
                 for pp in &programados {
                     // Mes de desembolso → monto real
@@ -6101,16 +6102,37 @@ fn editor_plan_libertad(
                     }
                 }
 
-                sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
-                ediciones += 1;
-                dirty = true;
-                println!();
-                println!(
-                    "  {} {} ajuste(s) inyectados desde {} pago(s) programado(s).",
-                    "✅".green().bold(),
-                    inyectados,
-                    programados.len()
-                );
+                // Detectar si los ajustes realmente cambiaron
+                let hubo_cambio = {
+                    let mut antes = ajustes_antes.clone();
+                    let mut despues = ajustes.clone();
+                    antes.sort_by(|a, b| {
+                        a.mes.cmp(&b.mes).then(a.nombre_deuda.cmp(&b.nombre_deuda))
+                    });
+                    despues.sort_by(|a, b| {
+                        a.mes.cmp(&b.mes).then(a.nombre_deuda.cmp(&b.nombre_deuda))
+                    });
+                    antes != despues
+                };
+
+                if hubo_cambio {
+                    sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
+                    ediciones += 1;
+                    dirty = true;
+                    println!();
+                    println!(
+                        "  {} {} ajuste(s) inyectados desde {} pago(s) programado(s).",
+                        "✅".green().bold(),
+                        inyectados,
+                        programados.len()
+                    );
+                } else {
+                    println!();
+                    println!(
+                        "  {} El plan ya tenía estos ajustes. Sin cambios.",
+                        "ℹ️".cyan()
+                    );
+                }
                 pausa();
             }
             Some(7) => {
