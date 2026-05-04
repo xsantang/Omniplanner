@@ -6092,10 +6092,11 @@ fn editor_plan_libertad(
                     );
                 }
                 println!();
-                println!("  Se crearán ajustes explícitos para cada mes de pago (con el monto)");
+                println!("  Reglas de inyección:");
                 println!(
-                    "  y $0 para los meses cubiertos adicionales (ya pagados por adelantado)."
+                    "  • Sin meses cubiertos → se fija el monto en el plan (pago del presupuesto)."
                 );
+                println!("  • Con meses cubiertos → todos esos meses quedan en $0 (pagado desde ahorros).");
                 println!("  Los ajustes existentes para esos meses/deudas serán reemplazados.");
                 println!();
 
@@ -6112,37 +6113,36 @@ fn editor_plan_libertad(
                     if !fn_fecha_valida(&pp.fecha_pago_prevista) {
                         continue;
                     }
-                    // Mes de desembolso → monto real
-                    let fecha = &pp.fecha_pago_prevista;
-                    ajustes.retain(|a| !(a.mes == *fecha && a.nombre_deuda == pp.nombre_deuda));
-                    ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
-                        fecha.clone(),
-                        pp.nombre_deuda.clone(),
-                        pp.monto_pi.max(0.0),
-                    ));
-                    inyectados += 1;
-                    // Meses cubiertos adicionales → $0
-                    for cubierto in &pp.meses_cubiertos {
-                        if cubierto == fecha {
-                            continue;
-                        }
-                        // No zerear si ese mes tiene su propio pago programado
-                        let tiene_propio = rastreador.pagos_programados.iter().any(|p2| {
-                            p2.nombre_deuda == pp.nombre_deuda
-                                && &p2.fecha_pago_prevista == cubierto
-                                && p2.monto_pi > 0.0
-                        });
-                        if tiene_propio {
-                            continue;
-                        }
-                        ajustes
-                            .retain(|a| !(a.mes == *cubierto && a.nombre_deuda == pp.nombre_deuda));
+                    if pp.meses_cubiertos.is_empty() {
+                        // Pago normal del mes desde el presupuesto → fijar monto en plan
+                        let fecha = &pp.fecha_pago_prevista;
+                        ajustes.retain(|a| !(a.mes == *fecha && a.nombre_deuda == pp.nombre_deuda));
                         ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
-                            cubierto.clone(),
+                            fecha.clone(),
                             pp.nombre_deuda.clone(),
-                            0.0,
+                            pp.monto_pi.max(0.0),
                         ));
                         inyectados += 1;
+                    } else {
+                        // Pre-pago que cubre varios meses (pagado fuera del presupuesto,
+                        // ej. desde ahorros). Todos los meses cubiertos → $0 en el plan.
+                        let mut todos_meses = pp.meses_cubiertos.clone();
+                        if !todos_meses.contains(&pp.fecha_pago_prevista) {
+                            todos_meses.push(pp.fecha_pago_prevista.clone());
+                        }
+                        for mes in &todos_meses {
+                            if !fn_fecha_valida(mes) {
+                                continue;
+                            }
+                            ajustes
+                                .retain(|a| !(a.mes == *mes && a.nombre_deuda == pp.nombre_deuda));
+                            ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
+                                mes.clone(),
+                                pp.nombre_deuda.clone(),
+                                0.0,
+                            ));
+                            inyectados += 1;
+                        }
                     }
                 }
 
