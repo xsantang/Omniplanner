@@ -5942,6 +5942,7 @@ fn editor_plan_libertad(
                 "↔️  Mover recursos entre deudas en un mes",
                 "📌 Fijar pago a una deuda en un mes",
                 "⏩ Acumular cuotas en un mes (con cobertura sugerida)",
+                "💉 Inyectar pagos programados al plan",
                 "🧹 Quitar todos los ajustes manuales",
                 "🆚 Comparar contra plan automático original",
                 "💾 Guardar borrador y salir (se reanuda luego)",
@@ -5994,6 +5995,125 @@ fn editor_plan_libertad(
                 }
             }
             Some(6) => {
+                // Inyectar pagos programados al plan
+                let programados: Vec<&omniplanner::ml::PagoProgramado> = rastreador
+                    .pagos_programados
+                    .iter()
+                    .filter(|pp| {
+                        // Solo los que aplican a una deuda activa con saldo
+                        rastreador.deudas.iter().any(|d| {
+                            d.nombre == pp.nombre_deuda
+                                && d.activa
+                                && !d.es_pago_corriente()
+                                && d.saldo_actual() > 0.01
+                        })
+                    })
+                    .collect();
+
+                if programados.is_empty() {
+                    println!();
+                    println!(
+                        "  {} No hay pagos programados para deudas activas.",
+                        "ℹ️".cyan()
+                    );
+                    pausa();
+                    continue;
+                }
+
+                println!();
+                println!(
+                    "  {} pagos programados disponibles para inyectar:",
+                    programados.len()
+                );
+                println!();
+                println!(
+                    "  {:<28} {:<12} {:>10}  Meses cubiertos",
+                    "Deuda".bold(),
+                    "Mes pago".bold(),
+                    "Monto P&I".bold()
+                );
+                println!("  {}", "─".repeat(70));
+                for pp in &programados {
+                    let cubiertos = if pp.meses_cubiertos.is_empty() {
+                        pp.fecha_pago_prevista.clone()
+                    } else {
+                        pp.meses_cubiertos
+                            .iter()
+                            .map(|m| mes_corto(m))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    println!(
+                        "  {:<28} {:<12} {:>10.2}  {}",
+                        truncar(&pp.nombre_deuda, 28),
+                        mes_corto(&pp.fecha_pago_prevista),
+                        pp.monto_pi,
+                        cubiertos
+                    );
+                }
+                println!();
+                println!("  Se crearán ajustes explícitos para cada mes de pago (con el monto)");
+                println!(
+                    "  y $0 para los meses cubiertos adicionales (ya pagados por adelantado)."
+                );
+                println!("  Los ajustes existentes para esos meses/deudas serán reemplazados.");
+                println!();
+
+                if !confirmar("¿Inyectar estos pagos programados al plan?", true) {
+                    println!("  Cancelado.");
+                    pausa();
+                    continue;
+                }
+
+                let mut inyectados = 0usize;
+                for pp in &programados {
+                    // Mes de desembolso → monto real
+                    let fecha = &pp.fecha_pago_prevista;
+                    ajustes.retain(|a| !(a.mes == *fecha && a.nombre_deuda == pp.nombre_deuda));
+                    ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
+                        fecha.clone(),
+                        pp.nombre_deuda.clone(),
+                        pp.monto_pi.max(0.0),
+                    ));
+                    inyectados += 1;
+                    // Meses cubiertos adicionales → $0
+                    for cubierto in &pp.meses_cubiertos {
+                        if cubierto == fecha {
+                            continue;
+                        }
+                        // No zerear si ese mes tiene su propio pago programado
+                        let tiene_propio = rastreador.pagos_programados.iter().any(|p2| {
+                            p2.nombre_deuda == pp.nombre_deuda
+                                && &p2.fecha_pago_prevista == cubierto
+                                && p2.monto_pi > 0.0
+                        });
+                        if tiene_propio {
+                            continue;
+                        }
+                        ajustes
+                            .retain(|a| !(a.mes == *cubierto && a.nombre_deuda == pp.nombre_deuda));
+                        ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
+                            cubierto.clone(),
+                            pp.nombre_deuda.clone(),
+                            0.0,
+                        ));
+                        inyectados += 1;
+                    }
+                }
+
+                sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
+                ediciones += 1;
+                dirty = true;
+                println!();
+                println!(
+                    "  {} {} ajuste(s) inyectados desde {} pago(s) programado(s).",
+                    "✅".green().bold(),
+                    inyectados,
+                    programados.len()
+                );
+                pausa();
+            }
+            Some(7) => {
                 if !ajustes.is_empty() && confirmar("¿Eliminar todos los ajustes manuales?", false)
                 {
                     ajustes.clear();
@@ -6004,8 +6124,8 @@ fn editor_plan_libertad(
                     pausa();
                 }
             }
-            Some(7) => mostrar_comparacion_planes(&base_snapshot, &sim),
-            Some(8) => {
+            Some(8) => mostrar_comparacion_planes(&base_snapshot, &sim),
+            Some(9) => {
                 // Guardar borrador y salir
                 // Preservar mes_inicio si ya existía (no resetear el origen del plan)
                 let mes_inicio_actual = state
@@ -6032,7 +6152,7 @@ fn editor_plan_libertad(
                 pausa();
                 return SalidaEditorPlan::BorradorGuardado;
             }
-            Some(9) => {
+            Some(10) => {
                 // Exportar y cerrar
                 match exportar_simulacion_excel(&sim, nombres_deudas) {
                     Ok(ruta) => {
@@ -6058,7 +6178,7 @@ fn editor_plan_libertad(
                     }
                 }
             }
-            Some(10) => {
+            Some(11) => {
                 if dirty || !ajustes.is_empty() {
                     println!();
                     println!(
