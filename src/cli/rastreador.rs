@@ -472,55 +472,70 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
             let pago_pi_ref = d.pago_pi_mensual();
             let tiene_escrow = d.tiene_escrow_configurado();
             let escrow_ref = d.escrow_mensual;
+
+            // ── Paso 1: ¿qué meses cubre este pago? ─────────────────────────
+            // Preguntamos PRIMERO los meses cubiertos. Eso permite calcular
+            // automáticamente el monto sugerido como N × cuota mensual y
+            // garantiza que MesPago.meses_cubiertos quede siempre lleno
+            // (la simulación de libertad financiera depende de ese dato).
+            println!();
+            println!(
+                "  {} ¿Qué meses cubre este pago? Separa con coma para varios.",
+                "📅".cyan()
+            );
+            println!(
+                "  Ej: '{0}' (un mes), '{0},2026-06' (dos meses), Enter = solo {0}.",
+                mes
+            );
+            let cubiertos_raw = pedir_texto_opcional(&format!("Meses cubiertos (vacío={})", mes));
+            let meses_cubiertos: Vec<String> = if cubiertos_raw.is_empty() {
+                vec![mes.clone()]
+            } else {
+                let mut v: Vec<String> = cubiertos_raw
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if v.is_empty() {
+                    v.push(mes.clone());
+                }
+                v
+            };
+            let n_meses = meses_cubiertos.len().max(1) as f64;
+
+            let pi_sugerido = (pago_exigible_pi.max(pago_pi_ref)) * n_meses;
+            let escrow_sugerido = (pago_exigible_escrow.max(escrow_ref)) * n_meses;
+
             let pago = if tiene_escrow {
                 pedir_f64(
                     &format!(
-                        "Pago P&I realizado (${:.2} exigible)",
-                        pago_exigible_pi.max(pago_pi_ref)
+                        "Pago P&I realizado (${:.2} sugerido = {} × ${:.2})",
+                        pi_sugerido, n_meses as u32, pago_pi_ref
                     ),
-                    pago_exigible_pi.max(pago_pi_ref),
+                    pi_sugerido,
                 )
             } else {
                 pedir_f64(
                     &format!(
-                        "Pago realizado (${:.2} exigible)",
-                        pago_exigible_pi.max(pago_pi_ref)
+                        "Pago realizado (${:.2} sugerido = {} × ${:.2})",
+                        pi_sugerido, n_meses as u32, pago_pi_ref
                     ),
-                    pago_exigible_pi.max(pago_pi_ref),
+                    pi_sugerido,
                 )
             };
             let pago_escrow = if tiene_escrow {
                 pedir_f64(
                     &format!(
-                        "Pago Escrow realizado (${:.2} exigible)",
-                        pago_exigible_escrow.max(escrow_ref)
+                        "Pago Escrow realizado (${:.2} sugerido = {} × ${:.2})",
+                        escrow_sugerido, n_meses as u32, escrow_ref
                     ),
-                    pago_exigible_escrow.max(escrow_ref),
+                    escrow_sugerido,
                 )
             } else {
                 0.0
             };
             let cargos = pedir_f64("Nuevos cargos/compras ($)", 0.0);
 
-            // ── ¿Qué meses cubre este pago? ─────────────────────────────────
-            println!();
-            println!(
-                "  {} ¿Este pago cubre más de un mes? (doble pago, atraso, etc.)",
-                "📅".cyan()
-            );
-            println!("  Escribe los meses que cubre separados por coma, ej: 2026-05,2026-06");
-            println!("  Vacío = solo el mes {} (normal)", mes);
-            let cubiertos_raw =
-                pedir_texto_opcional(&format!("Meses cubiertos (vacío=solo {})", mes));
-            let meses_cubiertos: Vec<String> = if cubiertos_raw.is_empty() {
-                vec![]
-            } else {
-                cubiertos_raw
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            };
             let nota = pedir_texto_opcional("Nota (vacío=ninguna)");
             // Análisis de ahorro: si el usuario paga más que el exigible, mostrar
             // cuánto ahorra en esta deuda y si otra deuda le daría mayor ahorro
