@@ -922,6 +922,32 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                     fecha_pago
                 };
                 let nota = pedir_texto_opcional("Nota (vacío=ninguna)");
+
+                // ── Resumen y confirmación ──────────────────────────────
+                println!();
+                println!("  ── Resumen del pago programado ──────────────────");
+                println!(
+                    "  Deuda:         {}",
+                    state.asesor.rastreador.deudas[idx].nombre.cyan().bold()
+                );
+                println!("  Monto P&I:     ${:.2}", monto_pi);
+                if monto_escrow > 0.01 {
+                    println!("  Escrow:        ${:.2}", monto_escrow);
+                }
+                println!("  Mes del pago:  {}", fecha_pago.cyan());
+                if !meses_cubiertos.is_empty() {
+                    println!("  Meses cubiertos: {}", meses_cubiertos.join(", "));
+                }
+                if !nota.is_empty() {
+                    println!("  Nota:          {}", nota);
+                }
+                println!();
+                if !confirmar("¿Confirmar este pago programado?", true) {
+                    println!("  Cancelado.");
+                    pausa();
+                    continue;
+                }
+
                 let nombre_deuda = state.asesor.rastreador.deudas[idx].nombre.clone();
                 let meses_clon = meses_cubiertos.clone();
                 let nota_clon = nota.clone();
