@@ -2565,13 +2565,23 @@ impl RastreadorDeudas {
                         meses_a_anular.insert(cubierto.clone());
                     }
                 } else {
-                    meses_a_anular.insert(m.mes.clone());
-                    let ratio = m.pago / pago_pi_ref;
-                    let n_meses = ratio.round() as i64;
-                    if n_meses >= 2 && (ratio - n_meses as f64).abs() < 0.1 {
-                        for k in 1..n_meses as usize {
-                            if let Some(etq) = avanzar_mes(&m.mes, k) {
-                                meses_a_anular.insert(etq);
+                    // Para deudas OBLIGATORIAS (hipotecas/préstamos inamovibles) NO
+                    // aplicamos la heurística de "pagó 2×→ anular mes siguiente".
+                    // Un pago doble en una hipoteca es catch-up de meses PASADOS,
+                    // nunca pre-pago de meses futuros. Sin meses_cubiertos explícitos
+                    // no tocamos ningún mes futuro de una deuda obligatoria.
+                    if d.obligatoria {
+                        // Nada que anular: el usuario debe usar meses_cubiertos o
+                        // pago_programado para declarar meses que cubre.
+                    } else {
+                        meses_a_anular.insert(m.mes.clone());
+                        let ratio = m.pago / pago_pi_ref;
+                        let n_meses = ratio.round() as i64;
+                        if n_meses >= 2 && (ratio - n_meses as f64).abs() < 0.1 {
+                            for k in 1..n_meses as usize {
+                                if let Some(etq) = avanzar_mes(&m.mes, k) {
+                                    meses_a_anular.insert(etq);
+                                }
                             }
                         }
                     }
