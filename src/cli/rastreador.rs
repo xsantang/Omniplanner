@@ -7360,7 +7360,16 @@ fn mostrar_tabla_plan_libertad(sim: &SimulacionLibertad) {
                     print!(" {:>11.2}", pago);
                 }
             }
-            print!(" {:>10.2}", total);
+            // Colorear Total según si excede el presupuesto efectivo del mes.
+            // sobrante < 0 → el usuario necesita fondos extra (ahorros/escrow).
+            let total_fmt = format!("{:>10.2}", total);
+            if mes.sobrante < -0.01 {
+                print!(" {}", total_fmt.red());
+            } else if total > mes.presupuesto_efectivo * 0.97 {
+                print!(" {}", total_fmt.yellow());
+            } else {
+                print!(" {}", total_fmt);
+            }
             if !mes.liquidadas_este_mes.is_empty() {
                 print!("  {} {}", "✅".green(), mes.liquidadas_este_mes.join(", "));
             }

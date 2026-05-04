@@ -2779,7 +2779,10 @@ impl RastreadorDeudas {
                     None => continue,
                 };
                 let saldo = deudas[idx].saldo;
-                let pago = (*pago_aj).max(0.0).min(saldo).min(disponible);
+                // Los pagos forzados (programados o manuales) se muestran íntegros:
+                // no se recortan al disponible. El usuario ya decidió ese monto y puede
+                // cubrir el exceso con ahorros/escrow. El sobrante puede quedar negativo.
+                let pago = (*pago_aj).max(0.0).min(saldo);
                 disponible -= pago;
                 pagos_mes.push((deudas[idx].nombre.clone(), pago));
                 deudas_con_ajuste.insert(deudas[idx].nombre.clone());
@@ -2831,7 +2834,9 @@ impl RastreadorDeudas {
                 for i in indices {
                     let d = &deudas[i];
                     let minimo = d.pago_minimo.min(d.saldo);
-                    let pago = minimo.min(disponible);
+                    // Si disponible < 0 (pagos forzados excedieron el presupuesto),
+                    // los mínimos reciben $0. No restar un número negativo (se sumaría).
+                    let pago = minimo.min(disponible.max(0.0));
                     disponible -= pago;
                     let faltante = (minimo - pago).max(0.0);
                     if faltante > 0.01 {
@@ -3024,7 +3029,9 @@ impl RastreadorDeudas {
                 deuda_total,
                 liquidadas_este_mes,
                 presupuesto_efectivo: presupuesto_deudas,
-                sobrante: disponible.max(0.0),
+                // sobrante negativo = mes con pagos forzados que exceden el presupuesto.
+                // El display lo colorea en rojo para alertar al usuario.
+                sobrante: disponible,
                 liberado_de_liquidadas: liberado,
                 minimos_no_cubiertos: minimos_no_cubiertos_mes,
                 deudas_descubiertas: deudas_descubiertas_mes,
@@ -4359,18 +4366,26 @@ mod tests {
     }
 
     #[test]
-    fn ajuste_manual_redistribuye_cuando_sobra() {
+    fn ajuste_manual_muestra_monto_completo() {
         let r = rastreador_con_dos_tarjetas();
         let hoy = Local::now().date_naive();
         let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
-        // Forzar Visa a un pago ENORME acotado por saldo y presupuesto.
+        // Forzar Visa a un pago MAYOR que el presupuesto. Debe mostrarse íntegro
+        // (acotado solo por el saldo, no por el presupuesto disponible).
         let ajustes = vec![AjusteMensualLibertad::nuevo(&mes_hoy, "Visa", 10_000.0)];
         let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let mes1 = &sim.meses[0];
         let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
-        // El pago a Visa está acotado por el presupuesto disponible (≤ 200).
-        assert!(pago_visa <= 200.0 + 0.01);
-        assert!(mes1.sobrante >= 0.0);
+        // El saldo de Visa en rastreador_con_dos_tarjetas es finito → acotado por saldo.
+        let saldo_visa = r
+            .deudas
+            .iter()
+            .find(|d| d.nombre == "Visa")
+            .unwrap()
+            .saldo_actual();
+        assert!((pago_visa - saldo_visa.min(10_000.0)).abs() < 0.02);
+        // Sobrante negativo porque el pago excede el presupuesto de 200.
+        assert!(mes1.sobrante < 0.0);
     }
 
     #[test]
