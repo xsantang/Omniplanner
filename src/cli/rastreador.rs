@@ -6152,8 +6152,9 @@ fn mover_recursos_entre_deudas(
         }
     };
     let mes_data = &sim.meses[mes - 1];
+    let mes_yyyy = mes_data.mes_yyyy_mm.clone();
     println!();
-    println!("  Pagos en el mes {}:", mes);
+    println!("  Pagos en el mes {} ({}):", mes, mes_yyyy);
     let mut nombres: Vec<String> = Vec::new();
     for (i, (nombre, pago)) in mes_data.pagos.iter().enumerate() {
         println!("    {}. {:<20} ${:.2}", i + 1, nombre, pago);
@@ -6203,11 +6204,11 @@ fn mover_recursos_entre_deudas(
         return false;
     }
     // Traducir a dos ajustes: fijar origen = pago-monto, fijar destino = pago+monto.
-    reemplazar_ajuste(ajustes, mes, origen, (pago_origen - monto).max(0.0));
-    reemplazar_ajuste(ajustes, mes, destino, pago_destino + monto);
+    reemplazar_ajuste(ajustes, &mes_yyyy, origen, (pago_origen - monto).max(0.0));
+    reemplazar_ajuste(ajustes, &mes_yyyy, destino, pago_destino + monto);
     println!(
-        "  ✓ Movidos ${:.2} de '{}' → '{}' en el mes {}.",
-        monto, origen, destino, mes
+        "  ✓ Movidos ${:.2} de '{}' → '{}' en el mes {} ({}).",
+        monto, origen, destino, mes, mes_yyyy
     );
     pausa();
     true
@@ -6241,8 +6242,9 @@ fn fijar_pago_en_mes(
         }
     };
     let mes_data = &sim.meses[mes - 1];
+    let mes_yyyy = mes_data.mes_yyyy_mm.clone();
     println!();
-    println!("  Pagos actuales en el mes {}:", mes);
+    println!("  Pagos actuales en el mes {} ({}):", mes, mes_yyyy);
     let mut nombres: Vec<String> = Vec::new();
     for (i, (nombre, pago)) in mes_data.pagos.iter().enumerate() {
         println!("    {}. {:<20} ${:.2}", i + 1, nombre, pago);
@@ -6316,8 +6318,11 @@ fn fijar_pago_en_mes(
         }
     }
 
-    reemplazar_ajuste(ajustes, mes, nombre, nuevo);
-    println!("  ✓ Fijado '{}' = ${:.2} en el mes {}.", nombre, nuevo, mes);
+    reemplazar_ajuste(ajustes, &mes_yyyy, nombre, nuevo);
+    println!(
+        "  ✓ Fijado '{}' = ${:.2} en el mes {} ({}).",
+        nombre, nuevo, mes, mes_yyyy
+    );
     pausa();
     true
 }
@@ -6371,8 +6376,9 @@ fn acumular_pagos_deuda(
     };
 
     let mes_data = &sim.meses[mes - 1];
+    let mes_yyyy = mes_data.mes_yyyy_mm.clone();
     println!();
-    println!("  Pagos programados en el mes {}:", mes);
+    println!("  Pagos programados en el mes {} ({}):", mes, mes_yyyy);
     let mut nombres: Vec<String> = Vec::new();
     for (i, (nombre, pago)) in mes_data.pagos.iter().enumerate() {
         println!("    {}. {:<24} ${:.2}", i + 1, nombre, pago);
@@ -6690,17 +6696,17 @@ fn acumular_pagos_deuda(
     }
 
     // Aplicar fijación principal
-    reemplazar_ajuste(ajustes, mes, &nombre, nuevo_pago);
+    reemplazar_ajuste(ajustes, &mes_yyyy, &nombre, nuevo_pago);
     // Aplicar recortes
     for (n, pago_orig, recorte) in &plan_recortes {
-        reemplazar_ajuste(ajustes, mes, n, (*pago_orig - *recorte).max(0.0));
+        reemplazar_ajuste(ajustes, &mes_yyyy, n, (*pago_orig - *recorte).max(0.0));
     }
     // Aplicar dependientes (vinculadas)
     let mut dependientes_recurrentes: Vec<(String, usize)> = Vec::new();
     for (dep, pago_dep, factor) in &dependientes {
         let cuotas_dep_extra = (n_extra as f64 * factor).round() as usize;
         let pago_dep_objetivo = *pago_dep + pago_dep * cuotas_dep_extra as f64;
-        reemplazar_ajuste(ajustes, mes, dep, pago_dep_objetivo);
+        reemplazar_ajuste(ajustes, &mes_yyyy, dep, pago_dep_objetivo);
         let es_recurrente_dep = rastreador
             .deudas
             .iter()
@@ -6741,7 +6747,10 @@ fn acumular_pagos_deuda(
                 true,
             ) {
                 for m in primero..=hasta {
-                    reemplazar_ajuste(ajustes, m, &nombre, 0.0);
+                    if let Some(md) = sim.meses.get(m - 1) {
+                        let yyyy = md.mes_yyyy_mm.clone();
+                        reemplazar_ajuste(ajustes, &yyyy, &nombre, 0.0);
+                    }
                 }
                 println!("  ✓ Pagos puestos en $0 para meses {}–{}.", primero, hasta);
                 // Aplicar también a dependientes recurrentes según sus propias cuotas extra.
@@ -6750,7 +6759,10 @@ fn acumular_pagos_deuda(
                     let hasta_d = (mes + cuotas_extra_dep).min(max_mes);
                     if primero_d <= hasta_d {
                         for m in primero_d..=hasta_d {
-                            reemplazar_ajuste(ajustes, m, dep, 0.0);
+                            if let Some(md) = sim.meses.get(m - 1) {
+                                let yyyy = md.mes_yyyy_mm.clone();
+                                reemplazar_ajuste(ajustes, &yyyy, dep, 0.0);
+                            }
                         }
                         println!(
                             "  ✓ Vinculada '{}' también en $0 para meses {}–{}.",
@@ -6834,6 +6846,7 @@ fn mes_focus(
             "Interés".bold(),
             "Saldo final".bold()
         );
+        let mes_yyyy = mes_data.mes_yyyy_mm.clone();
         for (nombre, saldo) in &mes_data.saldos {
             let pago = mes_data
                 .pagos
@@ -6849,7 +6862,7 @@ fn mes_focus(
                 .unwrap_or(0.0);
             let fijado = ajustes
                 .iter()
-                .any(|a| a.mes == mes_idx && a.nombre_deuda == *nombre);
+                .any(|a| a.mes == mes_yyyy && a.nombre_deuda == *nombre);
             let marca = if mes_data.deudas_descubiertas.iter().any(|n| n == nombre) {
                 " 🔴"
             } else if fijado {
@@ -6872,7 +6885,7 @@ fn mes_focus(
             );
         }
         let ajustes_mes: Vec<&AjusteMensualLibertad> =
-            ajustes.iter().filter(|a| a.mes == mes_idx).collect();
+            ajustes.iter().filter(|a| a.mes == mes_yyyy).collect();
         if !ajustes_mes.is_empty() {
             println!();
             println!("  📌 Pagos fijados en este mes:");
@@ -6916,18 +6929,24 @@ fn mes_focus(
                 }
             }
             Some(3) => {
-                let cuantos = ajustes.iter().filter(|a| a.mes == mes_idx).count();
+                let cuantos = ajustes.iter().filter(|a| a.mes == mes_yyyy).count();
                 if cuantos == 0 {
-                    println!("  (No hay ajustes en el mes {}.)", mes_idx);
+                    println!("  (No hay ajustes en el mes {} ({}).)", mes_idx, mes_yyyy);
                     pausa();
                 } else if confirmar(
-                    &format!("¿Eliminar {} ajuste(s) del mes {}?", cuantos, mes_idx),
+                    &format!(
+                        "¿Eliminar {} ajuste(s) del mes {} ({})?",
+                        cuantos, mes_idx, mes_yyyy
+                    ),
                     false,
                 ) {
-                    ajustes.retain(|a| a.mes != mes_idx);
+                    ajustes.retain(|a| a.mes != mes_yyyy);
                     *sim = rastreador.simular_libertad_editado(presupuesto, estrategia, ajustes);
                     hubo_cambio = true;
-                    println!("  ✓ {} ajuste(s) eliminados del mes {}.", cuantos, mes_idx);
+                    println!(
+                        "  ✓ {} ajuste(s) eliminados del mes {} ({}).",
+                        cuantos, mes_idx, mes_yyyy
+                    );
                     pausa();
                 }
             }
@@ -6965,12 +6984,7 @@ fn mes_focus(
     }
 }
 
-fn reemplazar_ajuste(
-    ajustes: &mut Vec<AjusteMensualLibertad>,
-    mes: usize,
-    nombre: &str,
-    pago: f64,
-) {
+fn reemplazar_ajuste(ajustes: &mut Vec<AjusteMensualLibertad>, mes: &str, nombre: &str, pago: f64) {
     ajustes.retain(|a| !(a.mes == mes && a.nombre_deuda == nombre));
     ajustes.push(AjusteMensualLibertad::nuevo(mes, nombre, pago));
 }

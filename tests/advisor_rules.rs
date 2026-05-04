@@ -8,6 +8,7 @@ use omniplanner::ml::{
     AjusteMensualLibertad, DecisionPago, DeudaRastreada, EstadoDeudaUi, EstrategiaLibertad,
     MesPago, RastreadorDeudas,
 };
+use chrono::Datelike;
 
 // ──────────────────────────────────────────────────────────────
 //  Helpers
@@ -177,9 +178,10 @@ fn pesos_personalizados_liquidan_y_reportan_nombre() {
 #[test]
 fn ajuste_manual_se_respeta_y_sobrante_se_redirige() {
     let r = tres_tarjetas();
-    // Forzar Visa a recibir solo el mínimo (70) en el mes 1,
-    // el sobrante debería ir a Amex/Disc según avalancha.
-    let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 70.0)];
+    // Forzar Visa a recibir solo el mínimo (70) en el mes actual.
+    let hoy = chrono::Local::now().date_naive();
+    let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+    let ajustes = vec![AjusteMensualLibertad::nuevo(&mes_hoy, "Visa", 70.0)];
     let sim = r.simular_libertad_editado(400.0, &EstrategiaLibertad::Avalancha, &ajustes);
     let mes1 = &sim.meses[0];
     let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;

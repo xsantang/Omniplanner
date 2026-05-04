@@ -2497,13 +2497,12 @@ impl RastreadorDeudas {
         ajustes: &[AjusteMensualLibertad],
     ) -> SimulacionLibertad {
         // Ancla: el mes 1 de la simulación es el mes corriente del sistema.
-        // A partir de aquí mapeamos `pagos_programados` (paso 2) al mes_num
-        // correspondiente, generando ajustes implícitos para que la simulación
-        // refleje los pagos que el usuario ya tiene planificados a futuro,
-        // en lugar de calcular pagos "estándar" según la estrategia.
         let hoy = Local::now().date_naive();
         let anio_hoy = hoy.year();
         let mes_hoy = hoy.month() as i32;
+
+        // Convierte "YYYY-MM" → índice de simulación (1-based desde el mes actual).
+        // Retorna None para meses pasados.
         let mes_a_indice = |yyyy_mm: &str| -> Option<usize> {
             let mut it = yyyy_mm.split('-');
             let y: i32 = it.next()?.trim().parse().ok()?;
@@ -2514,6 +2513,14 @@ impl RastreadorDeudas {
             } else {
                 Some(delta as usize + 1)
             }
+        };
+
+        // Convierte índice de simulación (1-based) → "YYYY-MM" calendario.
+        let indice_a_yyyy_mm = |mes_num: usize| -> String {
+            let total = mes_hoy - 1 + (mes_num as i32 - 1);
+            let y = anio_hoy + total / 12;
+            let m = total % 12 + 1;
+            format!("{:04}-{:02}", y, m)
         };
 
         // Construir ajustes efectivos con prioridad:
@@ -2527,23 +2534,11 @@ impl RastreadorDeudas {
         // heurística "pagó 2× → anular mayo+junio" y destruye el ajuste del
         // pago programado de junio, dejando ambos meses en cero.
         let mut ajustes_efectivos: Vec<AjusteMensualLibertad> = Vec::new();
-        // Índices (mes_num, nombre_deuda) donde paso 1 detectó pago real en
-        // historial. Paso 2 no puede sobrescribir el idx_pago de un programado
-        // si ese mes ya fue confirmado como pagado por historial.
-        let mut meses_ya_pagados_historial: std::collections::HashSet<(usize, String)> =
+        // Meses (YYYY-MM, nombre_deuda) confirmados como ya-pagados en historial.
+        let mut meses_ya_pagados_historial: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
         // ── Paso 1: historial del mes corriente ─────────────────────────
-        // Si el usuario ya pagó una deuda este mes (p.ej. mayo), el
-        // simulador no debe volver a aplicarle pago en mes 1 — sería
-        // doble cargo. Usamos saldo_actual() como punto de partida y
-        // sólo anulamos los meses que el pago realmente cubre.
-        //
-        // Regla: si `meses_cubiertos` está definido, usamos exactamente
-        // esos meses (y NO insertamos m.mes por default — puede ser un
-        // pago de catch-up para meses pasados). Si está vacío, asumimos
-        // que el pago cubre m.mes y aplicamos heurística de doble/triple
-        // cuota para meses siguientes.
         let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
         let avanzar_mes = |yyyy_mm: &str, n: usize| -> Option<String> {
             let mut it = yyyy_mm.split('-');
@@ -2566,18 +2561,10 @@ impl RastreadorDeudas {
                     continue;
                 }
                 if !m.meses_cubiertos.is_empty() {
-                    // El usuario declaró explícitamente los meses cubiertos.
-                    // Sólo anulamos esos (pueden ser meses pasados: no importa,
-                    // mes_a_indice devolverá None para ellos sin efecto).
-                    // No insertamos m.mes a menos que esté en la lista —
-                    // evita anular el mes actual si el pago fue de catch-up
-                    // para meses anteriores.
                     for cubierto in &m.meses_cubiertos {
                         meses_a_anular.insert(cubierto.clone());
                     }
                 } else {
-                    // Sin meses_cubiertos: asumimos que el pago es para el
-                    // mes corriente y aplicamos heurística de N cuotas.
                     meses_a_anular.insert(m.mes.clone());
                     let ratio = m.pago / pago_pi_ref;
                     let n_meses = ratio.round() as i64;
@@ -2591,24 +2578,19 @@ impl RastreadorDeudas {
                 }
             }
             for etq in meses_a_anular {
-                if let Some(idx) = mes_a_indice(&etq) {
-                    ajustes_efectivos.retain(|x| !(x.mes == idx && x.nombre_deuda == d.nombre));
+                if mes_a_indice(&etq).is_some() {
+                    ajustes_efectivos.retain(|x| !(x.mes == etq && x.nombre_deuda == d.nombre));
                     ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
-                        idx,
+                        etq.clone(),
                         d.nombre.clone(),
                         0.0,
                     ));
-                    meses_ya_pagados_historial.insert((idx, d.nombre.clone()));
+                    meses_ya_pagados_historial.insert((etq, d.nombre.clone()));
                 }
             }
         }
 
         // ── Paso 2: pagos programados a futuro ──────────────────────────
-        // Traduce `pagos_programados` en ajustes implícitos. Para el mes
-        // de desembolso (idx_pago): sobrescribe paso 1 SÓLO si ese mes NO
-        // fue marcado como ya-pagado por historial. Para los meses cubiertos
-        // (pago forzado=0): siempre sobrescribe (el resultado es 0 de todos
-        // modos, pero dedup evita entradas duplicadas).
         for pp in &self.pagos_programados {
             let aplica_a_deuda_real = self.deudas.iter().any(|d| {
                 d.nombre == pp.nombre_deuda
@@ -2620,51 +2602,63 @@ impl RastreadorDeudas {
                 continue;
             }
 
-            let mut indices_cubiertos: Vec<usize> = pp
-                .meses_cubiertos
-                .iter()
-                .filter_map(|m| mes_a_indice(m))
-                .collect();
-            indices_cubiertos.sort_unstable();
-            indices_cubiertos.dedup();
+            let yyyy_mm_pago: Option<String> = if mes_a_indice(&pp.fecha_pago_prevista).is_some() {
+                Some(pp.fecha_pago_prevista.clone())
+            } else {
+                pp.meses_cubiertos
+                    .iter()
+                    .find(|m| mes_a_indice(m).is_some())
+                    .cloned()
+            };
+            let Some(yyyy_mm_pago) = yyyy_mm_pago else {
+                continue;
+            };
 
-            let idx_pago = mes_a_indice(&pp.fecha_pago_prevista)
-                .or_else(|| indices_cubiertos.first().copied());
-            let Some(idx_pago) = idx_pago else { continue };
-
-            // Mes de desembolso: sólo sobrescribe si paso 1 NO lo marcó
-            // como ya-pagado en historial (lo cual significaría doble cargo).
-            if !meses_ya_pagados_historial.contains(&(idx_pago, pp.nombre_deuda.clone())) {
+            if !meses_ya_pagados_historial
+                .contains(&(yyyy_mm_pago.clone(), pp.nombre_deuda.clone()))
+            {
                 ajustes_efectivos
-                    .retain(|x| !(x.mes == idx_pago && x.nombre_deuda == pp.nombre_deuda));
+                    .retain(|x| !(x.mes == yyyy_mm_pago && x.nombre_deuda == pp.nombre_deuda));
                 ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
-                    idx_pago,
+                    yyyy_mm_pago.clone(),
                     pp.nombre_deuda.clone(),
                     pp.monto_pi.max(0.0),
                 ));
             }
 
-            // Meses cubiertos distintos al de pago: pago forzado = 0.
-            for &idx in &indices_cubiertos {
-                if idx == idx_pago {
+            for cubierto in &pp.meses_cubiertos {
+                if cubierto == &yyyy_mm_pago {
                     continue;
                 }
-                ajustes_efectivos.retain(|x| !(x.mes == idx && x.nombre_deuda == pp.nombre_deuda));
-                ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
-                    idx,
-                    pp.nombre_deuda.clone(),
-                    0.0,
-                ));
+                if mes_a_indice(cubierto).is_some() {
+                    ajustes_efectivos
+                        .retain(|x| !(x.mes == *cubierto && x.nombre_deuda == pp.nombre_deuda));
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        cubierto.clone(),
+                        pp.nombre_deuda.clone(),
+                        0.0,
+                    ));
+                }
             }
         }
 
-        // Los ajustes explícitos del usuario sobrescriben cualquier implícito
-        // para el mismo (mes, deuda).
+        // Los ajustes explícitos (YYYY-MM) del usuario tienen prioridad máxima.
+        // Los valores LEGACY-N (formato numérico anterior) se ignoran.
         for a in ajustes {
+            if a.mes.starts_with("LEGACY") {
+                continue;
+            }
             ajustes_efectivos.retain(|x| !(x.mes == a.mes && x.nombre_deuda == a.nombre_deuda));
             ajustes_efectivos.push(a.clone());
         }
-        let ajustes: &[AjusteMensualLibertad] = &ajustes_efectivos;
+
+        // Precomputar lookup (mes_num, nombre, pago_forzado) para el bucle mensual.
+        let ajustes_idx: Vec<(usize, String, f64)> = ajustes_efectivos
+            .iter()
+            .filter_map(|a| {
+                mes_a_indice(&a.mes).map(|n| (n, a.nombre_deuda.clone(), a.pago_forzado))
+            })
+            .collect();
 
         let gastos_fijos: Vec<(String, f64)> = {
             let mut v: Vec<(String, f64)> = self
@@ -2745,16 +2739,16 @@ impl RastreadorDeudas {
             // Los ajustes reemplazan cualquier lógica automática para esa deuda.
             let mut deudas_con_ajuste: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
-            for ajuste in ajustes.iter().filter(|a| a.mes == mes_num) {
+            for (_, nombre_aj, pago_aj) in ajustes_idx.iter().filter(|(n, _, _)| *n == mes_num) {
                 let idx = match deudas
                     .iter()
-                    .position(|d| d.nombre == ajuste.nombre_deuda && d.liquidada_mes.is_none())
+                    .position(|d| d.nombre == *nombre_aj && d.liquidada_mes.is_none())
                 {
                     Some(i) => i,
                     None => continue,
                 };
                 let saldo = deudas[idx].saldo;
-                let pago = ajuste.pago_forzado.max(0.0).min(saldo).min(disponible);
+                let pago = (*pago_aj).max(0.0).min(saldo).min(disponible);
                 disponible -= pago;
                 pagos_mes.push((deudas[idx].nombre.clone(), pago));
                 deudas_con_ajuste.insert(deudas[idx].nombre.clone());
@@ -2992,6 +2986,7 @@ impl RastreadorDeudas {
 
             meses_resultado.push(MesSimulado {
                 mes_numero: mes_num,
+                mes_yyyy_mm: indice_a_yyyy_mm(mes_num),
                 saldos: saldos_mes,
                 pagos: pagos_mes,
                 intereses: intereses_mes,
@@ -3172,6 +3167,9 @@ struct DeudaSimulada {
 #[derive(Clone, Debug)]
 pub struct MesSimulado {
     pub mes_numero: usize,
+    /// Mes calendario en formato "YYYY-MM" (p.ej. "2026-05").
+    /// Permite al editor y a la tabla mostrar meses reales sin ambigüedad.
+    pub mes_yyyy_mm: String,
     pub saldos: Vec<(String, f64)>,
     pub pagos: Vec<(String, f64)>,
     pub intereses: Vec<(String, f64)>,
@@ -3249,16 +3247,50 @@ impl EstrategiaLibertad {
 /// El simulador lo respeta y re-reparte el resto del presupuesto entre las demás.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AjusteMensualLibertad {
-    /// Mes 1-indexado (1 = primer mes de la simulación).
-    pub mes: usize,
+    /// Mes en formato "YYYY-MM" (p.ej. "2026-05" para mayo 2026).
+    /// Al usar una fecha calendario en lugar de un índice relativo, el plan
+    /// sigue siendo correcto aunque se abra en un mes posterior.
+    #[serde(deserialize_with = "deser_mes_ajuste")]
+    pub mes: String,
     pub nombre_deuda: String,
     pub pago_forzado: f64,
 }
 
+/// Deserializador que acepta tanto el formato YYYY-MM (String) como el
+/// formato numérico legado (usize). Los valores numéricos legados se marcan
+/// como "LEGACY-N" y el simulador los ignora sin romper la carga del JSON.
+fn deser_mes_ajuste<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    use serde::de::{self, Visitor};
+    struct MesVisitor;
+    impl<'de> Visitor<'de> for MesVisitor {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, r#"un string "YYYY-MM" o un número (formato legado)"#)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
+            Ok(format!("LEGACY-{}", v))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(format!("LEGACY-{}", v))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_string<E: de::Error>(self, v: String) -> Result<String, E> {
+            Ok(v)
+        }
+    }
+    d.deserialize_any(MesVisitor)
+}
+
 impl AjusteMensualLibertad {
-    pub fn nuevo(mes: usize, nombre_deuda: impl Into<String>, pago_forzado: f64) -> Self {
+    pub fn nuevo(
+        mes: impl Into<String>,
+        nombre_deuda: impl Into<String>,
+        pago_forzado: f64,
+    ) -> Self {
         Self {
-            mes,
+            mes: mes.into(),
             nombre_deuda: nombre_deuda.into(),
             pago_forzado: pago_forzado.max(0.0),
         }
@@ -4261,9 +4293,10 @@ mod tests {
     #[test]
     fn ajuste_manual_respeta_pago_forzado() {
         let r = rastreador_con_dos_tarjetas();
-        // Forzar que en el mes 1, Visa reciba sólo 30 (menos que mínimo).
-        // El resto del presupuesto debe ir a Amex.
-        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        // Forzar que en el mes 1 (mes actual), Visa reciba sólo 30.
+        let ajustes = vec![AjusteMensualLibertad::nuevo(&mes_hoy, "Visa", 30.0)];
         let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let mes1 = &sim.meses[0];
         let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
@@ -4276,7 +4309,9 @@ mod tests {
     #[test]
     fn ajuste_manual_solo_afecta_su_mes() {
         let r = rastreador_con_dos_tarjetas();
-        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        let ajustes = vec![AjusteMensualLibertad::nuevo(&mes_hoy, "Visa", 30.0)];
         let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         // En el mes 2 ya no hay ajuste → Visa debe recibir al menos su mínimo.
         if sim.meses.len() >= 2 {
@@ -4295,9 +4330,10 @@ mod tests {
     #[test]
     fn ajuste_manual_redistribuye_cuando_sobra() {
         let r = rastreador_con_dos_tarjetas();
-        // Forzar Visa a un pago ENORME acotado por saldo: el simulador debe
-        // tomar como máximo el saldo y no dejar el presupuesto en negativo.
-        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 10_000.0)];
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        // Forzar Visa a un pago ENORME acotado por saldo y presupuesto.
+        let ajustes = vec![AjusteMensualLibertad::nuevo(&mes_hoy, "Visa", 10_000.0)];
         let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let mes1 = &sim.meses[0];
         let pago_visa = mes1.pagos.iter().find(|(n, _)| n == "Visa").unwrap().1;
@@ -4376,10 +4412,10 @@ mod tests {
             monto_pi: 500.0,
             monto_escrow: 0.0,
             meses_cubiertos: vec![mes_hoy.clone()],
-            fecha_pago_prevista: mes_hoy,
+            fecha_pago_prevista: mes_hoy.clone(),
             nota: String::new(),
         });
-        let ajustes = vec![AjusteMensualLibertad::nuevo(1, "Visa", 30.0)];
+        let ajustes = vec![AjusteMensualLibertad::nuevo(&mes_hoy, "Visa", 30.0)];
         let sim = r.simular_libertad_editado(200.0, &EstrategiaLibertad::Avalancha, &ajustes);
         let pago_visa = sim.meses[0]
             .pagos

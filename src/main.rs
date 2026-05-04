@@ -14468,9 +14468,14 @@ pub(crate) fn simulador_escenarios_libertad(state: &AppState, politica: &Politic
                 };
                 let n_meses = pedir_usize("¿Cuántos meses postergar? (pagarás $0 a esa deuda)", 3);
                 let nombre = nombres[idx].clone();
+                let hoy_post = Local::now().date_naive();
                 for m in 1..=n_meses {
+                    let total = hoy_post.month() as i32 - 1 + m as i32 - 1;
+                    let y = hoy_post.year() + total / 12;
+                    let mes_m = total % 12 + 1;
+                    let yyyy_mm = format!("{:04}-{:02}", y, mes_m);
                     esc.ajustes
-                        .push(AjusteMensualLibertad::nuevo(m, nombre.clone(), 0.0));
+                        .push(AjusteMensualLibertad::nuevo(yyyy_mm, nombre.clone(), 0.0));
                 }
                 esc.descripcion.push(format!(
                     "⏸️ Postergar '{}' durante {} mes(es) (pago $0)",
