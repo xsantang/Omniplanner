@@ -5957,7 +5957,8 @@ fn editor_plan_libertad(
                 "🆚 Comparar contra plan automático original",
                 "💾 Guardar borrador y salir (se reanuda luego)",
                 "📤 EXPORTAR a Excel (cierra el plan)",
-                "🗑️  Descartar borrador y salir",
+                "� Registrar ingreso extra en un mes",
+                "�🗑️  Descartar borrador y salir",
             ],
         );
 
@@ -6318,6 +6319,17 @@ fn editor_plan_libertad(
                 }
             }
             Some(11) => {
+                // ─── REGISTRAR / VER INGRESOS EXTRA POR MES ───────────────
+                registrar_ingreso_extra_mes(
+                    state,
+                    &rastreador,
+                    &mut sim,
+                    presupuesto,
+                    &estrategia,
+                    &ajustes,
+                );
+            }
+            Some(12) => {
                 if dirty || !ajustes.is_empty() {
                     println!();
                     println!(
@@ -6363,6 +6375,127 @@ fn editor_plan_libertad(
             }
             _ => {}
         }
+    }
+}
+
+/// Permite registrar, ver y borrar ingresos extra puntuales por mes.
+/// Se usa dentro del editor del plan para reflejar depósitos/bonos puntuales.
+fn registrar_ingreso_extra_mes(
+    state: &mut AppState,
+    _rastreador: &RastreadorDeudas,
+    sim: &mut SimulacionLibertad,
+    presupuesto: f64,
+    estrategia: &EstrategiaLibertad,
+    ajustes: &[AjusteMensualLibertad],
+) {
+    limpiar();
+    separador("💰 INGRESOS EXTRA POR MES");
+    println!();
+
+    let extras = &state.asesor.rastreador.ingresos_extra;
+    if extras.is_empty() {
+        println!("  (No hay ingresos extra registrados)");
+    } else {
+        println!(
+            "  {:<12} {:>12} {}",
+            "Mes".bold(),
+            "Monto".bold(),
+            "Concepto".bold()
+        );
+        println!("  {}", "─".repeat(50));
+        for (i, e) in extras.iter().enumerate() {
+            println!(
+                "  {}. {:<10} {:>12.2}  {}",
+                i + 1,
+                e.mes,
+                e.monto,
+                if e.concepto.is_empty() {
+                    "—"
+                } else {
+                    &e.concepto
+                }
+            );
+        }
+    }
+    println!();
+
+    let opcion = menu(
+        "¿Qué deseas hacer?",
+        &[
+            "➕ Agregar ingreso extra en un mes",
+            "🗑️  Eliminar un ingreso extra",
+            "↩️  Volver",
+        ],
+    );
+
+    match opcion {
+        Some(0) => {
+            println!();
+            let mes_raw = match pedir_texto("Mes (YYYY-MM, ej: 2026-05)") {
+                Some(s) => s,
+                None => return,
+            };
+            // Validar formato YYYY-MM
+            let partes: Vec<&str> = mes_raw.splitn(2, '-').collect();
+            let ok = partes.len() == 2
+                && partes[0].len() == 4
+                && partes[0].parse::<i32>().is_ok()
+                && partes[1]
+                    .parse::<u32>()
+                    .is_ok_and(|m| (1..=12).contains(&m));
+            if !ok {
+                println!("  ⚠️  Formato inválido. Usa YYYY-MM.");
+                pausa();
+                return;
+            }
+            let monto = pedir_f64("Monto extra ($)", 0.0);
+            if monto <= 0.0 {
+                println!("  ⚠️  El monto debe ser mayor a $0.");
+                pausa();
+                return;
+            }
+            let concepto = pedir_texto_opcional("Concepto (vacío = sin descripción)");
+            state
+                .asesor
+                .rastreador
+                .ingresos_extra
+                .push(omniplanner::ml::IngresoExtraMes {
+                    mes: mes_raw.clone(),
+                    monto,
+                    concepto,
+                });
+            *sim =
+                state
+                    .asesor
+                    .rastreador
+                    .simular_libertad_editado(presupuesto, estrategia, ajustes);
+            println!("  ✓ ${:.2} extra registrado para {}.", monto, mes_raw);
+            pausa();
+        }
+        Some(1) => {
+            let extras = &state.asesor.rastreador.ingresos_extra;
+            if extras.is_empty() {
+                println!("  (No hay ingresos extra que eliminar)");
+                pausa();
+                return;
+            }
+            let etiquetas: Vec<String> = extras
+                .iter()
+                .map(|e| format!("{} — ${:.2}  {}", e.mes, e.monto, e.concepto))
+                .collect();
+            let etiquetas_ref: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+            if let Some(idx) = menu("Selecciona el ingreso extra a eliminar", &etiquetas_ref) {
+                state.asesor.rastreador.ingresos_extra.remove(idx);
+                *sim = state.asesor.rastreador.simular_libertad_editado(
+                    presupuesto,
+                    estrategia,
+                    ajustes,
+                );
+                println!("  ✓ Ingreso extra eliminado.");
+                pausa();
+            }
+        }
+        _ => {}
     }
 }
 

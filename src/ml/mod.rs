@@ -25,9 +25,10 @@ pub use advisor::{
     CategoriaEscenario, ComparacionPlanes, ComparacionRapida, CorteBancario, CriterioDecision,
     DecisionPago, DeudaRastreada, DiagnosticoGlobal, DiagnosticoMes, DiccionarioAcciones,
     ErrorPago, Escenario, EstadoDeudaUi, EstrategiaLibertad, FrecuenciaPago, ImpactoAccion,
-    IngresoRastreado, MatrizDecision, MesPago, MesSimulado, MetaAhorro, Movimiento, PagoProgramado,
-    Presupuesto, RastreadorDeudas, RecomendacionPagoExtra, RegistroAsesor, ResumenDeuda,
-    SimulacionLibertad, SimulacionLiquidacion, TipoRegistro, VinculoDeudas,
+    IngresoExtraMes, IngresoRastreado, MatrizDecision, MesPago, MesSimulado, MetaAhorro,
+    Movimiento, PagoProgramado, Presupuesto, RastreadorDeudas, RecomendacionPagoExtra,
+    RegistroAsesor, ResumenDeuda, SimulacionLibertad, SimulacionLiquidacion, TipoRegistro,
+    VinculoDeudas,
 };
 pub use ann::ANN;
 pub use cnn::CNN;

@@ -1741,11 +1741,28 @@ pub struct RastreadorDeudas {
     /// Pagos futuros planificados pero aún no realizados.
     #[serde(default)]
     pub pagos_programados: Vec<PagoProgramado>,
+    /// Ingresos extra puntuales por mes (depósitos, bonos, etc.).
+    /// Se suman al presupuesto disponible solo en el mes indicado.
+    #[serde(default)]
+    pub ingresos_extra: Vec<IngresoExtraMes>,
     // ── Campos legacy para compatibilidad con datos guardados ──
     #[serde(default, alias = "ingreso_quincenal")]
     ingreso: f64,
     #[serde(default = "frecuencia_ingreso_default")]
     frecuencia_ingreso: FrecuenciaPago,
+}
+
+/// Ingreso puntual extra en un mes calendario específico (depósito, bono, etc.).
+/// Se suma al presupuesto disponible solo en ese mes de la simulación.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IngresoExtraMes {
+    /// Mes al que aplica en formato "YYYY-MM".
+    pub mes: String,
+    /// Monto extra disponible ese mes (en la misma moneda que el presupuesto).
+    pub monto: f64,
+    /// Descripción opcional (ej: "depósito mayo", "bono").
+    #[serde(default)]
+    pub concepto: String,
 }
 
 /// Pago futuro planificado: se sabe cuánto y para qué meses, pero aún no se ha pagado.
@@ -2691,6 +2708,13 @@ impl RastreadorDeudas {
             })
             .collect();
 
+        // Precomputar extras de ingreso por mes: (mes_num, monto_extra).
+        let extras_idx: Vec<(usize, f64)> = self
+            .ingresos_extra
+            .iter()
+            .filter_map(|e| mes_a_indice(&e.mes).map(|n| (n, e.monto)))
+            .collect();
+
         let gastos_fijos: Vec<(String, f64)> = {
             let mut v: Vec<(String, f64)> = self
                 .deudas
@@ -2762,7 +2786,13 @@ impl RastreadorDeudas {
                 .sum();
             let liberado = minimos_originales - minimos_vivos;
 
-            let mut disponible = presupuesto_deudas;
+            // Presupuesto base + cualquier ingreso extra registrado para este mes.
+            let extra_mes: f64 = extras_idx
+                .iter()
+                .filter(|(n, _)| *n == mes_num)
+                .map(|(_, m)| *m)
+                .sum();
+            let mut disponible = presupuesto_deudas + extra_mes;
             let mut pagos_mes: Vec<(String, f64)> = Vec::new();
             let mut intereses_mes: Vec<(String, f64)> = Vec::new();
 
