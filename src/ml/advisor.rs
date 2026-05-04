@@ -358,7 +358,7 @@ impl CorteBancario {
 //  Presupuesto Mensual
 // ══════════════════════════════════════════════════════════════
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub enum FrecuenciaPago {
     Semanal,
     Quincenal,
@@ -1607,6 +1607,11 @@ pub struct IngresoRastreado {
     /// Estado/territorio donde se realiza este trabajo (ej: "TX", "FL", "NY")
     #[serde(default)]
     pub estado_trabajo: String,
+    /// Mes en que aplica este ingreso puntual (formato "YYYY-MM").
+    /// Solo relevante cuando `frecuencia == UnaVez`.
+    /// Si es None y frecuencia es UnaVez, se aplica al mes actual de la simulación.
+    #[serde(default)]
+    pub mes_aplicable: Option<String>,
 }
 
 fn ingreso_confirmado_default() -> bool {
@@ -1886,6 +1891,7 @@ impl RastreadorDeudas {
                 es_beneficio_social_security: false,
                 beneficio_social_security_temprano: false,
                 estado_trabajo: String::new(),
+                mes_aplicable: None,
             });
             self.ingreso = 0.0;
         }
@@ -1900,7 +1906,9 @@ impl RastreadorDeudas {
     pub fn ingreso_mensual_confirmado(&self) -> f64 {
         self.ingresos
             .iter()
-            .filter(|i| i.confirmado)
+            // Los ingresos UnaVez son puntuales: no se cuentan como ingreso
+            // recurrente mensual. Se aplican por separado en la simulación.
+            .filter(|i| i.confirmado && i.frecuencia != FrecuenciaPago::UnaVez)
             .map(|i| i.monto_mensual())
             .sum()
     }
@@ -1908,7 +1916,7 @@ impl RastreadorDeudas {
     pub fn ingreso_mensual_confirmado_neto(&self) -> f64 {
         self.ingresos
             .iter()
-            .filter(|i| i.confirmado)
+            .filter(|i| i.confirmado && i.frecuencia != FrecuenciaPago::UnaVez)
             .map(|i| i.monto_mensual_neto())
             .sum()
     }
@@ -2709,11 +2717,25 @@ impl RastreadorDeudas {
             .collect();
 
         // Precomputar extras de ingreso por mes: (mes_num, monto_extra).
-        let extras_idx: Vec<(usize, f64)> = self
+        // Fuente 1: ingresos_extra explícitos (agregados desde el editor del plan).
+        // Fuente 2: ingresos UnaVez del rastreador — aplican al mes indicado en
+        //           mes_aplicable, o al mes 1 (mes actual) si es None.
+        let mut extras_idx: Vec<(usize, f64)> = self
             .ingresos_extra
             .iter()
             .filter_map(|e| mes_a_indice(&e.mes).map(|n| (n, e.monto)))
             .collect();
+        for ing in &self.ingresos {
+            if ing.frecuencia != FrecuenciaPago::UnaVez || !ing.confirmado || ing.monto <= 0.0 {
+                continue;
+            }
+            let mes_num = ing
+                .mes_aplicable
+                .as_deref()
+                .and_then(mes_a_indice)
+                .unwrap_or(1); // sin mes_aplicable → mes actual (mes 1)
+            extras_idx.push((mes_num, ing.monto));
+        }
 
         let gastos_fijos: Vec<(String, f64)> = {
             let mut v: Vec<(String, f64)> = self

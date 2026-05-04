@@ -1178,6 +1178,7 @@ fn cmd_ingreso_agregar(params: &Value) -> String {
             es_beneficio_social_security,
             beneficio_social_security_temprano,
             estado_trabajo,
+            mes_aplicable: None,
         });
         state.guardar()?;
         Ok("Ingreso agregado")

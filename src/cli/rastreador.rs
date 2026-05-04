@@ -4943,6 +4943,7 @@ pub fn rastreador_agregar_ingreso(state: &mut AppState) {
         es_beneficio_social_security,
         beneficio_social_security_temprano,
         estado_trabajo,
+        mes_aplicable: None,
     });
     println!(
         "  {} Ingreso agregado: {} — ${:.2} ({}) [{} | {}]",
