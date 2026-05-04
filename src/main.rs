@@ -1021,6 +1021,41 @@ pub(crate) fn dashboard(state: &AppState) {
         }
     }
 
+    // Cortes de deuda próximos (≤ 7 días)
+    let cortes_proximos: Vec<(&str, i64, u32)> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .filter(|d| d.activa && d.dia_corte.is_some())
+        .filter_map(|d| {
+            let dias = d.dias_para_corte(hoy)?;
+            let corte = d.dia_corte?;
+            if dias <= 7 {
+                Some((d.nombre.as_str(), dias, corte))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !cortes_proximos.is_empty() {
+        println!(
+            "  {} {}",
+            "💳 Cortes próximos:".yellow().bold(),
+            format!("({} en ≤7 días)", cortes_proximos.len()).white()
+        );
+        let mut ordenados = cortes_proximos.clone();
+        ordenados.sort_by_key(|(_, d, _)| *d);
+        for (nombre, dias, corte) in ordenados.iter().take(5) {
+            let etq = match dias {
+                0 => "hoy".red().bold().to_string(),
+                1 => "mañana".yellow().to_string(),
+                n => format!("en {} días", n).dimmed().to_string(),
+            };
+            println!("    📅 día {} · {} · {}", corte, nombre, etq);
+        }
+    }
+
     // Resumen rápido — con contexto real
     {
         // Tareas: activas vs vencidas

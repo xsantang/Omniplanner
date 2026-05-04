@@ -28,6 +28,15 @@ use crate::{
 };
 
 pub fn menu_asesor_rastreador(state: &mut AppState) {
+    // One-time prompt por sesión: si hay deudas reales sin día de corte
+    // definido, ofrecer al usuario llenarlas. Si ya respondió (incluso
+    // saltando), no se vuelve a preguntar hasta el próximo arranque.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static YA_PREGUNTADO: AtomicBool = AtomicBool::new(false);
+    if !YA_PREGUNTADO.swap(true, Ordering::Relaxed) {
+        prompt_inicial_dias_corte(state);
+    }
+
     loop {
         limpiar();
         println!(
@@ -417,12 +426,19 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
         let (pago_exigible_pi, pago_exigible_escrow) = d.pago_exigible_componentes_proximo_mes();
         let pago_exigible_total = d.pago_exigible_total_proximo_mes();
 
-        let mes = pedir_texto_opcional("Mes (YYYY-MM, vacío=mes actual)");
-        let mes = if mes.is_empty() {
-            Local::now().format("%Y-%m").to_string()
+        // Mes sugerido: si la deuda tiene día de corte, depende de si hoy es
+        // antes o después del corte. Si no, mes corriente.
+        let mes_sugerido = d.mes_de_pago_para(Local::now().date_naive());
+        let prompt_mes = if let Some(corte) = d.dia_corte {
+            format!(
+                "Mes (YYYY-MM, vacío={} — corte día {})",
+                mes_sugerido, corte
+            )
         } else {
-            mes
+            format!("Mes (YYYY-MM, vacío={})", mes_sugerido)
         };
+        let mes = pedir_texto_opcional(&prompt_mes);
+        let mes = if mes.is_empty() { mes_sugerido } else { mes };
 
         let mut id_pago_bus_opt: Option<String> = None;
 
@@ -2419,6 +2435,17 @@ pub fn rastreador_agregar_deuda(state: &mut AppState) {
             deuda.saldo_actual(),
             sufijo
         );
+    }
+
+    // Día de corte (1-31): opcional pero útil para auto-rellenar el mes al
+    // registrar pagos y para alertas de cortes próximos.
+    if !deuda.es_pago_corriente() || matches!(deuda.frecuencia, FrecuenciaPago::Mensual) {
+        println!();
+        println!("  📅 Día del mes en que vence/cierra el corte (1-31, 0 = sin definir)");
+        let dia = pedir_f64("Día de corte", 0.0) as i64;
+        if (1..=31).contains(&dia) {
+            deuda.dia_corte = Some(dia as u32);
+        }
     }
 
     state.asesor.rastreador.agregar_deuda(deuda);
@@ -8448,4 +8475,64 @@ fn bitacora_ver_detalle(state: &AppState) {
         };
         id_actual = ids[sel].clone();
     }
+}
+
+/// Prompt one-time por sesión: para cada deuda real sin `dia_corte` definido,
+/// ofrecer al usuario establecer el día (1-31). Si el usuario decide saltar
+/// la primera, se aborta el resto del bucle (no es invasivo).
+fn prompt_inicial_dias_corte(state: &mut AppState) {
+    let pendientes: Vec<String> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .filter(|d| {
+            d.activa
+                && d.dia_corte.is_none()
+                && (!d.es_pago_corriente() || matches!(d.frecuencia, FrecuenciaPago::Mensual))
+        })
+        .map(|d| d.nombre.clone())
+        .collect();
+
+    if pendientes.is_empty() {
+        return;
+    }
+
+    limpiar();
+    separador("📅 DÍAS DE CORTE — CONFIGURACIÓN INICIAL");
+    println!();
+    println!(
+        "  Tienes {} deuda(s) sin día de corte definido.",
+        pendientes.len().to_string().yellow().bold()
+    );
+    println!("  El día de corte (1-31) es la fecha del mes en que vence o cierra el ciclo.");
+    println!("  Sirve para auto-rellenar el mes al registrar pagos y para alertas.");
+    println!();
+    if !confirmar("¿Quieres definirlos ahora?", true) {
+        println!("  Puedes editarlos luego al agregar/registrar pagos.");
+        pausa();
+        return;
+    }
+
+    for nombre in pendientes {
+        println!();
+        println!("  • {}", nombre.cyan().bold());
+        let dia = pedir_f64("Día de corte (1-31, 0 = saltar)", 0.0) as i64;
+        if (1..=31).contains(&dia) {
+            if let Some(d) = state
+                .asesor
+                .rastreador
+                .deudas
+                .iter_mut()
+                .find(|d| d.nombre == nombre)
+            {
+                d.dia_corte = Some(dia as u32);
+                println!("    ✓ Día {} registrado.", dia);
+            }
+        } else {
+            println!("    (saltada)");
+        }
+    }
+    println!();
+    pausa();
 }

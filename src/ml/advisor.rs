@@ -875,6 +875,11 @@ pub struct DeudaRastreada {
     /// `pago_minimo` siempre almacena el monto a la frecuencia declarada.
     #[serde(default = "frecuencia_pago_default")]
     pub frecuencia: FrecuenciaPago,
+    /// Día del mes (1-31) en que vence el pago / cierra el corte.
+    /// Si el usuario paga ANTES de ese día, el pago aplica al mes corriente;
+    /// si paga DESPUÉS, aplica al mes siguiente.
+    #[serde(default)]
+    pub dia_corte: Option<u32>,
 }
 
 fn default_true() -> bool {
@@ -1131,7 +1136,53 @@ impl DeudaRastreada {
             originada: true,
             saldo_inicial: 0.0,
             frecuencia: FrecuenciaPago::Mensual,
+            dia_corte: None,
         }
+    }
+
+    /// Determina el mes (YYYY-MM) al que aplica un pago hecho HOY, según
+    /// el día de corte de la deuda. Regla:
+    /// - Si la deuda no tiene día de corte definido → mes corriente.
+    /// - Si hoy.día <= día_corte → mes corriente (el usuario paga antes de
+    ///   cerrar el ciclo: el pago cuenta para este mes).
+    /// - Si hoy.día > día_corte → mes siguiente (el ciclo ya cerró, paga el
+    ///   próximo).
+    pub fn mes_de_pago_para(&self, hoy: chrono::NaiveDate) -> String {
+        use chrono::Datelike;
+        let (mut y, mut m) = (hoy.year(), hoy.month());
+        if let Some(corte) = self.dia_corte {
+            if hoy.day() > corte {
+                m += 1;
+                if m > 12 {
+                    m = 1;
+                    y += 1;
+                }
+            }
+        }
+        format!("{:04}-{:02}", y, m)
+    }
+
+    /// Días que faltan desde `hoy` para alcanzar el próximo día de corte.
+    /// `None` si no hay día de corte configurado.
+    pub fn dias_para_corte(&self, hoy: chrono::NaiveDate) -> Option<i64> {
+        use chrono::{Datelike, NaiveDate};
+        let corte = self.dia_corte?;
+        let (y, m) = (hoy.year(), hoy.month());
+        // Día de corte de este mes (acotado al último día del mes real).
+        let proximo = NaiveDate::from_ymd_opt(y, m, corte.min(28)).or_else(|| {
+            // Mes con menos días que `corte`: usar último día válido del mes.
+            (1..=31u32)
+                .rev()
+                .find_map(|d| NaiveDate::from_ymd_opt(y, m, d.min(corte)))
+        })?;
+        let candidato = if proximo >= hoy {
+            proximo
+        } else {
+            // Pasar al mes siguiente.
+            let (y2, m2) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+            NaiveDate::from_ymd_opt(y2, m2, corte.min(28))?
+        };
+        Some((candidato - hoy).num_days())
     }
 
     /// Pago mensual que realmente ataca la deuda (principal + intereses).
@@ -4437,5 +4488,43 @@ mod tests {
                 "mes 2 debería ser 0 (deducido por monto = 2× P&I)"
             );
         }
+    }
+
+    #[test]
+    fn mes_de_pago_para_aplica_segun_dia_corte() {
+        use chrono::NaiveDate;
+        let mut d = deuda_con_saldo("Visa", 1000.0, 24.0, 60.0);
+        d.dia_corte = Some(26);
+        let s = d.mes_de_pago_para(NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        assert_eq!(s, "2026-05");
+        let s = d.mes_de_pago_para(NaiveDate::from_ymd_opt(2026, 5, 26).unwrap());
+        assert_eq!(s, "2026-05");
+        let s = d.mes_de_pago_para(NaiveDate::from_ymd_opt(2026, 5, 27).unwrap());
+        assert_eq!(s, "2026-06");
+        let s = d.mes_de_pago_para(NaiveDate::from_ymd_opt(2026, 12, 30).unwrap());
+        assert_eq!(s, "2027-01");
+    }
+
+    #[test]
+    fn mes_de_pago_para_sin_corte_es_mes_corriente() {
+        use chrono::NaiveDate;
+        let d = deuda_con_saldo("Visa", 1000.0, 24.0, 60.0);
+        let s = d.mes_de_pago_para(NaiveDate::from_ymd_opt(2026, 5, 30).unwrap());
+        assert_eq!(s, "2026-05");
+    }
+
+    #[test]
+    fn dias_para_corte_calcula_distancia() {
+        use chrono::NaiveDate;
+        let mut d = deuda_con_saldo("Visa", 1000.0, 24.0, 60.0);
+        d.dia_corte = Some(26);
+        let dias = d
+            .dias_para_corte(NaiveDate::from_ymd_opt(2026, 5, 20).unwrap())
+            .unwrap();
+        assert_eq!(dias, 6);
+        let dias = d
+            .dias_para_corte(NaiveDate::from_ymd_opt(2026, 5, 27).unwrap())
+            .unwrap();
+        assert_eq!(dias, 30);
     }
 }
