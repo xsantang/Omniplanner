@@ -6005,7 +6005,13 @@ fn editor_plan_libertad(
                 }
             }
             Some(6) => {
-                // Inyectar pagos programados al plan
+                // ─── INYECTAR PAGOS PROGRAMADOS AL PLAN ──────────────────────
+                // Flujo:
+                //   1. Leer pagos_programados válidos para deudas activas
+                //   2. Comparar con lo que el plan ya asigna → calcular DIFF
+                //   3. Mostrar DIFF al usuario y confirmar
+                //   4. Aplicar solo los cambios reales, re-simular
+                //   5. Mostrar resumen de redistribución y ofrecer ajuste manual
                 let fn_fecha_valida = |s: &str| -> bool {
                     let p: Vec<&str> = s.splitn(2, '-').collect();
                     p.len() == 2
@@ -6013,11 +6019,21 @@ fn editor_plan_libertad(
                         && p[0].chars().all(|c| c.is_ascii_digit())
                         && p[1].parse::<u32>().is_ok_and(|m| (1..=12).contains(&m))
                 };
+
+                // Helper: pago que el plan actual asigna a (deuda, YYYY-MM)
+                let pago_en_plan = |deuda: &str, yyyy_mm: &str| -> f64 {
+                    sim.meses
+                        .iter()
+                        .find(|m| m.mes_yyyy_mm == yyyy_mm)
+                        .and_then(|m| m.pagos.iter().find(|(d, _)| d == deuda))
+                        .map(|(_, p)| *p)
+                        .unwrap_or(0.0)
+                };
+
                 let programados: Vec<&omniplanner::ml::PagoProgramado> = rastreador
                     .pagos_programados
                     .iter()
                     .filter(|pp| {
-                        // Solo los que aplican a una deuda activa con saldo
                         rastreador.deudas.iter().any(|d| {
                             d.nombre == pp.nombre_deuda
                                 && d.activa
@@ -6037,8 +6053,8 @@ fn editor_plan_libertad(
                     continue;
                 }
 
-                // Advertir sobre pagos con fecha inválida
-                let invalidos: Vec<&omniplanner::ml::PagoProgramado> = programados
+                // Advertir fechas inválidas
+                let invalidos: Vec<_> = programados
                     .iter()
                     .filter(|pp| !fn_fecha_valida(&pp.fecha_pago_prevista))
                     .copied()
@@ -6046,137 +6062,194 @@ fn editor_plan_libertad(
                 if !invalidos.is_empty() {
                     println!();
                     println!(
-                        "  {} {} pago(s) tienen fecha inválida y serán ignorados:",
+                        "  {} {} pago(s) con fecha inválida (serán ignorados):",
                         "⚠️".yellow().bold(),
                         invalidos.len()
                     );
                     for pp in &invalidos {
                         println!(
-                            "    • {} → fecha: {:?}",
+                            "    • {} → \"{}\"  (elimina y recrea con formato YYYY-MM)",
                             pp.nombre_deuda.yellow(),
                             pp.fecha_pago_prevista
                         );
-                        println!("      Elimina y vuelve a crear ese pago con formato YYYY-MM.");
+                    }
+                    println!();
+                }
+
+                // ── PASO 2: Calcular DIFF ─────────────────────────────────────
+                // (yyyy_mm, deuda, antes, después, motivo)
+                let mut diffs: Vec<(String, String, f64, f64, &'static str)> = Vec::new();
+
+                for pp in &programados {
+                    if !fn_fecha_valida(&pp.fecha_pago_prevista) {
+                        continue;
+                    }
+                    if pp.meses_cubiertos.is_empty() {
+                        // Sin meses_cubiertos → pago del presupuesto, fijar monto
+                        let antes = pago_en_plan(&pp.nombre_deuda, &pp.fecha_pago_prevista);
+                        let despues = pp.monto_pi.max(0.0);
+                        if (antes - despues).abs() > 0.01 {
+                            diffs.push((
+                                pp.fecha_pago_prevista.clone(),
+                                pp.nombre_deuda.clone(),
+                                antes,
+                                despues,
+                                "pago fijado (presupuesto)",
+                            ));
+                        }
+                    } else {
+                        // Con meses_cubiertos → pre-pago de ahorros, todos los meses → $0
+                        let mut todos = pp.meses_cubiertos.clone();
+                        if !todos.contains(&pp.fecha_pago_prevista) {
+                            todos.push(pp.fecha_pago_prevista.clone());
+                        }
+                        for mes in &todos {
+                            if !fn_fecha_valida(mes) {
+                                continue;
+                            }
+                            let antes = pago_en_plan(&pp.nombre_deuda, mes);
+                            if antes > 0.01 {
+                                diffs.push((
+                                    mes.clone(),
+                                    pp.nombre_deuda.clone(),
+                                    antes,
+                                    0.0,
+                                    "cubierto por ahorros → $0",
+                                ));
+                            }
+                        }
                     }
                 }
 
                 println!();
+                if diffs.is_empty() {
+                    println!(
+                        "  {} El plan ya refleja todos los pagos programados. Sin cambios.",
+                        "ℹ️".cyan()
+                    );
+                    pausa();
+                    continue;
+                }
+
+                // ── PASO 3: Mostrar DIFF y confirmar ─────────────────────────
                 println!(
-                    "  {} pagos programados disponibles para inyectar:",
-                    programados.len()
+                    "  {} cambio(s) detectado(s) respecto al plan actual:",
+                    diffs.len()
                 );
                 println!();
                 println!(
-                    "  {:<28} {:<12} {:>10}  Meses cubiertos",
+                    "  {:<12} {:<32} {:>9}  {:>9}  {}",
+                    "Mes".bold(),
                     "Deuda".bold(),
-                    "Mes pago".bold(),
-                    "Monto P&I".bold()
+                    "Plan hoy".bold(),
+                    "Nuevo".bold(),
+                    "Motivo".bold()
                 );
-                println!("  {}", "─".repeat(70));
-                for pp in &programados {
-                    let cubiertos = if pp.meses_cubiertos.is_empty() {
-                        pp.fecha_pago_prevista.clone()
+                println!("  {}", "─".repeat(78));
+                for (yyyy_mm, deuda, antes, despues, motivo) in &diffs {
+                    let cols = format!("{:>9.2}  {:>9.2}", antes, despues);
+                    let cols_col = if *despues < *antes {
+                        cols.yellow().to_string()
                     } else {
-                        pp.meses_cubiertos
-                            .iter()
-                            .map(|m| mes_corto(m))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        cols.green().to_string()
                     };
                     println!(
-                        "  {:<28} {:<12} {:>10.2}  {}",
-                        truncar(&pp.nombre_deuda, 28),
-                        mes_corto(&pp.fecha_pago_prevista),
-                        pp.monto_pi,
-                        cubiertos
+                        "  {:<12} {:<32} {}  {}",
+                        mes_corto(yyyy_mm),
+                        truncar(deuda, 32),
+                        cols_col,
+                        motivo
                     );
                 }
                 println!();
-                println!("  Reglas de inyección:");
-                println!(
-                    "  • Sin meses cubiertos → se fija el monto en el plan (pago del presupuesto)."
-                );
-                println!("  • Con meses cubiertos → todos esos meses quedan en $0 (pagado desde ahorros).");
-                println!("  Los ajustes existentes para esos meses/deudas serán reemplazados.");
-                println!();
 
-                if !confirmar("¿Inyectar estos pagos programados al plan?", true) {
+                if !confirmar("¿Aplicar estos cambios al plan?", true) {
                     println!("  Cancelado.");
                     pausa();
                     continue;
                 }
 
-                let ajustes_antes = ajustes.clone();
-                let mut inyectados = 0usize;
-                for pp in &programados {
-                    // Saltar entradas con fecha inválida
-                    if !fn_fecha_valida(&pp.fecha_pago_prevista) {
-                        continue;
-                    }
-                    if pp.meses_cubiertos.is_empty() {
-                        // Pago normal del mes desde el presupuesto → fijar monto en plan
-                        let fecha = &pp.fecha_pago_prevista;
-                        ajustes.retain(|a| !(a.mes == *fecha && a.nombre_deuda == pp.nombre_deuda));
-                        ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
-                            fecha.clone(),
-                            pp.nombre_deuda.clone(),
-                            pp.monto_pi.max(0.0),
-                        ));
-                        inyectados += 1;
-                    } else {
-                        // Pre-pago que cubre varios meses (pagado fuera del presupuesto,
-                        // ej. desde ahorros). Todos los meses cubiertos → $0 en el plan.
-                        let mut todos_meses = pp.meses_cubiertos.clone();
-                        if !todos_meses.contains(&pp.fecha_pago_prevista) {
-                            todos_meses.push(pp.fecha_pago_prevista.clone());
-                        }
-                        for mes in &todos_meses {
-                            if !fn_fecha_valida(mes) {
-                                continue;
+                // ── PASO 4: Aplicar solo los diffs ───────────────────────────
+                let snapshot_antes: Vec<(String, Vec<(String, f64)>)> = sim
+                    .meses
+                    .iter()
+                    .map(|m| (m.mes_yyyy_mm.clone(), m.pagos.clone()))
+                    .collect();
+
+                for (yyyy_mm, deuda, _, nuevo_monto, _) in &diffs {
+                    ajustes.retain(|a| !(a.mes == *yyyy_mm && a.nombre_deuda == *deuda));
+                    ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
+                        yyyy_mm.clone(),
+                        deuda.clone(),
+                        *nuevo_monto,
+                    ));
+                }
+
+                sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
+                ediciones += 1;
+                dirty = true;
+
+                // ── PASO 5: Resumen de redistribución ────────────────────────
+                println!();
+                println!("  {} Plan actualizado.", "✅".green().bold());
+                println!();
+
+                let meses_afectados: std::collections::BTreeSet<String> =
+                    diffs.iter().map(|(m, _, _, _, _)| m.clone()).collect();
+
+                for yyyy_mm in &meses_afectados {
+                    let pagos_antes = snapshot_antes
+                        .iter()
+                        .find(|(m, _)| m == yyyy_mm)
+                        .map(|(_, p)| p.as_slice())
+                        .unwrap_or(&[]);
+                    let mes_nuevo = sim.meses.iter().find(|m| &m.mes_yyyy_mm == yyyy_mm);
+                    if let Some(mn) = mes_nuevo {
+                        let hay_cambio_redistribucion = mn.pagos.iter().any(|(d, p_nuevo)| {
+                            let p_viejo = pagos_antes
+                                .iter()
+                                .find(|(x, _)| x == d)
+                                .map(|(_, v)| *v)
+                                .unwrap_or(0.0);
+                            (p_viejo - p_nuevo).abs() > 0.01
+                        });
+                        if hay_cambio_redistribucion {
+                            println!("  {} {}:", "📅".cyan(), mes_corto(yyyy_mm).bold());
+                            for (deuda, p_nuevo) in &mn.pagos {
+                                let p_viejo = pagos_antes
+                                    .iter()
+                                    .find(|(x, _)| x == deuda)
+                                    .map(|(_, v)| *v)
+                                    .unwrap_or(0.0);
+                                if (p_viejo - p_nuevo).abs() > 0.01 {
+                                    let delta = p_nuevo - p_viejo;
+                                    let signo = if delta > 0.0 { "+" } else { "" };
+                                    println!(
+                                        "    {:<32} {:>8.2} → {:>8.2}  ({}{:.2})",
+                                        truncar(deuda, 32),
+                                        p_viejo,
+                                        p_nuevo,
+                                        signo,
+                                        delta
+                                    );
+                                }
                             }
-                            ajustes
-                                .retain(|a| !(a.mes == *mes && a.nombre_deuda == pp.nombre_deuda));
-                            ajustes.push(omniplanner::ml::AjusteMensualLibertad::nuevo(
-                                mes.clone(),
-                                pp.nombre_deuda.clone(),
-                                0.0,
-                            ));
-                            inyectados += 1;
+                            if mn.sobrante > 0.01 {
+                                println!("    {} Sin asignar: ${:.2}", "⚠️".yellow(), mn.sobrante);
+                            }
                         }
                     }
                 }
 
-                // Detectar si los ajustes realmente cambiaron
-                let hubo_cambio = {
-                    let mut antes = ajustes_antes.clone();
-                    let mut despues = ajustes.clone();
-                    antes.sort_by(|a, b| {
-                        a.mes.cmp(&b.mes).then(a.nombre_deuda.cmp(&b.nombre_deuda))
-                    });
-                    despues.sort_by(|a, b| {
-                        a.mes.cmp(&b.mes).then(a.nombre_deuda.cmp(&b.nombre_deuda))
-                    });
-                    antes != despues
-                };
-
-                if hubo_cambio {
-                    sim = rastreador.simular_libertad_editado(presupuesto, &estrategia, &ajustes);
-                    ediciones += 1;
-                    dirty = true;
+                println!();
+                if confirmar(
+                    "¿Quieres ajustar cuotas en algún mes afectado? (Fijar pago / Mover recursos)",
+                    false,
+                ) {
                     println!();
-                    println!(
-                        "  {} {} ajuste(s) inyectados desde {} pago(s) programado(s).",
-                        "✅".green().bold(),
-                        inyectados,
-                        programados.len()
-                    );
-                } else {
-                    println!();
-                    println!(
-                        "  {} El plan ya tenía estos ajustes. Sin cambios.",
-                        "ℹ️".cyan()
-                    );
+                    println!("  → Vuelve al menú y usa 'Fijar pago' o 'Mover recursos'.");
                 }
+
                 pausa();
             }
             Some(7) => {
