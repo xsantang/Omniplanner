@@ -2585,7 +2585,12 @@ impl RastreadorDeudas {
                         d.nombre.clone(),
                         0.0,
                     ));
-                    meses_ya_pagados_historial.insert((etq, d.nombre.clone()));
+                    // Solo proteger el mes ACTUAL. Los meses futuros zeroed por
+                    // heurística no se bloquean: un pago_programado explícito
+                    // para ese mes futuro debe poder inyectar su valor en paso 2.
+                    if etq == etiqueta_mes_hoy {
+                        meses_ya_pagados_historial.insert((etq, d.nombre.clone()));
+                    }
                 }
             }
         }

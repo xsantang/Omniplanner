@@ -3186,7 +3186,7 @@ pub fn rastreador_simulacion_libertad(state: &mut AppState) {
 
         println!(
             "  ┌─── {} ──────────────────────────────────────────────┐",
-            format!("MES {}", mes.mes_numero).bold()
+            format!("MES {} — {}", mes.mes_numero, mes_corto(&mes.mes_yyyy_mm)).bold()
         );
 
         // Línea 1: Presupuesto efectivo con detalle de liberados
@@ -6337,6 +6337,29 @@ fn truncar(s: &str, max: usize) -> String {
     }
 }
 
+/// Convierte "YYYY-MM" en etiqueta corta para mostrar en tablas: "may'26".
+fn mes_corto(yyyy_mm: &str) -> String {
+    let mut it = yyyy_mm.split('-');
+    let y: i32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let m: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let nombre = match m {
+        1 => "ene",
+        2 => "feb",
+        3 => "mar",
+        4 => "abr",
+        5 => "may",
+        6 => "jun",
+        7 => "jul",
+        8 => "ago",
+        9 => "sep",
+        10 => "oct",
+        11 => "nov",
+        12 => "dic",
+        _ => "???",
+    };
+    format!("{}'{}", nombre, y % 100)
+}
+
 /// Acumular varias cuotas de UNA deuda en un mes (ej. pagar 2 meses de hipoteca juntos).
 ///
 /// Calcula el dinero adicional necesario, mira el sobrante del mes y, si hay déficit,
@@ -6811,7 +6834,17 @@ fn mes_focus(
 
     loop {
         limpiar();
-        separador(&format!("🎯 ENFOQUE MES {} / {}", mes_idx, sim.meses.len()));
+        let mes_cal = sim
+            .meses
+            .get(mes_idx - 1)
+            .map(|m| mes_corto(&m.mes_yyyy_mm))
+            .unwrap_or_default();
+        separador(&format!(
+            "🎯 ENFOQUE MES {} ({}) / {}",
+            mes_idx,
+            mes_cal,
+            sim.meses.len()
+        ));
         let mes_data = match sim.meses.get(mes_idx - 1) {
             Some(m) => m,
             None => {
@@ -7013,19 +7046,20 @@ fn mostrar_tabla_plan_libertad(sim: &SimulacionLibertad) {
         ));
 
         // Cabecera
-        print!("  {:<5}", "Mes".bold());
+        print!("  {:<12}", "Mes".bold());
         for n in &nombres {
             let corto = if n.len() > 10 { &n[..10] } else { n.as_str() };
             print!(" {:>11}", corto.bold());
         }
         print!(" {:>10}", "Total".bold());
         println!();
-        let ancho = 5 + nombres.len() * 12 + 11;
+        let ancho = 12 + nombres.len() * 12 + 11;
         println!("  {}", "─".repeat(ancho.min(180)));
 
         let fin = (inicio + PAGINA).min(total_meses);
         for mes in &sim.meses[inicio..fin] {
-            print!("  {:<5}", mes.mes_numero);
+            let etiq = format!("{} {}", mes.mes_numero, mes_corto(&mes.mes_yyyy_mm));
+            print!("  {:<12}", etiq);
             let mut total = 0.0;
             for nombre in &nombres {
                 let pago = mes
