@@ -2606,6 +2606,17 @@ impl RastreadorDeudas {
         }
 
         // ── Paso 2: pagos programados a futuro ──────────────────────────
+        // Precomputa los meses que tienen su propio pago_programado explícito
+        // (fecha_pago_prevista con monto > 0). Esos meses NO pueden ser zeroed
+        // por el meses_cubiertos de OTRO programado: si mayo tiene su propio
+        // doble-pago, el meses_cubiertos de junio no debe borrarlo.
+        let meses_con_pago_propio: std::collections::HashSet<(String, String)> = self
+            .pagos_programados
+            .iter()
+            .filter(|p| mes_a_indice(&p.fecha_pago_prevista).is_some() && p.monto_pi > 0.0)
+            .map(|p| (p.nombre_deuda.clone(), p.fecha_pago_prevista.clone()))
+            .collect();
+
         for pp in &self.pagos_programados {
             let aplica_a_deuda_real = self.deudas.iter().any(|d| {
                 d.nombre == pp.nombre_deuda
@@ -2643,6 +2654,11 @@ impl RastreadorDeudas {
 
             for cubierto in &pp.meses_cubiertos {
                 if cubierto == &yyyy_mm_pago {
+                    continue;
+                }
+                // No zerear un mes que tiene su propio pago_programado explícito:
+                // significa que el usuario planea pagar ESE mes por separado.
+                if meses_con_pago_propio.contains(&(pp.nombre_deuda.clone(), cubierto.clone())) {
                     continue;
                 }
                 if mes_a_indice(cubierto).is_some() {
