@@ -2519,29 +2519,51 @@ impl RastreadorDeudas {
         // el mes 1 de la simulación NO debe volver a aplicar pago a esas
         // deudas (sería un doble pago en el mismo mes calendario).
         //
-        // Además, si el MesPago registrado declara `meses_cubiertos` con
-        // meses futuros (ej: pago doble de hipoteca que cubre mayo+junio),
-        // también anulamos pagos en esos meses para no duplicarlos.
+        // Si el MesPago declara `meses_cubiertos`, lo respetamos. Si está
+        // vacío pero el monto pagado equivale a N veces el pago mensual
+        // estándar (ej: hipoteca pagada doble que cubre mayo+junio aunque
+        // el usuario no haya completado el campo opcional), deducimos N y
+        // anulamos esos meses futuros también.
         //
         // Se aplica DESPUÉS del paso 2 para sobrescribir cualquier pago
         // programado vigente para el mes corriente que ya fue ejecutado.
         let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
+        let avanzar_mes = |yyyy_mm: &str, n: usize| -> Option<String> {
+            let mut it = yyyy_mm.split('-');
+            let mut y: i32 = it.next()?.parse().ok()?;
+            let mut m: i32 = it.next()?.parse().ok()?;
+            m += n as i32;
+            y += (m - 1) / 12;
+            m = ((m - 1) % 12) + 1;
+            Some(format!("{:04}-{:02}", y, m))
+        };
         for d in &self.deudas {
             if !d.activa || d.es_pago_corriente() {
                 continue;
             }
-            // Recolectar todos los meses (corriente + futuros) cubiertos por
-            // pagos ya registrados en el historial cuyo `mes` sea el mes
-            // corriente. Solo nos interesan los del mes corriente para no
-            // contar dos veces meses pasados que ya quedaron fuera del rango
-            // de la simulación.
+            let pago_pi_ref = d.pago_pi_mensual().max(0.01);
             let mut meses_a_anular: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             for m in &d.historial {
-                if m.mes == etiqueta_mes_hoy && m.pago > 0.01 {
-                    meses_a_anular.insert(m.mes.clone());
+                if m.mes != etiqueta_mes_hoy || m.pago <= 0.01 {
+                    continue;
+                }
+                meses_a_anular.insert(m.mes.clone());
+                if !m.meses_cubiertos.is_empty() {
                     for cubierto in &m.meses_cubiertos {
                         meses_a_anular.insert(cubierto.clone());
+                    }
+                } else {
+                    // Inferir n_meses por monto: pagó ≈ N × pago_pi mensual.
+                    // Usamos round con tolerancia de 5% del pago mensual.
+                    let ratio = m.pago / pago_pi_ref;
+                    let n_meses = ratio.round() as i64;
+                    if n_meses >= 2 && (ratio - n_meses as f64).abs() < 0.1 {
+                        for k in 1..n_meses as usize {
+                            if let Some(etq) = avanzar_mes(&m.mes, k) {
+                                meses_a_anular.insert(etq);
+                            }
+                        }
                     }
                 }
             }
@@ -4379,6 +4401,41 @@ mod tests {
                 .map(|(_, p)| *p)
                 .unwrap_or(0.0);
             assert!(pago_mes2.abs() < 0.01, "mes 2 debería ser 0 (cubierto)");
+        }
+    }
+
+    #[test]
+    fn pago_doble_sin_meses_cubiertos_se_deduce_por_monto() {
+        // Cuando el usuario registra un pago de 2× pago_pi mensual SIN llenar
+        // el campo "meses_cubiertos" (porque escribió "2*60" en el monto),
+        // la simulación debe inferir que cubre 2 meses y anular pago en
+        // mes 1 y mes 2 igualmente.
+        let mut r = rastreador_con_dos_tarjetas();
+        let hoy = Local::now().date_naive();
+        let mes_hoy = format!("{:04}-{:02}", hoy.year(), hoy.month());
+        if let Some(d) = r.deudas.iter_mut().find(|d| d.nombre == "Visa") {
+            // Visa.pago_minimo = 60 → pago doble = 120, sin meses_cubiertos.
+            d.registrar_mes(&mes_hoy, 2000.0, 120.0, 0.0);
+        }
+        let sim = r.simular_libertad(200.0, false);
+        let pago_mes1 = sim.meses[0]
+            .pagos
+            .iter()
+            .find(|(n, _)| n == "Visa")
+            .map(|(_, p)| *p)
+            .unwrap_or(0.0);
+        assert!(pago_mes1.abs() < 0.01, "mes 1 debería ser 0");
+        if sim.meses.len() >= 2 {
+            let pago_mes2 = sim.meses[1]
+                .pagos
+                .iter()
+                .find(|(n, _)| n == "Visa")
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0);
+            assert!(
+                pago_mes2.abs() < 0.01,
+                "mes 2 debería ser 0 (deducido por monto = 2× P&I)"
+            );
         }
     }
 }
