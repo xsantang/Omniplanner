@@ -184,6 +184,26 @@ impl AppState {
             }
         };
 
+        // Migración: pagos_programados con fecha_pago_prevista que contiene comas
+        // (el usuario escribió "2026-05,2026-06" en el campo de fecha en vez de
+        // usar meses_cubiertos). Separar en fecha (primera parte) + meses_cubiertos.
+        for pp in &mut state.asesor.rastreador.pagos_programados {
+            if pp.fecha_pago_prevista.contains(',') {
+                let partes: Vec<String> = pp
+                    .fecha_pago_prevista
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !partes.is_empty() {
+                    pp.fecha_pago_prevista = partes[0].clone();
+                    if pp.meses_cubiertos.is_empty() {
+                        pp.meses_cubiertos = partes;
+                    }
+                }
+            }
+        }
+
         // Auto-pull desde Gist si está configurado
         #[cfg(feature = "desktop")]
         if state.sync.auto_sync && state.sync.gist_configurado() && !state.sync.gist_id.is_empty() {
