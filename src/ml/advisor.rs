@@ -2563,6 +2563,11 @@ impl RastreadorDeudas {
         let mut meses_ya_pagados_historial: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
+        // Efectivo real ya gastado en el mes actual que no está reflejado en el presupuesto
+        // del simulador. Incluye P&I y escrow de deudas zeroed por historial.
+        // Se descuenta de `disponible` solo en mes_num == 1 para mostrar el impacto real.
+        let mut costo_real_mes_actual: f64 = 0.0;
+
         // ── Paso 1: historial del mes corriente ─────────────────────────
         let etiqueta_mes_hoy = format!("{:04}-{:02}", anio_hoy, mes_hoy);
         let avanzar_mes = |yyyy_mm: &str, n: usize| -> Option<String> {
@@ -2589,6 +2594,8 @@ impl RastreadorDeudas {
                     for cubierto in &m.meses_cubiertos {
                         meses_a_anular.insert(cubierto.clone());
                     }
+                    // Este pago real ya salió del bolsillo: descontarlo del presupuesto mes 1.
+                    costo_real_mes_actual += m.pago + m.pago_escrow;
                 } else {
                     // Para deudas OBLIGATORIAS (hipotecas/préstamos inamovibles) NO
                     // aplicamos la heurística de "pagó 2×→ anular mes siguiente".
@@ -2600,6 +2607,8 @@ impl RastreadorDeudas {
                         // pago_programado para declarar meses que cubre.
                     } else {
                         meses_a_anular.insert(m.mes.clone());
+                        // Pago real de deuda no-obligatoria que se zeroa: descontarlo.
+                        costo_real_mes_actual += m.pago + m.pago_escrow;
                         let ratio = m.pago / pago_pi_ref;
                         let n_meses = ratio.round() as i64;
                         if n_meses >= 2 && (ratio - n_meses as f64).abs() < 0.1 {
@@ -2814,7 +2823,16 @@ impl RastreadorDeudas {
                 .filter(|(n, _)| *n == mes_num)
                 .map(|(_, m)| *m)
                 .sum();
-            let mut disponible = presupuesto_deudas + extra_mes;
+            // En el mes 1 (mes actual) se descuenta el efectivo ya gastado en pagos
+            // reales que el simulador zeroa (Carrington doble, etc.). Esto hace que
+            // las demás deudas vean el presupuesto real que quedó disponible, no el
+            // teórico que asume que el pago salió de ahorros.
+            let reduccion_mes1 = if mes_num == 1 {
+                costo_real_mes_actual
+            } else {
+                0.0
+            };
+            let mut disponible = presupuesto_deudas + extra_mes - reduccion_mes1;
             let mut pagos_mes: Vec<(String, f64)> = Vec::new();
             let mut intereses_mes: Vec<(String, f64)> = Vec::new();
 
