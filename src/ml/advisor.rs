@@ -2594,8 +2594,33 @@ impl RastreadorDeudas {
                     for cubierto in &m.meses_cubiertos {
                         meses_a_anular.insert(cubierto.clone());
                     }
-                    // Este pago real ya salió del bolsillo: descontarlo del presupuesto mes 1.
-                    costo_real_mes_actual += m.pago + m.pago_escrow;
+                    // Dos sub-casos según si meses_cubiertos incluye el mes actual:
+                    //
+                    // A) Cubre el mes actual → el pago normal de este mes ya está hecho.
+                    //    Se zeroa via meses_a_anular y se descuenta de costo_real_mes_actual.
+                    //
+                    // B) Solo cubre meses PASADOS (p.ej. catch-up de marzo+abril pagado en mayo)
+                    //    → el pago salió del bolsillo ESTE mes pero cubre deuda antigua.
+                    //    Mostrar el pago real en la tabla via ajuste (el loop mensual descuenta
+                    //    de `disponible`). NO usar costo_real_mes_actual (sería doble conteo).
+                    let cubre_mes_actual = m.meses_cubiertos.iter().any(|c| c == &etiqueta_mes_hoy);
+                    if !cubre_mes_actual
+                        && m.mes == etiqueta_mes_hoy
+                        && !meses_ya_pagados_historial.contains(&(m.mes.clone(), d.nombre.clone()))
+                    {
+                        // Caso B: catch-up de meses pasados pagado hoy
+                        ajustes_efectivos
+                            .retain(|x| !(x.mes == m.mes && x.nombre_deuda == d.nombre));
+                        ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                            m.mes.clone(),
+                            d.nombre.clone(),
+                            m.pago, // P&I; escrow se descuenta via gastos_fijos
+                        ));
+                        meses_ya_pagados_historial.insert((m.mes.clone(), d.nombre.clone()));
+                    } else {
+                        // Caso A: pago cubre mes actual (o mes pasado) → descontar presupuesto
+                        costo_real_mes_actual += m.pago + m.pago_escrow;
+                    }
                 } else {
                     // Para deudas OBLIGATORIAS (hipotecas/préstamos inamovibles) NO
                     // aplicamos la heurística de "pagó 2×→ anular mes siguiente".
@@ -2622,6 +2647,11 @@ impl RastreadorDeudas {
                 }
             }
             for etq in meses_a_anular {
+                // No zerear un mes cuyo pago real ya fue marcado en este mismo Paso 1:
+                // tiene un ajuste explícito con el monto real y no debe sobreescribirse.
+                if meses_ya_pagados_historial.contains(&(etq.clone(), d.nombre.clone())) {
+                    continue;
+                }
                 if mes_a_indice(&etq).is_some() {
                     ajustes_efectivos.retain(|x| !(x.mes == etq && x.nombre_deuda == d.nombre));
                     ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
@@ -2772,6 +2802,12 @@ impl RastreadorDeudas {
                 // No zerear un mes que tiene su propio pago_programado explícito:
                 // significa que el usuario planea pagar ESE mes por separado.
                 if meses_con_pago_propio.contains(&(pp.nombre_deuda.clone(), cubierto.clone())) {
+                    continue;
+                }
+                // No zerear un mes cuyo pago real ya fue confirmado por el historial (Paso 1):
+                // ese mes tiene un ajuste con el monto real y no debe sobreescribirse con $0.
+                if meses_ya_pagados_historial.contains(&(cubierto.clone(), pp.nombre_deuda.clone()))
+                {
                     continue;
                 }
                 if mes_a_indice(cubierto).is_some() {
