@@ -2701,14 +2701,27 @@ impl RastreadorDeudas {
             //   • Mayo muestra el pago real (del historial) — no $0
             //   • Junio (fecha_pago_prevista) se zeroa — ya no hay que pagar más
             //   • El disponible de mayo se reduce correctamente vía pago_forzado
+            // "pago anticipado": el PagoProgramado cubre el mes actual Y hay un
+            // pago real en historial para ese mes. PERO si el historial declara
+            // meses_cubiertos distintos (p.ej. cubre mar+abr) que no solapen con
+            // los del PagoProgramado (p.ej. may+jun), es un catch-up de deuda
+            // antigua — NO un pago anticipado del PagoProgramado.
             let pagado_anticipado = !meses_ya_pagados_historial
                 .contains(&(etiqueta_mes_hoy.clone(), pp.nombre_deuda.clone()))
                 && pp.meses_cubiertos.contains(&etiqueta_mes_hoy)
                 && self.deudas.iter().any(|d| {
                     d.nombre == pp.nombre_deuda
-                        && d.historial
-                            .iter()
-                            .any(|m| m.mes == etiqueta_mes_hoy && m.pago > 0.01)
+                        && d.historial.iter().any(|m| {
+                            m.mes == etiqueta_mes_hoy
+                                && m.pago > 0.01
+                                // Solapamiento: el historial debe cubrir al menos un mes
+                                // que también cubre el PagoProgramado. Sin solapamiento
+                                // el pago del historial es un catch-up independiente.
+                                && (m.meses_cubiertos.is_empty()
+                                    || m.meses_cubiertos
+                                        .iter()
+                                        .any(|c| pp.meses_cubiertos.contains(c)))
+                        })
                 });
 
             if pagado_anticipado {
@@ -2836,6 +2849,40 @@ impl RastreadorDeudas {
             }
             ajustes_efectivos.retain(|x| !(x.mes == a.mes && x.nombre_deuda == a.nombre_deuda));
             ajustes_efectivos.push(a.clone());
+        }
+
+        // ── Paso 3 (mes 1 only): zerear deudas sin pago real en el mes actual ───
+        // Solo aplica cuando hay al menos un pago historial confirmado en el mes
+        // corriente para alguna deuda no-corriente. Si no hay ninguno (simulación
+        // pura sin historial), no zerear mes 1 — la simulación arranca libre.
+        let hay_historial_mes_actual = meses_ya_pagados_historial
+            .iter()
+            .any(|(mes, _)| mes == &etiqueta_mes_hoy);
+        if hay_historial_mes_actual {
+            for d in &self.deudas {
+                if !d.activa || d.es_pago_corriente() {
+                    continue;
+                }
+                // Si ya tiene un ajuste explícito para el mes actual, respetar.
+                if ajustes_efectivos
+                    .iter()
+                    .any(|a| a.mes == etiqueta_mes_hoy && a.nombre_deuda == d.nombre)
+                {
+                    continue;
+                }
+                // Buscar pago real confirmado (solo entradas con formato YYYY-MM).
+                let tiene_pago_real = d
+                    .historial
+                    .iter()
+                    .any(|m| m.mes == etiqueta_mes_hoy && m.pago > 0.01);
+                if !tiene_pago_real {
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        etiqueta_mes_hoy.clone(),
+                        d.nombre.clone(),
+                        0.0,
+                    ));
+                }
+            }
         }
 
         // Precomputar lookup (mes_num, nombre, pago_forzado) para el bucle mensual.
