@@ -2662,6 +2662,85 @@ impl RastreadorDeudas {
                 continue;
             }
 
+            // Detectar "pago anticipado": el PagoProgramado cubre el mes actual
+            // en meses_cubiertos, pero el usuario lo pagó ANTES de la fecha_pago_prevista
+            // (hay un pago real en el historial del mes actual). Esto ocurre cuando
+            // se planificó pagar en junio pero el pago físico se hizo en mayo.
+            //
+            // En este caso:
+            //   • Mayo muestra el pago real (del historial) — no $0
+            //   • Junio (fecha_pago_prevista) se zeroa — ya no hay que pagar más
+            //   • El disponible de mayo se reduce correctamente vía pago_forzado
+            let pagado_anticipado = !meses_ya_pagados_historial
+                .contains(&(etiqueta_mes_hoy.clone(), pp.nombre_deuda.clone()))
+                && pp.meses_cubiertos.contains(&etiqueta_mes_hoy)
+                && self.deudas.iter().any(|d| {
+                    d.nombre == pp.nombre_deuda
+                        && d.historial
+                            .iter()
+                            .any(|m| m.mes == etiqueta_mes_hoy && m.pago > 0.01)
+                });
+
+            if pagado_anticipado {
+                // Suma de todos los pagos reales para esta deuda en el mes actual.
+                let pago_real: f64 = self
+                    .deudas
+                    .iter()
+                    .find(|d| d.nombre == pp.nombre_deuda)
+                    .map(|d| {
+                        d.historial
+                            .iter()
+                            .filter(|m| m.mes == etiqueta_mes_hoy)
+                            .map(|m| m.pago)
+                            .sum()
+                    })
+                    .unwrap_or(0.0);
+
+                if pago_real > 0.01 {
+                    // Mes actual: mostrar el pago real (reduce disponible vía Paso 0)
+                    ajustes_efectivos.retain(|x| {
+                        !(x.mes == etiqueta_mes_hoy && x.nombre_deuda == pp.nombre_deuda)
+                    });
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        etiqueta_mes_hoy.clone(),
+                        pp.nombre_deuda.clone(),
+                        pago_real,
+                    ));
+                    meses_ya_pagados_historial
+                        .insert((etiqueta_mes_hoy.clone(), pp.nombre_deuda.clone()));
+                }
+                // Fecha_pago_prevista (mes futuro programado): zerear — ya fue pagado
+                if mes_a_indice(&pp.fecha_pago_prevista)
+                    .map(|n| n > 1)
+                    .unwrap_or(false)
+                {
+                    ajustes_efectivos.retain(|x| {
+                        !(x.mes == pp.fecha_pago_prevista && x.nombre_deuda == pp.nombre_deuda)
+                    });
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        pp.fecha_pago_prevista.clone(),
+                        pp.nombre_deuda.clone(),
+                        0.0,
+                    ));
+                }
+                // Otros meses cubiertos futuros: también zerear
+                for cubierto in &pp.meses_cubiertos {
+                    if cubierto == &etiqueta_mes_hoy || cubierto == &pp.fecha_pago_prevista {
+                        continue;
+                    }
+                    if mes_a_indice(cubierto).is_some() {
+                        ajustes_efectivos
+                            .retain(|x| !(x.mes == *cubierto && x.nombre_deuda == pp.nombre_deuda));
+                        ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                            cubierto.clone(),
+                            pp.nombre_deuda.clone(),
+                            0.0,
+                        ));
+                    }
+                }
+                continue; // saltar el procesamiento normal para este PagoProgramado
+            }
+
             let yyyy_mm_pago: Option<String> = if mes_a_indice(&pp.fecha_pago_prevista).is_some() {
                 Some(pp.fecha_pago_prevista.clone())
             } else {
@@ -2709,8 +2788,14 @@ impl RastreadorDeudas {
 
         // Los ajustes explícitos (YYYY-MM) del usuario tienen prioridad máxima.
         // Los valores LEGACY-N (formato numérico anterior) se ignoran.
+        // EXCEPCIÓN: no sobreescribir meses que el historial confirmó como pagados.
         for a in ajustes {
             if a.mes.starts_with("LEGACY") {
+                continue;
+            }
+            // Si el historial ya confirmó el pago real de este mes (vía pagado_anticipado
+            // u otro mecanismo), no permitir que un ajuste explícito del borrador lo zerée.
+            if meses_ya_pagados_historial.contains(&(a.mes.clone(), a.nombre_deuda.clone())) {
                 continue;
             }
             ajustes_efectivos.retain(|x| !(x.mes == a.mes && x.nombre_deuda == a.nombre_deuda));
