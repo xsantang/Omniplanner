@@ -10903,6 +10903,81 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_pl
     }
 }
 
+pub(crate) fn configurar_colchon(state: &mut AppState) {
+    limpiar();
+    separador("🛡️  COLCHÓN DE SEGURIDAD");
+
+    println!("  El colchón es la diferencia entre lo que RECIBES y lo que PLANIFICAS gastar.");
+    println!("  Ejemplo: recibes $4,500 pero planificas sobre $4,200 → colchón = $300.");
+    println!();
+
+    if let Some(actual) = state.presupuesto.ingreso_planificado {
+        println!(
+            "  Ingreso planificado actual: {}",
+            format!("${:.2}", actual).green().bold()
+        );
+        let ingresos_reales = state
+            .presupuesto
+            .meses
+            .last()
+            .map(|m| m.total_ingresos())
+            .unwrap_or(0.0);
+        if ingresos_reales > 0.0 {
+            let colchon = ingresos_reales - actual;
+            if colchon > 0.0 {
+                println!(
+                    "  Colchón actual (vs ingresos del último mes ${:.2}): {}",
+                    ingresos_reales,
+                    format!("${:.2}", colchon).yellow().bold()
+                );
+            }
+        }
+        println!();
+    } else {
+        println!("  {} No tienes colchón configurado todavía.", "ℹ".cyan());
+        println!();
+    }
+
+    let opciones: &[&str] = if state.presupuesto.ingreso_planificado.is_some() {
+        &[
+            "✏️  Cambiar el ingreso planificado",
+            "❌  Quitar colchón (usar ingresos reales)",
+            "🔙  Volver",
+        ]
+    } else {
+        &["➕  Configurar ingreso planificado", "🔙  Volver"]
+    };
+
+    match menu("¿Qué hacer?", opciones) {
+        Some(0) => {
+            println!();
+            println!("  Ingresa el monto que usas como BASE para planificar (ej: 4200).");
+            println!("  Los ingresos reales que excedan ese monto forman el colchón.");
+            let input = pedir_texto_opcional("Ingreso planificado ($)");
+            if let Ok(val) = input.replace(',', "").parse::<f64>() {
+                if val > 0.0 {
+                    state.presupuesto.ingreso_planificado = Some(val);
+                    println!(
+                        "\n  {} Ingreso planificado configurado en {}",
+                        "✅".green(),
+                        format!("${:.2}", val).green().bold()
+                    );
+                } else {
+                    println!("  {} El monto debe ser mayor a 0.", "✗".red());
+                }
+            } else {
+                println!("  {} Monto inválido.", "✗".red());
+            }
+        }
+        Some(1) if state.presupuesto.ingreso_planificado.is_some() => {
+            state.presupuesto.ingreso_planificado = None;
+            println!("\n  {} Colchón removido — se usarán los ingresos reales.", "✅".green());
+        }
+        _ => return,
+    }
+    pausa();
+}
+
 pub(crate) fn generar_presupuesto_mes(state: &mut AppState, mes: &str) {
     if state.presupuesto.mes_actual(mes).is_some() {
         println!("  ⚠️ Ya existe un presupuesto para {}. ¿Regenerar?", mes);
