@@ -10971,7 +10971,10 @@ pub(crate) fn configurar_colchon(state: &mut AppState) {
         }
         Some(1) if state.presupuesto.ingreso_planificado.is_some() => {
             state.presupuesto.ingreso_planificado = None;
-            println!("\n  {} Colchón removido — se usarán los ingresos reales.", "✅".green());
+            println!(
+                "\n  {} Colchón removido — se usarán los ingresos reales.",
+                "✅".green()
+            );
         }
         _ => return,
     }
