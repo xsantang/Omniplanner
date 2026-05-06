@@ -346,6 +346,7 @@ pub fn escribir_sql(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn sanear_ident(s: &str) -> String {
     // Convierte "fecha/date" → "fecha_date", elimina caracteres no válidos
     let s = s.trim().to_lowercase();
@@ -372,6 +373,7 @@ fn sanear_ident(s: &str) -> String {
     out
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn escapar_sql(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }

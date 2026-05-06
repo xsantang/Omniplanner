@@ -31,6 +31,7 @@ use std::path::Path;
 ///
 /// # Ejemplo
 /// ```no_run
+/// use omniplanner::io::excel::leer_xlsx;
 /// let filas = leer_xlsx("reporte.xlsx").unwrap();
 /// for fila in filas { println!("{:?}", fila); }
 /// ```
@@ -125,6 +126,7 @@ pub fn abrir_xlsx_umya(ruta: impl AsRef<Path>) -> Result<Spreadsheet, String> {
 ///
 /// # Ejemplo
 /// ```no_run
+/// use omniplanner::io::excel::{abrir_xlsx_umya, escribir_celda_umya, guardar_xlsx_umya};
 /// let mut wb = abrir_xlsx_umya("reporte.xlsx").unwrap();
 /// escribir_celda_umya(&mut wb, "Hoja1", "A", 1, "Hola");
 /// guardar_xlsx_umya(&wb, "reporte_editado.xlsx").unwrap();
@@ -281,6 +283,7 @@ pub fn guardar_xlsx(wb: &mut Workbook, ruta: impl AsRef<Path>) -> Result<(), Str
 ///
 /// # Ejemplo
 /// ```no_run
+/// use omniplanner::io::excel::iterar_filas_csv;
 /// iterar_filas_csv("datos.csv", |fila| {
 ///     println!("{:?}", fila);
 /// }).unwrap();
