@@ -429,6 +429,11 @@ pub struct AlmacenPresupuesto {
     pub plantilla: Option<PlantillaPresupuesto>,
     #[serde(default)]
     pub meses: Vec<PresupuestoMensual>,
+    /// Ingreso que se usa para planificar (ej: $4,200).
+    /// El colchón = ingresos reales − ingreso_planificado.
+    /// Si es None, no se muestra la sección de colchón.
+    #[serde(default)]
+    pub ingreso_planificado: Option<f64>,
 }
 
 impl AlmacenPresupuesto {

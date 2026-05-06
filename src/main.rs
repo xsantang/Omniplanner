@@ -10693,7 +10693,7 @@ pub(crate) fn menu_presupuesto_cero(state: &mut AppState) {
 
         // Mostrar resumen del mes actual
         if let Some(pres) = state.presupuesto.mes_actual(&mes_actual) {
-            mostrar_resumen_presupuesto_cero(pres);
+            mostrar_resumen_presupuesto_cero(pres, state.presupuesto.ingreso_planificado);
         }
         println!();
 
@@ -10705,12 +10705,13 @@ pub(crate) fn menu_presupuesto_cero(state: &mut AppState) {
             "✏️   Editar monto de una línea",
             "➕  Agregar línea al mes",
             "💵  Sincronizar ingresos desde Rastreador",
-            "�  Empujar pagos de este mes -> Rastreador",
+            "🔃  Empujar pagos de este mes -> Rastreador",
             "📊  Ver presupuesto completo",
             "🔧  Editar plantilla base",
             "📥  Reimportar plantilla desde Asesor",
             "🔄  Regenerar mes desde plantilla",
             "📆  Ver otro mes",
+            "🛡️   Configurar colchón de seguridad",
             "🔙  Volver",
         ];
 
@@ -10748,12 +10749,13 @@ pub(crate) fn menu_presupuesto_cero(state: &mut AppState) {
                     pausa();
                 }
             }
+            Some(13) => configurar_colchon(state),
             _ => return,
         }
     }
 }
 
-pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual) {
+pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_plan: Option<f64>) {
     let res = pres.resumen();
 
     println!("  📅 Mes: {}", pres.mes.bold());
@@ -10840,6 +10842,64 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual) {
 
     for alerta in &res.alertas {
         println!("    {}", alerta.yellow());
+    }
+
+    // ── Colchón de seguridad ─────────────────────────────────────────
+    if let Some(plan) = ing_plan {
+        let colchon_total = res.ingresos - plan;
+        if colchon_total > 0.0 {
+            let colchon_plan_usado = (res.egresos - plan).max(0.0);
+            let pagado_real = pres.total_pagado_real();
+            let colchon_real_usado = (pagado_real - plan).max(0.0);
+            let colchon_restante = (colchon_total - colchon_real_usado).max(0.0);
+
+            println!();
+            println!("    {}", "▸ Colchón de seguridad:".bold());
+            println!(
+                "    📐 Plan límite:   ${:.2}   (colchón total: ${:.2})",
+                plan, colchon_total
+            );
+            if colchon_plan_usado > 0.0 {
+                println!(
+                    "    {}",
+                    format!(
+                        "⚠️  Plan usa ${:.2} del colchón — quedarían ${:.2} de reserva",
+                        colchon_plan_usado,
+                        colchon_total - colchon_plan_usado
+                    )
+                    .yellow()
+                );
+            } else {
+                println!(
+                    "    {}",
+                    format!(
+                        "✅ Plan dentro del límite — colchón intacto (${:.2})",
+                        colchon_total
+                    )
+                    .green()
+                );
+            }
+            if colchon_real_usado > 0.0 {
+                println!(
+                    "    {}",
+                    format!(
+                        "💸 Pagado real usa ${:.2} del colchón — restante: ${:.2}",
+                        colchon_real_usado, colchon_restante
+                    )
+                    .yellow()
+                );
+            }
+            if res.egresos > res.ingresos {
+                println!(
+                    "    {}",
+                    format!(
+                        "🔴 Déficit total: ${:.2} — excede incluso el colchón",
+                        res.egresos - res.ingresos
+                    )
+                    .red()
+                );
+            }
+        }
     }
 }
 
