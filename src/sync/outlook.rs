@@ -69,12 +69,18 @@ pub fn importar_outlook(contenido: &str) -> Vec<EventoOutlook> {
             }
             "END:VEVENT" if en_vevent => {
                 en_vevent = false;
-                if let Some(ev) = parsear_evento_outlook(&campos, &params_map, &microsoft, &attendees) {
+                if let Some(ev) =
+                    parsear_evento_outlook(&campos, &params_map, &microsoft, &attendees)
+                {
                     resultados.push(ev);
                 }
             }
-            "BEGIN:VTIMEZONE" => { en_vtimezone = true; }
-            "END:VTIMEZONE" => { en_vtimezone = false; }
+            "BEGIN:VTIMEZONE" => {
+                en_vtimezone = true;
+            }
+            "END:VTIMEZONE" => {
+                en_vtimezone = false;
+            }
             _ if en_vtimezone => {} // ignorar contenido de VTIMEZONE
             _ if en_vevent => {
                 let (nombre_prop, params, valor) = parsear_linea_ical(linea);
@@ -85,7 +91,9 @@ pub fn importar_outlook(contenido: &str) -> Vec<EventoOutlook> {
                     microsoft.insert(nombre_upper, valor);
                 } else if nombre_upper == "ATTENDEE" {
                     // Extraer CN o dirección de email del attendee
-                    let cn = params.get("CN").cloned()
+                    let cn = params
+                        .get("CN")
+                        .cloned()
                         .or_else(|| extraer_mailto(&valor))
                         .unwrap_or(valor.clone());
                     attendees.push(cn);
@@ -156,7 +164,10 @@ fn parsear_linea_ical(linea: &str) -> (String, HashMap<String, String>, String) 
     let mut params: HashMap<String, String> = HashMap::new();
     for param in params_str.split(';') {
         if let Some((k, v)) = param.split_once('=') {
-            params.insert(k.trim().to_uppercase(), v.trim().trim_matches('"').to_string());
+            params.insert(
+                k.trim().to_uppercase(),
+                v.trim().trim_matches('"').to_string(),
+            );
         }
     }
 
@@ -179,10 +190,7 @@ fn parsear_evento_outlook(
         .map(|s| s.as_str());
     let todo_el_dia = value_param == Some("DATE") || !dtstart_raw.contains('T');
 
-    let tzid = params
-        .get("DTSTART")
-        .and_then(|p| p.get("TZID"))
-        .cloned();
+    let tzid = params.get("DTSTART").and_then(|p| p.get("TZID")).cloned();
 
     let (fecha, hora_inicio) = parsear_dt_outlook(dtstart_raw, todo_el_dia)?;
 
@@ -293,7 +301,10 @@ mod tests {
         let linea = "DTSTART;TZID=Eastern Standard Time:20260506T090000";
         let (nombre, params, valor) = parsear_linea_ical(linea);
         assert_eq!(nombre, "DTSTART");
-        assert_eq!(params.get("TZID").map(|s| s.as_str()), Some("Eastern Standard Time"));
+        assert_eq!(
+            params.get("TZID").map(|s| s.as_str()),
+            Some("Eastern Standard Time")
+        );
         assert_eq!(valor, "20260506T090000");
     }
 

@@ -96,11 +96,7 @@ impl AlmacenGastos {
     }
 
     /// Gastos agrupados por categoría en un rango
-    pub fn por_categoria(
-        &self,
-        desde: NaiveDate,
-        hasta: NaiveDate,
-    ) -> Vec<(Categoria, f64)> {
+    pub fn por_categoria(&self, desde: NaiveDate, hasta: NaiveDate) -> Vec<(Categoria, f64)> {
         let mut mapa: Vec<(Categoria, f64)> = Vec::new();
         for g in self
             .transacciones

@@ -3,6 +3,7 @@
 //! Tokenización, análisis de sentimiento, clasificación de intención,
 //! base de conocimiento, gestión de diálogos multi-turno y feedback.
 
+pub mod asistente;
 pub mod conversation;
 pub mod engine;
 pub mod feedback;
@@ -10,7 +11,6 @@ pub mod intent;
 pub mod knowledge;
 pub mod sentiment;
 pub mod tokenizer;
-pub mod asistente;
 
 // Re-exports principales
 pub use conversation::{

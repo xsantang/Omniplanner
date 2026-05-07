@@ -85,8 +85,12 @@ pub fn responder(
 ) -> RespuestaAsistente {
     let conf = intencion.confianza;
     match intencion.categoria {
-        CategoriaIntencion::RegistrarGasto => responder_registrar_gasto(consulta, conf, gastos, false),
-        CategoriaIntencion::RegistrarIngreso => responder_registrar_gasto(consulta, conf, gastos, true),
+        CategoriaIntencion::RegistrarGasto => {
+            responder_registrar_gasto(consulta, conf, gastos, false)
+        }
+        CategoriaIntencion::RegistrarIngreso => {
+            responder_registrar_gasto(consulta, conf, gastos, true)
+        }
         CategoriaIntencion::ConsultarGastos => responder_consultar_gastos(conf, gastos),
         CategoriaIntencion::PedirSugerenciaPago => {
             responder_sugerencia_pago(conf, &rastreador.rastreador, gastos)
@@ -172,7 +176,8 @@ fn responder_registrar_gasto(
         texto,
         format!("{} ${:.2}", etiqueta, monto),
     );
-    r.seguimientos.push("¿Cuánto llevo gastado este mes?".to_string());
+    r.seguimientos
+        .push("¿Cuánto llevo gastado este mes?".to_string());
     r.seguimientos.push("Resumen financiero".to_string());
     r
 }
@@ -200,13 +205,19 @@ fn responder_consultar_gastos(conf: f64, gastos: &AlmacenGastos) -> RespuestaAsi
         let mut ordenadas = por_cat.clone();
         ordenadas.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         for (cat, total) in ordenadas.iter().take(5) {
-            texto.push_str(&format!("    • {:<20} ${:.2}\n", nombre_categoria(cat), total));
+            texto.push_str(&format!(
+                "    • {:<20} ${:.2}\n",
+                nombre_categoria(cat),
+                total
+            ));
         }
     }
 
     let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarGastos, conf, texto);
-    r.seguimientos.push("¿Qué deuda debo pagar primero?".to_string());
-    r.seguimientos.push("Resumen financiero completo".to_string());
+    r.seguimientos
+        .push("¿Qué deuda debo pagar primero?".to_string());
+    r.seguimientos
+        .push("Resumen financiero completo".to_string());
     r
 }
 
@@ -263,8 +274,10 @@ fn responder_sugerencia_pago(
         }
     }
 
-    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::PedirSugerenciaPago, conf, texto);
-    r.seguimientos.push("Resumen financiero general".to_string());
+    let mut r =
+        RespuestaAsistente::solo_texto(CategoriaIntencion::PedirSugerenciaPago, conf, texto);
+    r.seguimientos
+        .push("Resumen financiero general".to_string());
     r.seguimientos.push("Agendar el pago sugerido".to_string());
     r
 }
@@ -313,9 +326,11 @@ fn responder_resumen_financiero(
 
     let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ResumenFinanciero, conf, texto);
     if num_deudas > 0 {
-        r.seguimientos.push("¿Qué deuda debo pagar primero?".to_string());
+        r.seguimientos
+            .push("¿Qué deuda debo pagar primero?".to_string());
     }
-    r.seguimientos.push("Detalle de gastos por categoría".to_string());
+    r.seguimientos
+        .push("Detalle de gastos por categoría".to_string());
     r
 }
 
@@ -449,8 +464,27 @@ fn inferir_categoria(s: &str, es_ingreso: bool) -> Categoria {
     }
     let lower = s.to_lowercase();
     // Heurística simple por dominios léxicos
-    let fijos = ["renta", "alquiler", "luz", "agua", "internet", "gas", "telefono", "teléfono", "seguro", "servicio"];
-    let deuda = ["tarjeta", "deuda", "credito", "crédito", "prestamo", "préstamo", "cuota"];
+    let fijos = [
+        "renta",
+        "alquiler",
+        "luz",
+        "agua",
+        "internet",
+        "gas",
+        "telefono",
+        "teléfono",
+        "seguro",
+        "servicio",
+    ];
+    let deuda = [
+        "tarjeta",
+        "deuda",
+        "credito",
+        "crédito",
+        "prestamo",
+        "préstamo",
+        "cuota",
+    ];
     let ahorro = ["ahorro", "inversion", "inversión", "fondo"];
 
     if fijos.iter().any(|p| lower.contains(p)) {
@@ -487,7 +521,10 @@ fn extraer_descripcion(s: &str, es_ingreso: bool) -> String {
         }
     }
     // Fallback: usar consulta sin palabras de acción
-    let palabras_filtro = ["gaste", "gasté", "pague", "pagué", "compre", "compré", "recibí", "recibi", "cobre", "cobré"];
+    let palabras_filtro = [
+        "gaste", "gasté", "pague", "pagué", "compre", "compré", "recibí", "recibi", "cobre",
+        "cobré",
+    ];
     let limpio: Vec<&str> = s
         .split_whitespace()
         .filter(|w| {
@@ -497,7 +534,11 @@ fn extraer_descripcion(s: &str, es_ingreso: bool) -> String {
         .collect();
     let resultado = limpio.join(" ").trim().to_string();
     if resultado.is_empty() {
-        if es_ingreso { "Ingreso".to_string() } else { "Gasto".to_string() }
+        if es_ingreso {
+            "Ingreso".to_string()
+        } else {
+            "Gasto".to_string()
+        }
     } else {
         resultado
     }
@@ -536,7 +577,10 @@ mod tests {
 
     #[test]
     fn test_inferir_categoria() {
-        assert_eq!(inferir_categoria("gasté 50 en luz", false), Categoria::GastoFijo);
+        assert_eq!(
+            inferir_categoria("gasté 50 en luz", false),
+            Categoria::GastoFijo
+        );
         assert_eq!(
             inferir_categoria("pago tarjeta 200", false),
             Categoria::PagoDeuda
@@ -545,15 +589,15 @@ mod tests {
             inferir_categoria("compré pizza", false),
             Categoria::GastoVariable
         );
-        assert_eq!(
-            inferir_categoria("recibí sueldo", true),
-            Categoria::Ingreso
-        );
+        assert_eq!(inferir_categoria("recibí sueldo", true), Categoria::Ingreso);
     }
 
     #[test]
     fn test_extraer_descripcion() {
-        assert_eq!(extraer_descripcion("gasté 50 en gasolina", false), "gasolina");
+        assert_eq!(
+            extraer_descripcion("gasté 50 en gasolina", false),
+            "gasolina"
+        );
         assert_eq!(extraer_descripcion("recibí 1500 de sueldo", true), "sueldo");
     }
 }

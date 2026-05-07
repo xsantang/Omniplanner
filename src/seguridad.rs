@@ -76,10 +76,16 @@ impl std::fmt::Display for ErrorSeguridad {
                 "Acceso bloqueado. Espera {} segundos.",
                 segundos_restantes
             ),
-            Self::PinDemasiadoCorto => write!(f, "PIN muy corto (mínimo {} caracteres).", PIN_MIN_LEN),
-            Self::PinDemasiadoLargo => write!(f, "PIN muy largo (máximo {} caracteres).", PIN_MAX_LEN),
+            Self::PinDemasiadoCorto => {
+                write!(f, "PIN muy corto (mínimo {} caracteres).", PIN_MIN_LEN)
+            }
+            Self::PinDemasiadoLargo => {
+                write!(f, "PIN muy largo (máximo {} caracteres).", PIN_MAX_LEN)
+            }
             Self::CifradoFallido(m) => write!(f, "Error al cifrar: {}", m),
-            Self::DescifradoFallido => write!(f, "No se pudo descifrar — PIN incorrecto o datos dañados."),
+            Self::DescifradoFallido => {
+                write!(f, "No se pudo descifrar — PIN incorrecto o datos dañados.")
+            }
             Self::DatosCorruptos => write!(f, "Datos corruptos o modificados externamente."),
             Self::OperacionCancelada => write!(f, "Operación cancelada por el usuario."),
             Self::EntradaInvalida(m) => write!(f, "Entrada inválida: {}", m),
@@ -133,8 +139,12 @@ pub struct ConfigSeguridad {
     pub bloqueado_hasta: Option<String>,
 }
 
-fn verdadero() -> bool { true }
-fn umbral_pago_default() -> f64 { 5000.0 }
+fn verdadero() -> bool {
+    true
+}
+fn umbral_pago_default() -> f64 {
+    5000.0
+}
 
 impl Default for ConfigSeguridad {
     fn default() -> Self {
@@ -161,9 +171,21 @@ impl ConfigSeguridad {
     /// Devuelve los `ParamsKdf` almacenados (para coherencia al descifrar).
     pub fn params_kdf(&self) -> ParamsKdf {
         ParamsKdf {
-            m_cost_kib: if self.argon2_m_cost_kib == 0 { ParamsKdf::default().m_cost_kib } else { self.argon2_m_cost_kib },
-            t_cost: if self.argon2_t_cost == 0 { ParamsKdf::default().t_cost } else { self.argon2_t_cost },
-            p_cost: if self.argon2_p_cost == 0 { ParamsKdf::default().p_cost } else { self.argon2_p_cost },
+            m_cost_kib: if self.argon2_m_cost_kib == 0 {
+                ParamsKdf::default().m_cost_kib
+            } else {
+                self.argon2_m_cost_kib
+            },
+            t_cost: if self.argon2_t_cost == 0 {
+                ParamsKdf::default().t_cost
+            } else {
+                self.argon2_t_cost
+            },
+            p_cost: if self.argon2_p_cost == 0 {
+                ParamsKdf::default().p_cost
+            } else {
+                self.argon2_p_cost
+            },
         }
     }
 }
@@ -203,8 +225,12 @@ impl std::fmt::Display for TipoAuditoria {
             Self::PinActivado => write!(f, "🔐 PIN activado"),
             Self::DatosCifrados => write!(f, "🔒 Datos cifrados y guardados"),
             Self::DatosDescifrados => write!(f, "🔓 Datos descifrados y cargados"),
-            Self::OperacionCritica { descripcion } => write!(f, "⚡ Operación crítica: {}", descripcion),
-            Self::ExportacionDatos { modulo, formato } => write!(f, "📤 Exportación: {} → {}", modulo, formato),
+            Self::OperacionCritica { descripcion } => {
+                write!(f, "⚡ Operación crítica: {}", descripcion)
+            }
+            Self::ExportacionDatos { modulo, formato } => {
+                write!(f, "📤 Exportación: {} → {}", modulo, formato)
+            }
             Self::BorradoDatos { modulo } => write!(f, "🗑️  Borrado de datos: {}", modulo),
             Self::AccesoContrasenias => write!(f, "🔑 Acceso al gestor de contraseñas"),
             Self::AccesoDatosFinancieros => write!(f, "💰 Acceso a datos financieros"),
@@ -321,7 +347,9 @@ impl<'a> SesionSegura<'a> {
         // Verificar bloqueo
         if self.esta_bloqueado() {
             let restante = self.segundos_restantes_bloqueo();
-            return Err(ErrorSeguridad::PinBloqueado { segundos_restantes: restante });
+            return Err(ErrorSeguridad::PinBloqueado {
+                segundos_restantes: restante,
+            });
         }
 
         // Si no hay PIN configurado, derivar clave sin validar hash
@@ -357,18 +385,20 @@ impl<'a> SesionSegura<'a> {
             self.auditoria.registrar(TipoAuditoria::LoginFallido, None);
 
             if self.config.intentos_fallidos >= MAX_INTENTOS_PIN {
-                let hasta = Local::now().naive_local()
-                    + chrono::Duration::seconds(SEGUNDOS_BLOQUEO);
-                self.config.bloqueado_hasta =
-                    Some(hasta.format("%Y-%m-%d %H:%M:%S").to_string());
-                self.auditoria.registrar(TipoAuditoria::BloqueoActivado, None);
+                let hasta =
+                    Local::now().naive_local() + chrono::Duration::seconds(SEGUNDOS_BLOQUEO);
+                self.config.bloqueado_hasta = Some(hasta.format("%Y-%m-%d %H:%M:%S").to_string());
+                self.auditoria
+                    .registrar(TipoAuditoria::BloqueoActivado, None);
                 return Err(ErrorSeguridad::PinBloqueado {
                     segundos_restantes: SEGUNDOS_BLOQUEO,
                 });
             }
 
             let restantes = MAX_INTENTOS_PIN - self.config.intentos_fallidos;
-            Err(ErrorSeguridad::PinIncorrecto { intentos_restantes: restantes })
+            Err(ErrorSeguridad::PinIncorrecto {
+                intentos_restantes: restantes,
+            })
         }
     }
 
@@ -398,10 +428,8 @@ impl<'a> SesionSegura<'a> {
 
         // Generar nuevo salt de cifrado
         let nuevo_salt = crate::cripto::bytes_aleatorios::<ARGON2_SALT_LEN>();
-        self.config.salt_cifrado_b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            nuevo_salt,
-        );
+        self.config.salt_cifrado_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, nuevo_salt);
 
         // Derivar y almacenar hash Argon2id del PIN (para verificación futura)
         let params = self.config.params_kdf();
@@ -422,7 +450,11 @@ impl<'a> SesionSegura<'a> {
         self.config.bloqueado_hasta = None;
 
         self.auditoria.registrar(
-            if pin_actual.is_some() { TipoAuditoria::PinCambiado } else { TipoAuditoria::PinActivado },
+            if pin_actual.is_some() {
+                TipoAuditoria::PinCambiado
+            } else {
+                TipoAuditoria::PinActivado
+            },
             None,
         );
 
@@ -437,7 +469,8 @@ impl<'a> SesionSegura<'a> {
         self.config.pin_activo = false;
         self.config.pin_hash = None;
         self.config.salt_cifrado_b64 = String::new();
-        self.auditoria.registrar(TipoAuditoria::PinDesactivado, None);
+        self.auditoria
+            .registrar(TipoAuditoria::PinDesactivado, None);
         Ok(())
     }
 
@@ -525,10 +558,9 @@ impl DatosCifrados {
 
     /// Descifra y devuelve el JSON de AppState.
     pub fn descifrar(&self, clave: &[u8; AES256_KEY_LEN]) -> Result<String, ErrorSeguridad> {
-        let bytes = descifrar_aes_gcm(clave, &self.sobre)
-            .map_err(|_| ErrorSeguridad::DescifradoFallido)?;
-        String::from_utf8(bytes)
-            .map_err(|_| ErrorSeguridad::DatosCorruptos)
+        let bytes =
+            descifrar_aes_gcm(clave, &self.sobre).map_err(|_| ErrorSeguridad::DescifradoFallido)?;
+        String::from_utf8(bytes).map_err(|_| ErrorSeguridad::DatosCorruptos)
     }
 
     /// Serializa a JSON para guardarlo en disco.
@@ -626,10 +658,18 @@ pub struct ResultadoValidacion {
 
 impl ResultadoValidacion {
     fn ok(valor: String) -> Self {
-        Self { valido: true, errores: Vec::new(), valor_sanitizado: valor }
+        Self {
+            valido: true,
+            errores: Vec::new(),
+            valor_sanitizado: valor,
+        }
     }
     fn error(errores: Vec<String>, valor: String) -> Self {
-        Self { valido: false, errores, valor_sanitizado: valor }
+        Self {
+            valido: false,
+            errores,
+            valor_sanitizado: valor,
+        }
     }
 }
 
@@ -645,7 +685,10 @@ pub fn validar_nombre(s: &str) -> ResultadoValidacion {
         errores.push("El nombre no puede superar 100 caracteres.".to_string());
     }
     // Detectar caracteres de control o nulos
-    if sanitizado.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+    if sanitizado
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
         errores.push("El nombre contiene caracteres de control no permitidos.".to_string());
     }
 

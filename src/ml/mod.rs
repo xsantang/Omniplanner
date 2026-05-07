@@ -36,17 +36,17 @@ pub use ann::ANN;
 pub use cnn::CNN;
 pub use decision_tree::ArbolDecision;
 pub use dnn::DNN;
+pub use gastos::{AlmacenGastos, GastoReal};
 pub use linalg::{Activacion, Matriz, Perdida, Rng};
 pub use optimizer::{
     BatchNorm, EarlyStopping, EstadoAdam, EstadoAdamVec, LRSchedule, LRScheduler, RegularizacionL2,
     ResultadoCV, TipoOptimizador,
 };
 pub use presupuesto_cero::AlmacenPresupuesto;
-pub use gastos::{AlmacenGastos, GastoReal};
-pub use sugerencias::{PlanPagosMes, SugerenciaPago, TipoSugerencia};
 pub use random_forest::BosqueAleatorio;
 pub use reinforcement::{GridWorld, MultiBandit, QTable};
 pub use rnn::{TipoRNN, RNN};
+pub use sugerencias::{PlanPagosMes, SugerenciaPago, TipoSugerencia};
 pub use svm::{SVMMulticlase, SVM};
 
 use serde::{Deserialize, Serialize};

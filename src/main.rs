@@ -39,8 +39,7 @@ use omniplanner::ml::{
 };
 use omniplanner::nlp::{DatosEntrenamiento, TipoRelacion, Valoracion};
 use omniplanner::seguridad::{
-    self, banner_advertencia, resumen_auditoria_reciente, ConfigSeguridad, NivelConfirmacion,
-    OperacionCritica, RegistroAuditoria, SesionSegura, TipoAuditoria,
+    self, banner_advertencia, resumen_auditoria_reciente, SesionSegura, TipoAuditoria,
 };
 use omniplanner::storage::AppState;
 use omniplanner::sync;
@@ -2097,7 +2096,11 @@ pub(crate) fn menu_agenda(state: &mut AppState) {
                         println!(
                             "      {} {}{}",
                             "💬".dimmed(),
-                            if emoji_str.is_empty() { String::new() } else { format!("{} ", emoji_str) },
+                            if emoji_str.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{} ", emoji_str)
+                            },
                             msg_str.dimmed(),
                         );
                     }
@@ -2254,7 +2257,8 @@ pub(crate) fn nuevo_evento(state: &mut AppState) {
     // Emoji y mensaje personalizados para Recordatorios
     let (emoji_evento, mensaje_recordatorio) = if matches!(tipo, TipoEvento::Recordatorio) {
         let emoji = pedir_texto_opcional("Emoji del recordatorio (opcional, ej: 🔔 💊 📞 🎯)");
-        let msg = pedir_texto_opcional("Mensaje personalizado (opcional, ej: 'Confirmar antes de ir')");
+        let msg =
+            pedir_texto_opcional("Mensaje personalizado (opcional, ej: 'Confirmar antes de ir')");
         (
             if emoji.is_empty() { None } else { Some(emoji) },
             if msg.is_empty() { None } else { Some(msg) },
@@ -4245,7 +4249,9 @@ pub(crate) fn menu_memoria(state: &mut AppState) {
 
 pub(crate) fn menu_contrasenias(state: &mut AppState) {
     // Auditoría: registrar acceso al gestor de contraseñas
-    state.auditoria.registrar(TipoAuditoria::AccesoContrasenias, None);
+    state
+        .auditoria
+        .registrar(TipoAuditoria::AccesoContrasenias, None);
 
     loop {
         limpiar();
@@ -6843,7 +6849,10 @@ pub(crate) fn importar_ics(state: &mut AppState) {
 
 pub(crate) fn importar_ics_outlook(state: &mut AppState) {
     separador("📅 Importar .ics de Outlook/Exchange");
-    println!("  {} Soporte completo para: VTIMEZONE, líneas dobladas,", "ℹ".cyan());
+    println!(
+        "  {} Soporte completo para: VTIMEZONE, líneas dobladas,",
+        "ℹ".cyan()
+    );
     println!("    X-MICROSOFT-*, TZID, VALUE=DATE, ORGANIZER, ATTENDEE.");
     println!();
 
@@ -6864,19 +6873,30 @@ pub(crate) fn importar_ics_outlook(state: &mut AppState) {
     let eventos = sync::outlook::importar_outlook(&contenido);
 
     if eventos.is_empty() {
-        println!("  {}", "No se encontraron eventos VEVENT en el archivo.".yellow());
+        println!(
+            "  {}",
+            "No se encontraron eventos VEVENT en el archivo.".yellow()
+        );
         pausa();
         return;
     }
 
     println!("  Encontrados {} evento(s):\n", eventos.len());
     for (i, e) in eventos.iter().enumerate() {
-        let fin = e.base.hora_fin
+        let fin = e
+            .base
+            .hora_fin
             .map(|h| format!("-{}", h.format("%H:%M")))
             .unwrap_or_default();
         let dia_tag = if e.todo_el_dia { " [Todo el día]" } else { "" };
-        let tz_tag = e.tzid.as_deref().map(|z| format!(" ({})", z)).unwrap_or_default();
-        let busy_tag = e.busy_status.as_deref()
+        let tz_tag = e
+            .tzid
+            .as_deref()
+            .map(|z| format!(" ({})", z))
+            .unwrap_or_default();
+        let busy_tag = e
+            .busy_status
+            .as_deref()
             .map(|b| format!(" | {}", b))
             .unwrap_or_default();
         println!(
@@ -6896,7 +6916,10 @@ pub(crate) fn importar_ics_outlook(state: &mut AppState) {
             println!("       Asistentes: {}", e.attendees.join(", ").dimmed());
         }
         if !busy_tag.is_empty() {
-            println!("       Estado: {}", busy_tag.trim_start_matches(" | ").dimmed());
+            println!(
+                "       Estado: {}",
+                busy_tag.trim_start_matches(" | ").dimmed()
+            );
         }
         println!();
     }
@@ -6942,7 +6965,11 @@ pub(crate) fn importar_ics_outlook(state: &mut AppState) {
             },
             Some(&format!("{} eventos importados desde Outlook", count)),
         );
-        println!("  {} {} eventos importados desde Outlook.", "✓".green(), count);
+        println!(
+            "  {} {} eventos importados desde Outlook.",
+            "✓".green(),
+            count
+        );
     }
     pausa();
 }
@@ -9975,7 +10002,9 @@ pub(crate) fn menu_compacto(opciones: &[&str]) -> Option<usize> {
 
 pub(crate) fn menu_asesor(state: &mut AppState) {
     // Auditoría: registrar acceso a módulo financiero
-    state.auditoria.registrar(TipoAuditoria::AccesoDatosFinancieros, None);
+    state
+        .auditoria
+        .registrar(TipoAuditoria::AccesoDatosFinancieros, None);
 
     loop {
         limpiar();
@@ -15963,10 +15992,7 @@ fn main() {
                     println!("  {} {}", "✗".red(), e);
                     intentos += 1;
                     if intentos >= seguridad::MAX_INTENTOS_PIN {
-                        println!(
-                            "\n  {} Demasiados intentos fallidos. Saliendo.",
-                            "🔒".red()
-                        );
+                        println!("\n  {} Demasiados intentos fallidos. Saliendo.", "🔒".red());
                         return;
                     }
                 }
@@ -16039,9 +16065,20 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
 
     loop {
         limpiar();
-        println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
-        println!("{}", "║  🧾 G A S T O S   R E A L E S                              ║".cyan().bold());
-        println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+        println!(
+            "{}",
+            "╔══════════════════════════════════════════════════════════════╗".cyan()
+        );
+        println!(
+            "{}",
+            "║  🧾 G A S T O S   R E A L E S                              ║"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "╚══════════════════════════════════════════════════════════════╝".cyan()
+        );
         println!();
 
         // Resumen del mes actual
@@ -16059,7 +16096,11 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 format!("-${:.2}", resumen.balance.abs()).red().to_string()
             },
         );
-        println!("  {} {} transacciones este mes.", "•".dimmed(), resumen.num_transacciones);
+        println!(
+            "  {} {} transacciones este mes.",
+            "•".dimmed(),
+            resumen.num_transacciones
+        );
         println!();
 
         let opciones = &[
@@ -16076,33 +16117,55 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 // Registrar gasto
                 let desc = match pedir_texto("Descripción del gasto") {
                     Some(d) => d,
-                    None => { pausa(); continue; }
+                    None => {
+                        pausa();
+                        continue;
+                    }
                 };
                 let monto_str = match pedir_texto("Monto ($)") {
                     Some(m) => m,
-                    None => { pausa(); continue; }
+                    None => {
+                        pausa();
+                        continue;
+                    }
                 };
                 let monto: f64 = match monto_str.trim().parse() {
                     Ok(v) if v > 0.0 => v,
-                    _ => { println!("  {} Monto inválido.", "✗".red()); pausa(); continue; }
+                    _ => {
+                        println!("  {} Monto inválido.", "✗".red());
+                        pausa();
+                        continue;
+                    }
                 };
                 let v = seguridad::validar_monto(monto, 0.01, 1_000_000.0);
                 if !v.valido {
-                    for e in &v.errores { println!("  {} {}", "✗".red(), e); }
-                    pausa(); continue;
+                    for e in &v.errores {
+                        println!("  {} {}", "✗".red(), e);
+                    }
+                    pausa();
+                    continue;
                 }
 
-                let cat_opts = &["Gasto Fijo 🏠", "Gasto Variable 🛒", "Pago Deuda 💳", "Ahorro 🏦"];
+                let cat_opts = &[
+                    "Gasto Fijo 🏠",
+                    "Gasto Variable 🛒",
+                    "Pago Deuda 💳",
+                    "Ahorro 🏦",
+                ];
                 let cat = match menu("Categoría", cat_opts) {
                     Some(0) => Categoria::GastoFijo,
                     Some(1) => Categoria::GastoVariable,
                     Some(2) => Categoria::PagoDeuda,
                     Some(3) => Categoria::Ahorro,
-                    _ => { continue; }
+                    _ => {
+                        continue;
+                    }
                 };
 
-                let fecha = pedir_fecha("Fecha (hoy si Enter)").unwrap_or_else(|| chrono::Local::now().date_naive());
-                let metodo = pedir_texto_opcional("Método de pago (ej: efectivo, tarjeta, transferencia)");
+                let fecha = pedir_fecha("Fecha (hoy si Enter)")
+                    .unwrap_or_else(|| chrono::Local::now().date_naive());
+                let metodo =
+                    pedir_texto_opcional("Método de pago (ej: efectivo, tarjeta, transferencia)");
                 let linea = pedir_texto_opcional("Línea de presupuesto asociada (opcional)");
                 let notas = pedir_texto_opcional("Notas (opcional)");
 
@@ -16123,18 +16186,29 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 // Registrar ingreso (monto negativo internamente)
                 let desc = match pedir_texto("Descripción del ingreso") {
                     Some(d) => d,
-                    None => { pausa(); continue; }
+                    None => {
+                        pausa();
+                        continue;
+                    }
                 };
                 let monto_str = match pedir_texto("Monto ($)") {
                     Some(m) => m,
-                    None => { pausa(); continue; }
+                    None => {
+                        pausa();
+                        continue;
+                    }
                 };
                 let monto: f64 = match monto_str.trim().parse::<f64>() {
                     Ok(v) if v > 0.0 => v,
-                    _ => { println!("  {} Monto inválido.", "✗".red()); pausa(); continue; }
+                    _ => {
+                        println!("  {} Monto inválido.", "✗".red());
+                        pausa();
+                        continue;
+                    }
                 };
 
-                let fecha = pedir_fecha("Fecha (hoy si Enter)").unwrap_or_else(|| chrono::Local::now().date_naive());
+                let fecha = pedir_fecha("Fecha (hoy si Enter)")
+                    .unwrap_or_else(|| chrono::Local::now().date_naive());
                 let notas = pedir_texto_opcional("Notas (opcional)");
 
                 // Ingreso = monto negativo en el almacén
@@ -16181,7 +16255,8 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 // Resumen por categoría
                 limpiar();
                 separador("📊 Gastos por categoría — mes actual");
-                let desde = chrono::NaiveDate::from_ymd_opt(ahora.year(), ahora.month(), 1).unwrap();
+                let desde =
+                    chrono::NaiveDate::from_ymd_opt(ahora.year(), ahora.month(), 1).unwrap();
                 let hasta = chrono::Local::now().date_naive();
                 let por_cat = state.gastos.por_categoria(desde, hasta);
                 if por_cat.is_empty() {
@@ -16189,7 +16264,11 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 } else {
                     let total: f64 = por_cat.iter().map(|(_, m)| m).sum();
                     for (cat, monto) in &por_cat {
-                        let pct = if total > 0.0 { monto / total * 100.0 } else { 0.0 };
+                        let pct = if total > 0.0 {
+                            monto / total * 100.0
+                        } else {
+                            0.0
+                        };
                         let barra: String = "█".repeat((pct / 5.0) as usize);
                         println!(
                             "  {} {:<16} {} {:>6.1}%  {}",
@@ -16209,11 +16288,14 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 // Eliminar transacción
                 let ids: Vec<String> = {
                     let mes = state.gastos.del_mes(ahora.year(), ahora.month());
-                    mes.iter().map(|g| format!("[{}] {} ${:.2}", g.id, g.descripcion, g.monto.abs())).collect()
+                    mes.iter()
+                        .map(|g| format!("[{}] {} ${:.2}", g.id, g.descripcion, g.monto.abs()))
+                        .collect()
                 };
                 if ids.is_empty() {
                     println!("  {}", "(sin transacciones este mes)".dimmed());
-                    pausa(); continue;
+                    pausa();
+                    continue;
                 }
                 let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
                 if let Some(idx) = menu("¿Cuál eliminar?", &refs) {
@@ -16254,9 +16336,20 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
     use omniplanner::ml::sugerencias::{PlanPagosMes, TipoSugerencia};
 
     limpiar();
-    println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
-    println!("{}", "║  💡 S U G E R E N C I A S   D E   P A G O                 ║".cyan().bold());
-    println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║  💡 S U G E R E N C I A S   D E   P A G O                 ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════╝".cyan()
+    );
     println!();
 
     let ahora = chrono::Local::now();
@@ -16268,7 +16361,10 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
     );
 
     // ── Resumen financiero del mes ──────────────────────────────────
-    println!("  {}", "── Resumen del mes ─────────────────────────────────────".dimmed());
+    println!(
+        "  {}",
+        "── Resumen del mes ─────────────────────────────────────".dimmed()
+    );
     println!(
         "  Ingreso mensual confirmado: {}",
         format!("${:.2}", plan.ingreso_mensual).green().bold()
@@ -16284,7 +16380,9 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
     let excedente_color = if plan.excedente > 0.01 {
         format!("${:.2}", plan.excedente).green().bold().to_string()
     } else {
-        format!("${:.2} (sin excedente)", plan.excedente).red().to_string()
+        format!("${:.2} (sin excedente)", plan.excedente)
+            .red()
+            .to_string()
     };
     println!("  Excedente para abonos:      {}", excedente_color);
     println!();
@@ -16301,7 +16399,10 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
     if plan.sugerencias.is_empty() {
         println!("  {}", "No hay deudas activas para sugerir pagos.".dimmed());
     } else {
-        println!("  {}", "── Plan de pagos sugerido ──────────────────────────────".dimmed());
+        println!(
+            "  {}",
+            "── Plan de pagos sugerido ──────────────────────────────".dimmed()
+        );
         println!();
         for (i, s) in plan.sugerencias.iter().enumerate() {
             let tipo_color = match s.tipo {
@@ -16311,12 +16412,7 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
                 TipoSugerencia::BolaNieve => format!("{}", s.tipo).cyan().bold().to_string(),
                 TipoSugerencia::SoloMinimo => format!("{}", s.tipo).dimmed().to_string(),
             };
-            println!(
-                "  {}. {} — {}",
-                i + 1,
-                s.nombre_deuda.bold(),
-                tipo_color,
-            );
+            println!("  {}. {} — {}", i + 1, s.nombre_deuda.bold(), tipo_color,);
             println!(
                 "     Saldo: {}  APR: {:.1}%  Mínimo: {}  → Pagar: {}",
                 format!("${:.2}", s.saldo_actual).red(),
@@ -16372,9 +16468,20 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
 fn menu_asistente_financiero(state: &mut AppState) {
     use omniplanner::nlp::asistente;
     limpiar();
-    println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
-    println!("{}", "║  💬 A S I S T E N T E   F I N A N C I E R O   I N T E L I G E N T E ║".cyan().bold());
-    println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║  💬 A S I S T E N T E   F I N A N C I E R O   I N T E L I G E N T E ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════╝".cyan()
+    );
     println!();
     println!("  {}", "Háblame en lenguaje natural. Ejemplos:".dimmed());
     println!("    {}", "• \"gasté 50 en gasolina hoy\"".dimmed());
@@ -16384,7 +16491,11 @@ fn menu_asistente_financiero(state: &mut AppState) {
     println!("    {}", "• \"cómo voy financieramente\"".dimmed());
     println!("    {}", "• \"recordarme pagar la luz el 15\"".dimmed());
     println!();
-    println!("  Escribe '{}' o '{}' para volver al menú.\n", "salir".yellow(), "exit".yellow());
+    println!(
+        "  Escribe '{}' o '{}' para volver al menú.\n",
+        "salir".yellow(),
+        "exit".yellow()
+    );
 
     loop {
         let input: String = match Input::new().with_prompt("  💬 Tú").interact_text() {
@@ -16404,12 +16515,7 @@ fn menu_asistente_financiero(state: &mut AppState) {
         let intencion = state.nlp.motor.intencion.clasificar(&input);
 
         // Despachar al handler adecuado
-        let respuesta = asistente::responder(
-            &input,
-            &intencion,
-            &state.asesor,
-            &mut state.gastos,
-        );
+        let respuesta = asistente::responder(&input, &intencion, &state.asesor, &mut state.gastos);
 
         // Auditar acceso a datos financieros
         state.auditoria.registrar(
@@ -16456,9 +16562,20 @@ fn menu_asistente_financiero(state: &mut AppState) {
 fn menu_seguridad(state: &mut AppState) {
     loop {
         limpiar();
-        println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
-        println!("{}", "║  🔐 S E G U R I D A D   Y   P R I V A C I D A D           ║".cyan().bold());
-        println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+        println!(
+            "{}",
+            "╔══════════════════════════════════════════════════════════════╗".cyan()
+        );
+        println!(
+            "{}",
+            "║  🔐 S E G U R I D A D   Y   P R I V A C I D A D           ║"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "╚══════════════════════════════════════════════════════════════╝".cyan()
+        );
         println!();
 
         let estado_pin = if state.seguridad.pin_activo {
@@ -16467,14 +16584,21 @@ fn menu_seguridad(state: &mut AppState) {
             format!("{} Desactivado", "🔴".red())
         };
         println!("  PIN de acceso:    {}", estado_pin);
-        println!("  Auditoría:        {} eventos registrados", state.auditoria.entradas.len());
+        println!(
+            "  Auditoría:        {} eventos registrados",
+            state.auditoria.entradas.len()
+        );
         if let Some(ref ts) = state.seguridad.ultimo_login {
             println!("  Último login:     {}", ts);
         }
         println!();
 
         let opciones = &[
-            if state.seguridad.pin_activo { "🔑  Cambiar PIN" } else { "🔑  Activar PIN de acceso" },
+            if state.seguridad.pin_activo {
+                "🔑  Cambiar PIN"
+            } else {
+                "🔑  Activar PIN de acceso"
+            },
             "🔓  Desactivar PIN",
             "📋  Ver registro de auditoría (últimas 24 h)",
             "⚙️   Configurar confirmaciones de seguridad",
@@ -16489,13 +16613,21 @@ fn menu_seguridad(state: &mut AppState) {
                 let pin_nuevo = pedir_texto("Nuevo PIN (mínimo 4 caracteres)");
                 let pin_nuevo = match pin_nuevo {
                     Some(p) => p,
-                    None => { println!("  Cancelado."); pausa(); continue; }
+                    None => {
+                        println!("  Cancelado.");
+                        pausa();
+                        continue;
+                    }
                 };
                 // Confirmar el PIN
                 let pin_confirm = pedir_texto("Confirma el PIN");
                 let pin_confirm = match pin_confirm {
                     Some(p) => p,
-                    None => { println!("  Cancelado."); pausa(); continue; }
+                    None => {
+                        println!("  Cancelado.");
+                        pausa();
+                        continue;
+                    }
                 };
                 if pin_nuevo != pin_confirm {
                     println!("  {} Los PINs no coinciden.", "✗".red());
@@ -16507,7 +16639,11 @@ fn menu_seguridad(state: &mut AppState) {
                     let pa = pedir_texto("PIN actual (para confirmar cambio)");
                     match pa {
                         Some(p) => Some(p),
-                        None => { println!("  Cancelado."); pausa(); continue; }
+                        None => {
+                            println!("  Cancelado.");
+                            pausa();
+                            continue;
+                        }
                     }
                 } else {
                     None
@@ -16517,7 +16653,10 @@ fn menu_seguridad(state: &mut AppState) {
                 match sesion.configurar_pin(&pin_nuevo, pin_actual.as_deref()) {
                     Ok(_) => {
                         println!("  {} PIN configurado correctamente.", "✓".green());
-                        println!("  {} El PIN protegerá el acceso al arrancar la aplicación.", "ℹ".cyan());
+                        println!(
+                            "  {} El PIN protegerá el acceso al arrancar la aplicación.",
+                            "ℹ".cyan()
+                        );
                     }
                     Err(e) => println!("  {} {}", "✗".red(), e),
                 }
@@ -16530,11 +16669,18 @@ fn menu_seguridad(state: &mut AppState) {
                     pausa();
                     continue;
                 }
-                println!("{}", banner_advertencia("Desactivar el PIN eliminará la protección de acceso."));
+                println!(
+                    "{}",
+                    banner_advertencia("Desactivar el PIN eliminará la protección de acceso.")
+                );
                 let pin = pedir_texto("Ingresa tu PIN actual para confirmar");
                 let pin = match pin {
                     Some(p) => p,
-                    None => { println!("  Cancelado."); pausa(); continue; }
+                    None => {
+                        println!("  Cancelado.");
+                        pausa();
+                        continue;
+                    }
                 };
                 let mut sesion = SesionSegura::new(&mut state.seguridad, &mut state.auditoria);
                 match sesion.desactivar_pin(&pin) {
@@ -16562,9 +16708,26 @@ fn menu_seguridad(state: &mut AppState) {
                 // Configurar confirmaciones
                 limpiar();
                 separador("⚙️ Confirmaciones de seguridad");
-                println!("  Confirmar borrado de datos financieros: {}", if state.seguridad.confirmar_borrado_financiero { "✅ Sí" } else { "❌ No" });
-                println!("  Confirmar pagos grandes:                {}", if state.seguridad.confirmar_pagos_grandes { "✅ Sí" } else { "❌ No" });
-                println!("  Umbral para doble confirmación:         ${:.2}", state.seguridad.umbral_pago_confirmacion);
+                println!(
+                    "  Confirmar borrado de datos financieros: {}",
+                    if state.seguridad.confirmar_borrado_financiero {
+                        "✅ Sí"
+                    } else {
+                        "❌ No"
+                    }
+                );
+                println!(
+                    "  Confirmar pagos grandes:                {}",
+                    if state.seguridad.confirmar_pagos_grandes {
+                        "✅ Sí"
+                    } else {
+                        "❌ No"
+                    }
+                );
+                println!(
+                    "  Umbral para doble confirmación:         ${:.2}",
+                    state.seguridad.umbral_pago_confirmacion
+                );
                 println!();
                 let opts = &[
                     "Activar/desactivar confirmación de borrado",
@@ -16574,14 +16737,42 @@ fn menu_seguridad(state: &mut AppState) {
                 ];
                 match menu("Configurar", opts) {
                     Some(0) => {
-                        state.seguridad.confirmar_borrado_financiero = !state.seguridad.confirmar_borrado_financiero;
-                        println!("  {} Confirmación de borrado: {}", "✓".green(), if state.seguridad.confirmar_borrado_financiero { "activada" } else { "desactivada" });
-                        state.auditoria.registrar(TipoAuditoria::OperacionCritica { descripcion: "Cambio configuración seguridad".to_string() }, None);
+                        state.seguridad.confirmar_borrado_financiero =
+                            !state.seguridad.confirmar_borrado_financiero;
+                        println!(
+                            "  {} Confirmación de borrado: {}",
+                            "✓".green(),
+                            if state.seguridad.confirmar_borrado_financiero {
+                                "activada"
+                            } else {
+                                "desactivada"
+                            }
+                        );
+                        state.auditoria.registrar(
+                            TipoAuditoria::OperacionCritica {
+                                descripcion: "Cambio configuración seguridad".to_string(),
+                            },
+                            None,
+                        );
                     }
                     Some(1) => {
-                        state.seguridad.confirmar_pagos_grandes = !state.seguridad.confirmar_pagos_grandes;
-                        println!("  {} Confirmación de pagos: {}", "✓".green(), if state.seguridad.confirmar_pagos_grandes { "activada" } else { "desactivada" });
-                        state.auditoria.registrar(TipoAuditoria::OperacionCritica { descripcion: "Cambio configuración seguridad".to_string() }, None);
+                        state.seguridad.confirmar_pagos_grandes =
+                            !state.seguridad.confirmar_pagos_grandes;
+                        println!(
+                            "  {} Confirmación de pagos: {}",
+                            "✓".green(),
+                            if state.seguridad.confirmar_pagos_grandes {
+                                "activada"
+                            } else {
+                                "desactivada"
+                            }
+                        );
+                        state.auditoria.registrar(
+                            TipoAuditoria::OperacionCritica {
+                                descripcion: "Cambio configuración seguridad".to_string(),
+                            },
+                            None,
+                        );
                     }
                     Some(2) => {
                         if let Some(s) = pedir_texto("Nuevo umbral (ej: 5000)") {
@@ -16591,7 +16782,9 @@ fn menu_seguridad(state: &mut AppState) {
                                     state.seguridad.umbral_pago_confirmacion = v;
                                     println!("  {} Umbral actualizado a ${:.2}", "✓".green(), v);
                                 } else {
-                                    for err in &val.errores { println!("  {} {}", "✗".red(), err); }
+                                    for err in &val.errores {
+                                        println!("  {} {}", "✗".red(), err);
+                                    }
                                 }
                             } else {
                                 println!("  {} Valor numérico inválido.", "✗".red());
@@ -16613,12 +16806,21 @@ fn menu_seguridad(state: &mut AppState) {
                 for d in &state.asesor.rastreador.deudas {
                     let v = seguridad::validar_nombre(&d.nombre);
                     if !v.valido {
-                        println!("  {} Deuda con nombre inválido: '{}'", "⚠".yellow(), d.nombre);
+                        println!(
+                            "  {} Deuda con nombre inválido: '{}'",
+                            "⚠".yellow(),
+                            d.nombre
+                        );
                         ok = false;
                     }
                     let vt = seguridad::validar_tasa(d.tasa_anual / 100.0 / 12.0);
                     if !vt.valido {
-                        println!("  {} Deuda '{}' tiene tasa inválida: {:.2}% APR", "⚠".yellow(), d.nombre, d.tasa_anual);
+                        println!(
+                            "  {} Deuda '{}' tiene tasa inválida: {:.2}% APR",
+                            "⚠".yellow(),
+                            d.nombre,
+                            d.tasa_anual
+                        );
                         ok = false;
                     }
                 }
@@ -16640,12 +16842,20 @@ fn menu_seguridad(state: &mut AppState) {
                 }
 
                 if ok {
-                    println!("  {} Todos los datos verificados sin inconsistencias.", "✓".green());
+                    println!(
+                        "  {} Todos los datos verificados sin inconsistencias.",
+                        "✓".green()
+                    );
                 } else {
-                    println!("\n  {} Se encontraron advertencias. Revisa los datos afectados.", "⚠".yellow());
+                    println!(
+                        "\n  {} Se encontraron advertencias. Revisa los datos afectados.",
+                        "⚠".yellow()
+                    );
                 }
                 state.auditoria.registrar(
-                    TipoAuditoria::OperacionCritica { descripcion: "Verificación de integridad ejecutada".to_string() },
+                    TipoAuditoria::OperacionCritica {
+                        descripcion: "Verificación de integridad ejecutada".to_string(),
+                    },
                     None,
                 );
                 pausa();
@@ -16653,17 +16863,33 @@ fn menu_seguridad(state: &mut AppState) {
             Some(5) => {
                 // Exportar auditoría
                 use std::io::Write;
-                let ruta = omniplanner::io::dir_modulo("seguridad").join(
-                    format!("auditoria_{}.txt", chrono::Local::now().format("%Y%m%d_%H%M%S"))
-                );
+                let ruta = omniplanner::io::dir_modulo("seguridad").join(format!(
+                    "auditoria_{}.txt",
+                    chrono::Local::now().format("%Y%m%d_%H%M%S")
+                ));
                 if let Ok(mut f) = std::fs::File::create(&ruta) {
                     for e in &state.auditoria.entradas {
-                        let _ = writeln!(f, "{} | {}{}", e.timestamp, e.tipo,
-                            e.descripcion_extra.as_deref().map(|s| format!(" | {}", s)).unwrap_or_default());
+                        let _ = writeln!(
+                            f,
+                            "{} | {}{}",
+                            e.timestamp,
+                            e.tipo,
+                            e.descripcion_extra
+                                .as_deref()
+                                .map(|s| format!(" | {}", s))
+                                .unwrap_or_default()
+                        );
                     }
-                    println!("  {} Auditoría exportada a: {}", "✓".green(), ruta.display());
+                    println!(
+                        "  {} Auditoría exportada a: {}",
+                        "✓".green(),
+                        ruta.display()
+                    );
                     state.auditoria.registrar(
-                        TipoAuditoria::ExportacionDatos { modulo: "auditoria".to_string(), formato: "txt".to_string() },
+                        TipoAuditoria::ExportacionDatos {
+                            modulo: "auditoria".to_string(),
+                            formato: "txt".to_string(),
+                        },
                         None,
                     );
                 } else {

@@ -100,8 +100,7 @@ impl PlanPagosMes {
 
         if ingreso < 0.01 {
             advertencias.push(
-                "No hay ingresos confirmados registrados. Ve al Rastreador → Ingresos."
-                    .to_string(),
+                "No hay ingresos confirmados registrados. Ve al Rastreador → Ingresos.".to_string(),
             );
         }
         if gastos_mes > ingreso * 0.9 {
@@ -148,9 +147,9 @@ impl PlanPagosMes {
             .iter()
             .filter(|d| {
                 d.saldo_actual() > 0.01
-                    && !sugerencias
-                        .iter()
-                        .any(|s| s.nombre_deuda == d.nombre && s.tipo == TipoSugerencia::CasiLiquidada)
+                    && !sugerencias.iter().any(|s| {
+                        s.nombre_deuda == d.nombre && s.tipo == TipoSugerencia::CasiLiquidada
+                    })
             })
             .copied()
             .collect();
@@ -241,7 +240,10 @@ impl PlanPagosMes {
         }
 
         if activas.is_empty() {
-            advertencias.push("¡No tienes deudas activas registradas! Agrega deudas en el Rastreador.".to_string());
+            advertencias.push(
+                "¡No tienes deudas activas registradas! Agrega deudas en el Rastreador."
+                    .to_string(),
+            );
         }
 
         PlanPagosMes {
