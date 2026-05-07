@@ -17,6 +17,7 @@
 use chrono::{Datelike, Local, NaiveDate};
 
 use super::intent::{CategoriaIntencion, Intencion};
+use crate::agenda::Agenda;
 use crate::ml::gastos::{AlmacenGastos, GastoReal};
 use crate::ml::presupuesto_cero::Categoria;
 use crate::ml::sugerencias::{PlanPagosMes, TipoSugerencia};
@@ -82,6 +83,7 @@ pub fn responder(
     intencion: &Intencion,
     rastreador: &AlmacenAsesor,
     gastos: &mut AlmacenGastos,
+    agenda: &Agenda,
 ) -> RespuestaAsistente {
     let conf = intencion.confianza;
 
@@ -115,7 +117,8 @@ pub fn responder(
         CategoriaIntencion::ResumenFinanciero => {
             responder_resumen_financiero(conf, &rastreador.rastreador, gastos)
         }
-        CategoriaIntencion::AgendarPago => responder_agendar_pago(consulta, conf),
+        CategoriaIntencion::AgendarPago => responder_agendar_pago(consulta, conf, agenda),
+        CategoriaIntencion::ConsultarAgenda => responder_consultar_agenda(consulta, conf, agenda),
         CategoriaIntencion::Saludo => RespuestaAsistente::solo_texto(
             CategoriaIntencion::Saludo,
             conf,
@@ -144,36 +147,7 @@ pub fn responder(
                 || norm_q.contains("reunion")
                 || norm_q.contains("recordatorio");
             if es_agenda {
-                // Extraer el nombre si viene "de X"
-                let nombre = {
-                    let words: Vec<&str> = norm_q.split_whitespace().collect();
-                    words
-                        .iter()
-                        .position(|w| *w == "de")
-                        .and_then(|i| words.get(i + 1))
-                        .map(|w| {
-                            // Capitalizar
-                            let mut c = w.chars();
-                            match c.next() {
-                                None => String::new(),
-                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                            }
-                        })
-                };
-                let quien = nombre.as_deref().unwrap_or("esa persona");
-                return RespuestaAsistente::solo_texto(
-                    CategoriaIntencion::Consultar,
-                    conf,
-                    format!(
-                        "📅 Para consultar eventos de agenda (como el cumpleaños de {}), \
-                         usa el módulo Agenda desde el menú principal.\n\n\
-                         El Asistente Financiero solo maneja:\n\
-                         • Gastos e ingresos\n\
-                         • Resumen y estrategia financiera\n\
-                         • Pagos y deudas",
-                        quien
-                    ),
-                );
+                return responder_consultar_agenda(consulta, conf, agenda);
             }
             // Construir una Intencion temporal con el intent efectivo para el mensaje
             let intent_info = Intencion {
@@ -443,25 +417,245 @@ fn responder_resumen_financiero(
     r
 }
 
-fn responder_agendar_pago(consulta: &str, conf: f64) -> RespuestaAsistente {
+fn responder_agendar_pago(consulta: &str, conf: f64, agenda: &Agenda) -> RespuestaAsistente {
     let monto = extraer_monto(consulta);
     let fecha = extraer_fecha(consulta);
-    let mut texto = String::from("📅 Para agendar un pago necesito:\n");
-    if monto.is_none() {
-        texto.push_str("  • Monto (ej: \"pagar 200\")\n");
-    }
-    if fecha.is_none() {
-        texto.push_str("  • Fecha (ej: \"el 15\", \"mañana\")\n");
-    }
-    texto.push_str("\nUsa el menú \"Agenda → Nuevo evento\" con tipo \"Pago\" para registrar todos los detalles.");
+
+    // Extraer descripción del pago (ej: "pagar luz", "recordarme pagar carrington")
+    let norm = sin_tildes(&consulta.to_lowercase());
+    let descripcion = {
+        let triggers = [
+            "pagar ",
+            "pago de ",
+            "recordarme pagar ",
+            "recordar pago de ",
+            "agendar pago de ",
+        ];
+        let mut desc = None;
+        for t in &triggers {
+            if let Some(pos) = norm.find(t) {
+                let resto = norm[pos + t.len()..]
+                    .split([' ', '\n'].as_ref())
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !resto.is_empty() {
+                    desc = Some(resto);
+                    break;
+                }
+            }
+        }
+        desc
+    };
+
+    // Si ya tienen fecha y monto, mostrar confirmación y eventos de esa fecha
     if let (Some(m), Some(f)) = (monto, fecha) {
-        texto = format!(
-            "📅 Detecté pago de ${:.2} para {}.\nAbre el menú Agenda y selecciona \"Nuevo evento\" tipo Pago para confirmar los detalles (descripción, hora, recordatorio).",
+        let eventos_ese_dia = agenda.eventos_del_dia(f);
+        let mut texto = format!(
+            "📅 Pago detectado: ${:.2} para el {}{}\n\n\
+             Para confirmar, abre 📅 Agenda → Nuevo evento → tipo \"Pago\"",
             m,
             f.format("%d/%m/%Y"),
+            descripcion
+                .as_deref()
+                .map(|d| format!(" ({})", d))
+                .unwrap_or_default(),
         );
+        if !eventos_ese_dia.is_empty() {
+            texto.push_str(&format!(
+                "\n\n⚠️ Ese día ya tienes {} evento(s):",
+                eventos_ese_dia.len()
+            ));
+            for e in eventos_ese_dia.iter().take(3) {
+                texto.push_str(&format!("\n   • {} — {}", e.titulo, e.tipo));
+            }
+        }
+        let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::AgendarPago, conf, texto);
+        r.seguimientos
+            .push("Ver todos mis pagos próximos".to_string());
+        return r;
     }
+
+    // Sin fecha/monto: pedir los datos que faltan
+    let mut texto = String::from("📅 Para agendar un pago necesito:\n");
+    if monto.is_none() {
+        texto.push_str("  • Monto  (ej: \"pagar 200\")\n");
+    }
+    if fecha.is_none() {
+        texto.push_str("  • Fecha  (ej: \"el 15\", \"mañana\", \"el viernes\")\n");
+    }
+    texto.push_str(
+        "\nO abre 📅 Agenda → Nuevo evento → tipo \"Pago\" para registrar todos los detalles.",
+    );
+
+    // Mostrar próximos pagos ya agendados como referencia
+    let hoy = Local::now().date_naive();
+    let proximos_pagos: Vec<_> = agenda
+        .eventos
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.tipo,
+                crate::agenda::TipoEvento::Pago | crate::agenda::TipoEvento::Recordatorio
+            ) && e.fecha >= hoy
+        })
+        .take(3)
+        .collect();
+    if !proximos_pagos.is_empty() {
+        texto.push_str("\n\n🔔 Pagos/recordatorios ya agendados:");
+        for e in &proximos_pagos {
+            texto.push_str(&format!(
+                "\n   • {} — {}",
+                e.fecha.format("%d/%m"),
+                e.titulo
+            ));
+        }
+    }
+
     RespuestaAsistente::solo_texto(CategoriaIntencion::AgendarPago, conf, texto)
+}
+
+/// Consulta la agenda: eventos de hoy, próximos, cumpleños, citas, etc.
+fn responder_consultar_agenda(consulta: &str, conf: f64, agenda: &Agenda) -> RespuestaAsistente {
+    let hoy = Local::now().date_naive();
+    let norm = sin_tildes(&consulta.to_lowercase());
+
+    // ¿Busca un cumpleaños de alguien?
+    let busca_cumple = norm.contains("cumplean");
+    // ¿Busca por nombre?
+    let keyword = {
+        let triggers = [
+            "de ",
+            "cumple de ",
+            "cita con ",
+            "evento de ",
+            "recordatorio de ",
+        ];
+        let mut kw = None;
+        for t in &triggers {
+            if let Some(pos) = norm.find(t) {
+                let w = norm[pos + t.len()..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                if w.len() > 2 {
+                    kw = Some(w.to_string());
+                    break;
+                }
+            }
+        }
+        kw
+    };
+
+    // Filtrar eventos relevantes
+    let proximos_dias = hoy + chrono::Duration::days(30);
+    let mut eventos: Vec<&crate::agenda::Evento> = agenda
+        .eventos
+        .iter()
+        .filter(|e| e.fecha >= hoy && e.fecha <= proximos_dias)
+        .collect();
+    eventos.sort_by_key(|e| e.fecha);
+
+    // Si busca por nombre, filtrar por keyword
+    if let Some(ref kw) = keyword {
+        let filtrados: Vec<_> = agenda
+            .eventos
+            .iter()
+            .filter(|e| {
+                sin_tildes(&e.titulo.to_lowercase()).contains(kw.as_str())
+                    || sin_tildes(&e.descripcion.to_lowercase()).contains(kw.as_str())
+            })
+            .collect();
+        if !filtrados.is_empty() {
+            let mut texto = format!("🔍 Eventos relacionados con \"{}\":\n", kw);
+            for e in &filtrados {
+                let emoji = match &e.tipo {
+                    crate::agenda::TipoEvento::Cumpleanos => "🎂",
+                    crate::agenda::TipoEvento::Pago => "💰",
+                    crate::agenda::TipoEvento::Cita => "🩺",
+                    crate::agenda::TipoEvento::Reunion => "🤝",
+                    crate::agenda::TipoEvento::Recordatorio => "🔔",
+                    _ => "📅",
+                };
+                texto.push_str(&format!(
+                    "  {} {} — {}  ({})\n",
+                    emoji,
+                    e.fecha.format("%d/%m/%Y"),
+                    e.titulo,
+                    e.tipo
+                ));
+                if !e.descripcion.is_empty() {
+                    texto.push_str(&format!("     {}\n", e.descripcion));
+                }
+            }
+            let mut r =
+                RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarAgenda, conf, texto);
+            r.seguimientos
+                .push("Ver todos mis eventos próximos".to_string());
+            return r;
+        } else if busca_cumple {
+            let mut r = RespuestaAsistente::solo_texto(
+                CategoriaIntencion::ConsultarAgenda,
+                conf,
+                format!("🎂 No encontré el cumpleaños de \"{}\" en tu agenda.\nPuedes agregarlo en 📅 Agenda → Nuevo evento → tipo \"Cumpleaños\".", kw),
+            );
+            r.seguimientos.push("Ver próximos eventos".to_string());
+            return r;
+        }
+    }
+
+    // Vista general: hoy + próximos 30 días
+    let hoy_eventos = agenda.eventos_del_dia(hoy);
+    let mut texto = format!(
+        "📅 Agenda — hoy {} y próximos 30 días\n",
+        hoy.format("%d/%m/%Y")
+    );
+
+    if hoy_eventos.is_empty() {
+        texto.push_str("\n  Hoy no tienes eventos agendados.");
+    } else {
+        texto.push_str(&format!("\n🔴 HOY ({} evento(s)):", hoy_eventos.len()));
+        for e in &hoy_eventos {
+            let emoji = match &e.tipo {
+                crate::agenda::TipoEvento::Cumpleanos => "🎂",
+                crate::agenda::TipoEvento::Pago => "💰",
+                crate::agenda::TipoEvento::Cita => "🩺",
+                crate::agenda::TipoEvento::Reunion => "🤝",
+                crate::agenda::TipoEvento::Recordatorio => "🔔",
+                _ => "📅",
+            };
+            texto.push_str(&format!("\n  {} {}", emoji, e.titulo));
+        }
+    }
+
+    // Próximos (excluir hoy)
+    let proximos: Vec<_> = eventos.iter().filter(|e| e.fecha > hoy).take(7).collect();
+    if !proximos.is_empty() {
+        texto.push_str("\n\n📆 PRÓXIMOS:");
+        for e in proximos {
+            let emoji = match &e.tipo {
+                crate::agenda::TipoEvento::Cumpleanos => "🎂",
+                crate::agenda::TipoEvento::Pago => "💰",
+                crate::agenda::TipoEvento::Cita => "🩺",
+                crate::agenda::TipoEvento::Reunion => "🤝",
+                crate::agenda::TipoEvento::Recordatorio => "🔔",
+                _ => "📅",
+            };
+            texto.push_str(&format!(
+                "\n  {} {} — {}",
+                emoji,
+                e.fecha.format("%d/%m"),
+                e.titulo
+            ));
+        }
+    } else if hoy_eventos.is_empty() {
+        texto.push_str("\n  No tienes eventos en los próximos 30 días.");
+    }
+
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarAgenda, conf, texto);
+    r.seguimientos.push("Agendar un pago".to_string());
+    r.seguimientos.push("Ver resumen financiero".to_string());
+    r
 }
 
 fn responder_no_entendido(consulta: &str, intencion: &Intencion) -> RespuestaAsistente {

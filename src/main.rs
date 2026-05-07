@@ -16516,7 +16516,13 @@ fn menu_asistente_financiero(state: &mut AppState) {
         let intencion = state.nlp.motor.intencion.clasificar(&input);
 
         // Intentar despachar
-        let respuesta = asistente::responder(&input, &intencion, &state.asesor, &mut state.gastos);
+        let respuesta = asistente::responder(
+            &input,
+            &intencion,
+            &state.asesor,
+            &mut state.gastos,
+            &state.agenda,
+        );
 
         // Si no se entendió, iniciar diálogo de clarificación
         let respuesta = if matches!(
@@ -16543,7 +16549,13 @@ fn menu_asistente_financiero(state: &mut AppState) {
                         entidades: vec![],
                         alternativas: vec![],
                     };
-                    asistente::responder(&input, &intencion_clara, &state.asesor, &mut state.gastos)
+                    asistente::responder(
+                        &input,
+                        &intencion_clara,
+                        &state.asesor,
+                        &mut state.gastos,
+                        &state.agenda,
+                    )
                 }
                 None => {
                     println!("  {} Cancelado.\n", "↩".dimmed());

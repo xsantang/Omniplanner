@@ -30,6 +30,7 @@ pub enum CategoriaIntencion {
     ConsultarGastos,
     PedirSugerenciaPago,
     AgendarPago,
+    ConsultarAgenda,
     ResumenFinanciero,
     Desconocido,
 }
@@ -57,6 +58,7 @@ impl CategoriaIntencion {
             Self::ConsultarGastos => "ConsultarGastos",
             Self::PedirSugerenciaPago => "PedirSugerenciaPago",
             Self::AgendarPago => "AgendarPago",
+            Self::ConsultarAgenda => "ConsultarAgenda",
             Self::ResumenFinanciero => "ResumenFinanciero",
             Self::Desconocido => "Desconocido",
         }
@@ -84,6 +86,7 @@ impl CategoriaIntencion {
             Self::ConsultarGastos,
             Self::PedirSugerenciaPago,
             Self::AgendarPago,
+            Self::ConsultarAgenda,
             Self::ResumenFinanciero,
             Self::Desconocido,
         ]
