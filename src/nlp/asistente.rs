@@ -577,15 +577,45 @@ fn responder_consultar_agenda(consulta: &str, conf: f64, agenda: &Agenda) -> Res
                     crate::agenda::TipoEvento::Recordatorio => "🔔",
                     _ => "📅",
                 };
+                // Calcular fecha relevante: para cumpleaños, próxima ocurrencia anual.
+                // Para otros eventos, la fecha registrada.
+                let (fecha_relevante, es_proximo_aniversario) =
+                    if matches!(e.tipo, crate::agenda::TipoEvento::Cumpleanos) {
+                        let prox = proxima_ocurrencia_anual(e.fecha, hoy);
+                        (prox, prox != e.fecha)
+                    } else {
+                        (e.fecha, false)
+                    };
+                let dias = (fecha_relevante - hoy).num_days();
+                let frase_dias = match dias {
+                    0 => "🎉 ¡HOY!".to_string(),
+                    1 => "(mañana)".to_string(),
+                    -1 => "(ayer)".to_string(),
+                    n if n > 0 => format!("(faltan {} días)", n),
+                    n => format!("(hace {} días)", -n),
+                };
+                let etiqueta_fecha = if es_proximo_aniversario {
+                    format!(
+                        "{} ➜ próximo: {}",
+                        e.fecha.format("%d/%m/%Y"),
+                        fecha_relevante.format("%d/%m/%Y"),
+                    )
+                } else {
+                    fecha_relevante.format("%d/%m/%Y").to_string()
+                };
                 texto.push_str(&format!(
-                    "  {} {} — {}  ({})\n",
-                    emoji,
-                    e.fecha.format("%d/%m/%Y"),
-                    e.titulo,
-                    e.tipo
+                    "  {} {} {} — {}  ({})\n",
+                    emoji, etiqueta_fecha, frase_dias, e.titulo, e.tipo
                 ));
                 if !e.descripcion.is_empty() {
                     texto.push_str(&format!("     {}\n", e.descripcion));
+                }
+                // Edad si es cumpleaños y la fecha original tenía año
+                if matches!(e.tipo, crate::agenda::TipoEvento::Cumpleanos) {
+                    let edad_proxima = fecha_relevante.year() - e.fecha.year();
+                    if edad_proxima > 0 {
+                        texto.push_str(&format!("     🎂 Cumplirá {} años\n", edad_proxima));
+                    }
                 }
             }
             let mut r =
@@ -689,6 +719,25 @@ fn sin_tildes(s: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Para una fecha de cumpleaños registrada, devuelve la próxima ocurrencia
+/// anual a partir de `hoy`. Si la fecha original ya tiene su aniversario
+/// pasado este año, retorna la del año siguiente.
+fn proxima_ocurrencia_anual(fecha_original: NaiveDate, hoy: NaiveDate) -> NaiveDate {
+    let mes = fecha_original.month();
+    let dia = fecha_original.day();
+    // Probar con el año actual
+    let candidato_actual = NaiveDate::from_ymd_opt(hoy.year(), mes, dia)
+        .or_else(|| NaiveDate::from_ymd_opt(hoy.year(), mes, 28)) // 29-feb fallback
+        .unwrap_or(hoy);
+    if candidato_actual >= hoy {
+        candidato_actual
+    } else {
+        NaiveDate::from_ymd_opt(hoy.year() + 1, mes, dia)
+            .or_else(|| NaiveDate::from_ymd_opt(hoy.year() + 1, mes, 28))
+            .unwrap_or(candidato_actual)
+    }
 }
 
 // ─── Extracción de entidades ─────────────────────────────────────────────────
