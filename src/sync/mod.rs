@@ -11,6 +11,8 @@ pub mod correo;
 pub mod drive;
 #[cfg(feature = "desktop")]
 pub mod gist;
+#[cfg(feature = "desktop")]
+pub mod outlook;
 pub mod servidor;
 
 use serde::{Deserialize, Serialize};

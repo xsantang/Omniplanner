@@ -6106,6 +6106,7 @@ pub(crate) fn menu_sync(state: &mut AppState) {
             "───────────────────────────",
             "📅 Exportar a archivo .ics",
             "📅 Importar archivo .ics",
+            "📅 Importar .ics de Outlook/Exchange (VTIMEZONE, X-MICROSOFT-*)",
             "📅 Sincronizar → Google Calendar",
             "📅 Importar ← Google Calendar",
             "🔄 Re-sincronizar todo (limpiar mapeo y volver a enviar)",
@@ -6152,17 +6153,18 @@ pub(crate) fn menu_sync(state: &mut AppState) {
             Some(9) => {} // separador
             Some(10) => exportar_ics(state),
             Some(11) => importar_ics(state),
-            Some(12) => sync_push_google(state),
-            Some(13) => sync_pull_google(state),
-            Some(14) => resync_google(state),
-            Some(15) => iniciar_dashboard_web(state),
-            Some(16) => exportar_estado(state),
-            Some(17) => importar_estado(state),
-            Some(18) => enviar_resumen(state),
-            Some(19) => enviar_recordatorio(state),
-            Some(20) => enviar_followup_email(state),
-            Some(21) => configurar_google(state),
-            Some(22) => configurar_email(state),
+            Some(12) => importar_ics_outlook(state),
+            Some(13) => sync_push_google(state),
+            Some(14) => sync_pull_google(state),
+            Some(15) => resync_google(state),
+            Some(16) => iniciar_dashboard_web(state),
+            Some(17) => exportar_estado(state),
+            Some(18) => importar_estado(state),
+            Some(19) => enviar_resumen(state),
+            Some(20) => enviar_recordatorio(state),
+            Some(21) => enviar_followup_email(state),
+            Some(22) => configurar_google(state),
+            Some(23) => configurar_email(state),
             _ => return,
         }
     }
@@ -6835,6 +6837,112 @@ pub(crate) fn importar_ics(state: &mut AppState) {
             count += 1;
         }
         println!("  {} {} eventos importados", "✓".green(), count);
+    }
+    pausa();
+}
+
+pub(crate) fn importar_ics_outlook(state: &mut AppState) {
+    separador("📅 Importar .ics de Outlook/Exchange");
+    println!("  {} Soporte completo para: VTIMEZONE, líneas dobladas,", "ℹ".cyan());
+    println!("    X-MICROSOFT-*, TZID, VALUE=DATE, ORGANIZER, ATTENDEE.");
+    println!();
+
+    let archivo = match pedir_texto("Archivo .ics exportado de Outlook") {
+        Some(t) => t,
+        None => return,
+    };
+
+    let contenido = match std::fs::read_to_string(&archivo) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("  {} Error leyendo archivo: {}", "✗".red(), e);
+            pausa();
+            return;
+        }
+    };
+
+    let eventos = sync::outlook::importar_outlook(&contenido);
+
+    if eventos.is_empty() {
+        println!("  {}", "No se encontraron eventos VEVENT en el archivo.".yellow());
+        pausa();
+        return;
+    }
+
+    println!("  Encontrados {} evento(s):\n", eventos.len());
+    for (i, e) in eventos.iter().enumerate() {
+        let fin = e.base.hora_fin
+            .map(|h| format!("-{}", h.format("%H:%M")))
+            .unwrap_or_default();
+        let dia_tag = if e.todo_el_dia { " [Todo el día]" } else { "" };
+        let tz_tag = e.tzid.as_deref().map(|z| format!(" ({})", z)).unwrap_or_default();
+        let busy_tag = e.busy_status.as_deref()
+            .map(|b| format!(" | {}", b))
+            .unwrap_or_default();
+        println!(
+            "    {}. {} | {} {}{}{}{}",
+            i + 1,
+            e.base.titulo,
+            e.base.fecha.format("%d/%m/%Y"),
+            e.base.hora_inicio.format("%H:%M"),
+            fin,
+            dia_tag,
+            tz_tag,
+        );
+        if let Some(org) = &e.organizer {
+            println!("       Organizador: {}", org.dimmed());
+        }
+        if !e.attendees.is_empty() {
+            println!("       Asistentes: {}", e.attendees.join(", ").dimmed());
+        }
+        if !busy_tag.is_empty() {
+            println!("       Estado: {}", busy_tag.trim_start_matches(" | ").dimmed());
+        }
+        println!();
+    }
+
+    if TermConfirm::new()
+        .with_prompt("  ¿Importar todos a la agenda?")
+        .default(true)
+        .interact()
+        .unwrap_or(false)
+    {
+        let mut count = 0;
+        for eo in &eventos {
+            let ei = &eo.base;
+            // Determinar TipoEvento según busy_status o clase
+            let tipo = match eo.busy_status.as_deref() {
+                Some("OOF") => TipoEvento::Otro("Fuera de oficina".to_string()),
+                _ if !eo.attendees.is_empty() => TipoEvento::Reunion,
+                _ if eo.todo_el_dia => TipoEvento::Otro("Día completo".to_string()),
+                _ => TipoEvento::Otro("Importado-Outlook".to_string()),
+            };
+            let mut evento = Evento::new(
+                ei.titulo.clone(),
+                ei.descripcion.clone(),
+                tipo,
+                ei.fecha,
+                ei.hora_inicio,
+                ei.hora_fin,
+            );
+            // Añadir UID como nota para trazabilidad
+            if !ei.uid.is_empty() {
+                evento.notas.push(format!("UID-Outlook: {}", ei.uid));
+            }
+            if let Some(tz) = &eo.tzid {
+                evento.notas.push(format!("TZID: {}", tz));
+            }
+            state.agenda.agregar_evento(evento);
+            count += 1;
+        }
+        state.auditoria.registrar(
+            TipoAuditoria::ExportacionDatos {
+                modulo: "agenda".to_string(),
+                formato: "ics-outlook".to_string(),
+            },
+            Some(&format!("{} eventos importados desde Outlook", count)),
+        );
+        println!("  {} {} eventos importados desde Outlook.", "✓".green(), count);
     }
     pausa();
 }
