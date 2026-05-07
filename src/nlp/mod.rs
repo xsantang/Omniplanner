@@ -9,6 +9,7 @@ pub mod engine;
 pub mod feedback;
 pub mod intent;
 pub mod knowledge;
+pub mod router;
 pub mod sentiment;
 pub mod tokenizer;
 

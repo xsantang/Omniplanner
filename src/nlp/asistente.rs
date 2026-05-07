@@ -17,11 +17,12 @@
 use chrono::{Datelike, Local, NaiveDate};
 
 use super::intent::{CategoriaIntencion, Intencion};
+use super::router;
 use crate::agenda::Agenda;
 use crate::ml::gastos::{AlmacenGastos, GastoReal};
 use crate::ml::presupuesto_cero::Categoria;
 use crate::ml::sugerencias::{PlanPagosMes, TipoSugerencia};
-use crate::ml::AlmacenAsesor;
+use crate::storage::AppState;
 
 // ─── Resultado del asistente ─────────────────────────────────────────────────
 
@@ -43,7 +44,11 @@ pub struct RespuestaAsistente {
 }
 
 impl RespuestaAsistente {
-    fn solo_texto(intent: CategoriaIntencion, confianza: f64, texto: impl Into<String>) -> Self {
+    pub(super) fn solo_texto(
+        intent: CategoriaIntencion,
+        confianza: f64,
+        texto: impl Into<String>,
+    ) -> Self {
         Self {
             intent,
             confianza,
@@ -54,7 +59,7 @@ impl RespuestaAsistente {
         }
     }
 
-    fn con_accion(
+    pub(super) fn con_accion(
         intent: CategoriaIntencion,
         confianza: f64,
         texto: impl Into<String>,
@@ -73,73 +78,113 @@ impl RespuestaAsistente {
 
 // ─── Despachador principal ───────────────────────────────────────────────────
 
-/// Procesa una consulta financiera en lenguaje natural.
+/// Procesa una consulta del usuario en lenguaje natural y la enruta al
+/// módulo correcto (finanzas, tareas, agenda, calendario, memoria,
+/// contraseñas, deudas).
 ///
-/// Recibe acceso mutable a los almacenes relevantes y retorna una respuesta
-/// estructurada. La capa CLI se encarga de mostrar el texto y de persistir
-/// si `modifico_estado == true`.
+/// Recibe `&mut AppState` completo y retorna una respuesta estructurada.
+/// La capa CLI muestra el texto y persiste si `modifico_estado == true`.
 pub fn responder(
     consulta: &str,
     intencion: &Intencion,
-    rastreador: &AlmacenAsesor,
-    gastos: &mut AlmacenGastos,
-    agenda: &Agenda,
+    state: &mut AppState,
 ) -> RespuestaAsistente {
     let conf = intencion.confianza;
 
-    // Si el clasificador NLP genérico ganó, intentar rescatar intent financiero
-    // por heurística de palabras clave de dominio.
+    // 1) Si el clasificador genérico ganó, intentar rescatar intent de
+    //    dominio: primero multi-módulo (router), luego financiero (legacy).
     let intent_efectivo = match &intencion.categoria {
         CategoriaIntencion::Consultar
         | CategoriaIntencion::Listar
         | CategoriaIntencion::Buscar
         | CategoriaIntencion::Modificar
         | CategoriaIntencion::Crear
-        | CategoriaIntencion::Desconocido => {
-            intent_financiero(consulta).unwrap_or(intencion.categoria.clone())
-        }
+        | CategoriaIntencion::Desconocido => router::detectar_intent_modulo(consulta)
+            .or_else(|| intent_financiero(consulta))
+            .unwrap_or(intencion.categoria.clone()),
         otro => otro.clone(),
     };
 
     match intent_efectivo {
+        // ── Financiero ──
         CategoriaIntencion::RegistrarGasto => {
-            responder_registrar_gasto(consulta, conf, gastos, false)
+            responder_registrar_gasto(consulta, conf, &mut state.gastos, false)
         }
         CategoriaIntencion::RegistrarIngreso => {
-            responder_registrar_gasto(consulta, conf, gastos, true)
+            responder_registrar_gasto(consulta, conf, &mut state.gastos, true)
         }
-        CategoriaIntencion::ConsultarGastos => {
-            responder_consultar_gastos(consulta, conf, gastos, &rastreador.rastreador)
-        }
+        CategoriaIntencion::ConsultarGastos => responder_consultar_gastos(
+            consulta,
+            conf,
+            &state.gastos,
+            &state.asesor.rastreador,
+        ),
         CategoriaIntencion::PedirSugerenciaPago => {
-            responder_sugerencia_pago(conf, &rastreador.rastreador, gastos)
+            responder_sugerencia_pago(conf, &state.asesor.rastreador, &state.gastos)
         }
         CategoriaIntencion::ResumenFinanciero => {
-            responder_resumen_financiero(conf, &rastreador.rastreador, gastos)
+            responder_resumen_financiero(conf, &state.asesor.rastreador, &state.gastos)
         }
-        CategoriaIntencion::AgendarPago => responder_agendar_pago(consulta, conf, agenda),
-        CategoriaIntencion::ConsultarAgenda => responder_consultar_agenda(consulta, conf, agenda),
+        CategoriaIntencion::AgendarPago => {
+            responder_agendar_pago(consulta, conf, &state.agenda)
+        }
+        CategoriaIntencion::ConsultarAgenda => {
+            responder_consultar_agenda(consulta, conf, &state.agenda)
+        }
+
+        // ── Multi-módulo ──
+        CategoriaIntencion::CrearTarea => {
+            router::responder_crear_tarea(consulta, conf, &mut state.tasks)
+        }
+        CategoriaIntencion::ConsultarTareas => {
+            router::responder_consultar_tareas(consulta, conf, &state.tasks)
+        }
+        CategoriaIntencion::CompletarTarea => {
+            router::responder_completar_tarea(consulta, conf, &mut state.tasks)
+        }
+        CategoriaIntencion::CrearEvento => {
+            router::responder_crear_evento(consulta, conf, &mut state.agenda)
+        }
+        CategoriaIntencion::CalcularFecha => router::responder_calcular_fecha(consulta, conf),
+        CategoriaIntencion::CrearRecuerdo => {
+            router::responder_crear_recuerdo(consulta, conf, &mut state.memoria)
+        }
+        CategoriaIntencion::BuscarMemoria => {
+            router::responder_buscar_memoria(consulta, conf, &state.memoria)
+        }
+        CategoriaIntencion::GenerarPassword => router::responder_generar_password(consulta, conf),
+        CategoriaIntencion::EvaluarPassword => router::responder_evaluar_password(consulta, conf),
+        CategoriaIntencion::BuscarPassword => {
+            router::responder_buscar_password(consulta, conf, &state.contrasenias)
+        }
+        CategoriaIntencion::ConsultarDeudas => {
+            router::responder_consultar_deudas(conf, &state.asesor.rastreador)
+        }
+
         CategoriaIntencion::Saludo => RespuestaAsistente::solo_texto(
             CategoriaIntencion::Saludo,
             conf,
-            "¡Hola! Soy tu asistente financiero. Puedes preguntarme:\n\
-             • \"cuánto llevo gastado este mes\"\n\
-             • \"qué deuda debo pagar primero\"\n\
-             • \"gasté 50 en comida hoy\"\n\
-             • \"cómo voy financieramente\"",
+            "¡Hola! Soy tu asistente. Puedes pedirme:\n\
+             • Finanzas: \"cuánto llevo gastado este mes\"\n\
+             • Tareas:   \"agregar tarea estudiar mañana\"\n\
+             • Agenda:   \"el cumple de Lucho es el 12 de julio\"\n\
+             • Memoria:  \"recuerda que la wifi es CafeNet123\"\n\
+             • Claves:   \"genera una contraseña segura\"\n\
+             • Fechas:   \"cuántos días entre hoy y el 30 de junio\"",
         ),
         CategoriaIntencion::Ayuda => RespuestaAsistente::solo_texto(
             CategoriaIntencion::Ayuda,
             conf,
-            "Comandos del asistente financiero:\n\
-             • Registro: \"gasté 25 en gasolina\", \"recibí 1500 de sueldo\"\n\
-             • Consulta: \"mis gastos del mes\", \"resumen financiero\"\n\
-             • Estrategia: \"qué pago primero\", \"plan de pagos\"\n\
-             • Agenda: \"recordarme pagar la luz el 15\"\n\
-             También entiendo expresiones de fechas: hoy, ayer, el 15, mañana.",
+            "Comandos del asistente:\n\
+             💰 Finanzas: \"gasté 25 en gasolina\", \"resumen financiero\", \"qué pago primero\"\n\
+             📋 Tareas:   \"agregar tarea X\", \"mis pendientes\", \"marcar X como hecha\"\n\
+             📅 Agenda:   \"agendar cita con dentista el 15\", \"en cuántos días es el cumple de X\"\n\
+             📆 Calendar: \"cuántos días entre A y B\", \"qué fecha será 30 días después\"\n\
+             🧠 Memoria:  \"recuerda que...\", \"qué sabes de X\"\n\
+             🔐 Claves:   \"genera contraseña\", \"qué tan segura es '...'\"",
         ),
         _ => {
-            // Antes de mostrar error genérico, detectar si es consulta de agenda
+            // Fallback: detectar agenda por keywords sueltas
             let norm_q = sin_tildes(&consulta.to_lowercase());
             let es_agenda = norm_q.contains("cumplean")
                 || norm_q.contains("cita")
@@ -147,9 +192,8 @@ pub fn responder(
                 || norm_q.contains("reunion")
                 || norm_q.contains("recordatorio");
             if es_agenda {
-                return responder_consultar_agenda(consulta, conf, agenda);
+                return responder_consultar_agenda(consulta, conf, &state.agenda);
             }
-            // Construir una Intencion temporal con el intent efectivo para el mensaje
             let intent_info = Intencion {
                 categoria: intent_efectivo.clone(),
                 confianza: conf,
@@ -1246,6 +1290,11 @@ fn extraer_fecha(s: &str) -> Option<NaiveDate> {
         }
     }
     None
+}
+
+/// Wrapper público para que `router.rs` reutilice la extracción de fechas.
+pub fn extraer_fecha_publica(s: &str) -> Option<NaiveDate> {
+    extraer_fecha(s)
 }
 
 fn parsear_fecha_token(tok: &str, hoy: NaiveDate) -> Option<NaiveDate> {
