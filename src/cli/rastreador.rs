@@ -244,7 +244,7 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
         let opciones: Vec<&str> = vec![
             "➕  Agregar nueva deuda",
             "📅  Registrar mes de pago (a una deuda)",
-            "�️   Programar pago futuro",
+            "🗓️   Programar pago futuro",
             "🔍  Revisar deuda individual (análisis predatorio + pagos sugeridos)",
             "📊  Diagnóstico completo (errores + recomendaciones)",
             "📈  Simulación: ¿qué hubiera pasado si...?",
@@ -262,8 +262,8 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             "🔧  Gestionar deudas (activar/desactivar, obligatoria)",
             "🔗  Vincular deudas (cuotas espejo: hipoteca ↔ escrow, etc.)",
             "🗑️   Eliminar una deuda",
-            "�  Bitácora del sistema (paper trail completo)",
-            "�  Importar / Exportar pagos (CSV, MD, JSON, Excel, SQL)",
+            "📓  Bitácora del sistema (paper trail completo)",
+            "📦  Importar / Exportar pagos (CSV, MD, JSON, Excel, SQL)",
             "🔙  Volver",
         ];
 
@@ -2056,7 +2056,7 @@ pub fn mostrar_analisis_deuda_individual(
         println!();
         let sub_opciones = &[
             "📊  Ver proyección mes a mes con un monto específico",
-            "�  Ver proyección con el pago SUGERIDO",
+            "⭐  Ver proyección con el pago SUGERIDO",
             "🔙  Volver al listado de deudas",
         ];
 
@@ -5958,8 +5958,8 @@ fn editor_plan_libertad(
                 "🆚 Comparar contra plan automático original",
                 "💾 Guardar borrador y salir (se reanuda luego)",
                 "📤 EXPORTAR a Excel (cierra el plan)",
-                "� Registrar ingreso extra en un mes",
-                "�🗑️  Descartar borrador y salir",
+                "💰 Registrar ingreso extra en un mes",
+                "🗑️  Descartar borrador y salir",
             ],
         );
 

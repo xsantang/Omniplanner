@@ -2127,7 +2127,7 @@ pub(crate) fn menu_agenda(state: &mut AppState) {
         let opciones = &[
             "📌 Nuevo evento",
             "✏️  Nuevo horario de escritura",
-            "� Calendario anual",
+            "📆 Calendario anual",
             "🗑️  Eliminar evento",
             "🏷️  Recordar evento",
             "📤 Importar / Exportar (CSV, MD, JSON, Excel, SQL)",
@@ -10085,7 +10085,7 @@ pub(crate) fn menu_asesor(state: &mut AppState) {
             "🗂️   Rastreador de Deudas (multi-cuenta + diagnóstico)",
             "📂  Historial y Exportación",
             "🧾  Gastos Reales (registro de transacciones)",
-            "�  Sugerencias de Pago (plan inteligente del mes)",
+            "💡  Sugerencias de Pago (plan inteligente del mes)",
             "🔙  Volver",
         ];
 
@@ -16017,7 +16017,7 @@ fn main() {
             "📄  Reportes (Diario / Semanal)",
             "💡  Asesor Inteligente (Decisiones y Finanzas)",
             "🤖  ML/NLP Avanzado (Herramientas técnicas)",
-            "�  Asistente Financiero (lenguaje natural)",
+            "💬  Asistente Financiero (lenguaje natural)",
             "🔐  Seguridad y Privacidad",
             "❌  Salir",
         ];
