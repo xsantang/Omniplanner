@@ -419,8 +419,19 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
         (has_word("cuanto") || has("cuánto") || has("cuántos") || has_word("cuantos"))
             && (has_word("pago") || has_word("cobro") || has_word("cargo"))
             && (has_word("de") || has_word("del") || has_word("por"));
+    // "que pagos tengo registrados de X" / "qué gastos tengo de X"
+    let que_pagos_tengo = (has_word("que") || has("qué"))
+        && (has_word("pagos") || has_word("gastos") || has_word("cobros") || has_word("cargos"))
+        && (has_word("tengo") || has_word("hay") || has_word("tiene") || has_word("existen"));
+    // "pagos registrados", "gastos registrados", "mis pagos de X"
+    let pagos_registrados = (has_word("registrados") || has_word("registrado"))
+        && (has_word("pagos") || has_word("gastos"));
+    let mis_pagos = has_word("mis") && (has_word("pagos") || has_word("cobros"));
     if cuanto_gaste
         || cuanto_pago_de
+        || que_pagos_tengo
+        || pagos_registrados
+        || mis_pagos
         || has("cuánto gasté")
         || has("cuánto he gastado")
         || has("en qué gasté")
@@ -823,6 +834,19 @@ mod tests {
         assert_eq!(
             intent_financiero("que cuentas tengo pendientes"),
             Some(CategoriaIntencion::ResumenFinanciero)
+        );
+        // Consultas con "que pagos tengo" / "pagos registrados"
+        assert_eq!(
+            intent_financiero("que pagos tengo registrados de carrington"),
+            Some(CategoriaIntencion::ConsultarGastos)
+        );
+        assert_eq!(
+            intent_financiero("mis pagos de este mes"),
+            Some(CategoriaIntencion::ConsultarGastos)
+        );
+        assert_eq!(
+            intent_financiero("que gastos tengo de comida"),
+            Some(CategoriaIntencion::ConsultarGastos)
         );
     }
 }
