@@ -122,14 +122,14 @@ impl AlmacenGastos {
             .collect()
     }
 
-    /// Busca transacciones cuya descripción contenga la palabra clave (case-insensitive).
+    /// Busca transacciones cuya descripción contenga la palabra clave (case-insensitive, sin tildes).
     /// Devuelve referencias ordenadas de más reciente a más antigua.
     pub fn buscar_por_keyword(&self, keyword: &str) -> Vec<&GastoReal> {
-        let kw = keyword.to_lowercase();
+        let kw = sin_tildes_gastos(&keyword.to_lowercase());
         let mut resultado: Vec<&GastoReal> = self
             .transacciones
             .iter()
-            .filter(|g| g.descripcion.to_lowercase().contains(&kw))
+            .filter(|g| sin_tildes_gastos(&g.descripcion.to_lowercase()).contains(&kw))
             .collect();
         resultado.sort_by_key(|g| std::cmp::Reverse(g.fecha));
         resultado
@@ -171,3 +171,18 @@ pub struct ResumenMes {
 
 // Necesario para NaiveDate::year()/month() sin ambigüedad
 use chrono::Datelike;
+
+/// Elimina tildes para búsquedas tolerantes a acentuación.
+fn sin_tildes_gastos(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' => 'a',
+            'é' | 'è' | 'ë' => 'e',
+            'í' | 'ì' | 'ï' => 'i',
+            'ó' | 'ò' | 'ö' => 'o',
+            'ú' | 'ù' | 'ü' => 'u',
+            'ñ' => 'n',
+            other => other,
+        })
+        .collect()
+}

@@ -398,54 +398,78 @@ fn responder_no_entendido(consulta: &str, intencion: &Intencion) -> RespuestaAsi
     RespuestaAsistente::solo_texto(intencion.categoria.clone(), intencion.confianza, texto)
 }
 
+// ─── Normalización ───────────────────────────────────────────────────────────
+
+/// Elimina tildes/acentos para que "cuánto" y "cuanto" sean equivalentes.
+fn sin_tildes(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' => 'a',
+            'é' | 'è' | 'ë' => 'e',
+            'í' | 'ì' | 'ï' => 'i',
+            'ó' | 'ò' | 'ö' => 'o',
+            'ú' | 'ù' | 'ü' => 'u',
+            'Á' | 'À' | 'Ä' => 'a',
+            'É' | 'È' | 'Ë' => 'e',
+            'Í' | 'Ì' | 'Ï' => 'i',
+            'Ó' | 'Ò' | 'Ö' => 'o',
+            'Ú' | 'Ù' | 'Ü' => 'u',
+            'ñ' => 'n',
+            'Ñ' => 'n',
+            other => other,
+        })
+        .collect()
+}
+
 // ─── Extracción de entidades ─────────────────────────────────────────────────
 
 /// Cuando el clasificador NLP genérico gana (Consultar / Listar / Buscar /
 /// Desconocido), este detector de dominio comprueba si el texto contiene
 /// léxico financiero y devuelve el intent correcto.
 fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
-    let lower = consulta.to_lowercase();
-    let words: Vec<&str> = lower.split_whitespace().collect();
+    // Normalizar: minúsculas + sin tildes → "cuánto" y "cuanto" son iguales
+    let norm = sin_tildes(&consulta.to_lowercase());
+    let words: Vec<&str> = norm.split_whitespace().collect();
     let has_word = |w: &str| words.contains(&w);
-    let has = |s: &str| lower.as_str().contains(s);
+    let has = |s: &str| norm.as_str().contains(s);
 
-    // ¿Es una pregunta? (interrogativo al inicio)
+    // ¿Es una pregunta? (interrogativo)
     let es_pregunta = has_word("cuanto")
-        || has("cuánto")
+        || has_word("cuantos")
+        || has_word("cuantas")
         || has_word("que")
-        || has("qué")
         || has_word("como")
-        || has("cómo")
         || has_word("cual")
-        || has("cuál");
+        || has_word("cuando");
 
     // ── 1. Consultas interrogativas sobre gastos (ANTES de RegistrarGasto) ──
-    // "cuánto gasté", "cuánto pago de X", "mis gastos", etc.
-    let cuanto_gaste = (has_word("cuanto") || has("cuánto"))
-        && (has_word("gaste") || has("gasté") || has_word("gastado") || has_word("gasto"));
-    // "cuanto pago de celular" / "cuánto pago de kissimmee"
-    let cuanto_pago_de =
-        (has_word("cuanto") || has("cuánto") || has("cuántos") || has_word("cuantos"))
-            && (has_word("pago") || has_word("cobro") || has_word("cargo"))
-            && (has_word("de") || has_word("del") || has_word("por"));
-    // "que pagos tengo registrados de X" / "qué gastos tengo de X"
-    let que_pagos_tengo = (has_word("que") || has("qué"))
+    let cuanto_gaste = has_word("cuanto")
+        && (has_word("gaste") || has_word("gastado") || has_word("gasto") || has_word("he"));
+    // "cuanto pago de X", "cuanto pague de X", "cuantas veces pague"
+    let cuanto_pago_de = (has_word("cuanto") || has_word("cuantos") || has_word("cuantas"))
+        && (has_word("pago") || has_word("pague") || has_word("cobro") || has_word("cargo"))
+        && (has_word("de") || has_word("del") || has_word("por") || has_word("a"));
+    // "cuantas veces pague/pago a X"
+    let cuantas_veces = (has_word("cuantas") || has_word("cuanto"))
+        && has_word("veces")
+        && (has_word("pague") || has_word("pago") || has_word("pagar") || has_word("cobre"));
+    // "que pagos tengo de X"
+    let que_pagos_tengo = has_word("que")
         && (has_word("pagos") || has_word("gastos") || has_word("cobros") || has_word("cargos"))
         && (has_word("tengo") || has_word("hay") || has_word("tiene") || has_word("existen"));
-    // "pagos registrados", "gastos registrados", "mis pagos de X"
+    // "pagos registrados", "mis pagos de X"
     let pagos_registrados = (has_word("registrados") || has_word("registrado"))
         && (has_word("pagos") || has_word("gastos"));
     let mis_pagos = has_word("mis") && (has_word("pagos") || has_word("cobros"));
+    // "historial de X", "registro de X", "buscar X"
+    let buscar_historial = has_word("historial") || has_word("registro") || has_word("registros");
     if cuanto_gaste
         || cuanto_pago_de
+        || cuantas_veces
         || que_pagos_tengo
         || pagos_registrados
         || mis_pagos
-        || has("cuánto gasté")
-        || has("cuánto he gastado")
-        || has("en qué gasté")
-        || has("cuánto llevo")
-        || has("gastos por categoría")
+        || buscar_historial
         || has("gastos del mes")
         || has("mis gastos")
         || has("cuanto llevo")
@@ -465,16 +489,13 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
             || has_word("disponible")
             || has_word("pagar")
             || has_word("pago"));
-    let cuanto_queda = (has_word("cuanto") || has("cuánto"))
+    let cuanto_queda = has_word("cuanto")
         && (has_word("queda") || has_word("tengo") || has_word("debo") || has_word("disponible"))
         && (has_word("dinero") || has_word("mes") || has_word("pagar"));
-    // "cuantas cuentas tengo que pagar", "cuentas por pagar", "qué cuentas tengo"
     let cuentas_pendientes = has_word("cuentas")
         && (has_word("pagar") || has_word("pendientes") || has_word("vencen") || has_word("tengo"));
     if has("como voy")
-        || has("cómo voy")
         || has("situacion financiera")
-        || has("situación financiera")
         || has("estado financiero")
         || has("mis finanzas")
         || has("resumen financiero")
@@ -483,18 +504,16 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
         || has("total deudas")
         || has("dinero disponible")
         || has("saldo disponible")
-        || has("cuánto me queda")
-        || has("cuánto debo")
-        || has("cuánto queda")
+        || has("cuanto me queda")
+        || has("cuanto debo")
+        || has("cuanto queda")
         || has("cuantas cuentas")
-        || has("cuántas cuentas")
         || has("que cuentas")
-        || has("qué cuentas")
         || cuentas_pendientes
         || queda_financiero
         || cuanto_queda
         || (has_word("deudas") && !has_word("primero"))
-        || (has_word("finanzas") && !has("gasté"))
+        || (has_word("finanzas") && !has_word("gaste"))
     {
         return Some(CategoriaIntencion::ResumenFinanciero);
     }
@@ -502,33 +521,25 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
     // ── 3. Registro de gasto (declarativo, no pregunta) ──────────────
     let gasto_verbos = ["gaste", "pague", "compre", "desembolse"];
     if !es_pregunta
-        && (gasto_verbos.iter().any(|v| has_word(v))
-            || has("gasté")
-            || has("pagué")
-            || has("compré")
-            || has("desembolsé")
-            || has("me costó")
-            || has("me costo")
-            || has("cobré un cargo"))
+        && (gasto_verbos.iter().any(|v| has_word(v)) || has("me costo") || has("cobre un cargo"))
     {
         return Some(CategoriaIntencion::RegistrarGasto);
     }
 
     // ── 4. Registro de ingreso (declarativo) ─────────────────────────
+    let ingreso_verbos = [
+        "recibi",
+        "depositaron",
+        "sueldo",
+        "nomina",
+        "salario",
+        "cobre",
+    ];
     if !es_pregunta
-        && (has_word("recibi")
-            || has_word("depositaron")
-            || has_word("sueldo")
-            || has_word("nomina")
-            || has_word("salario")
-            || has("recibí")
-            || has("cobré")
-            || has("entró")
-            || has("nómina")
-            || has("comisión")
+        && (ingreso_verbos.iter().any(|v| has_word(v))
+            || has("entro dinero")
             || has("me pagaron")
-            || has("me depositaron")
-            || has("entro dinero"))
+            || has("me depositaron"))
     {
         return Some(CategoriaIntencion::RegistrarIngreso);
     }
@@ -552,7 +563,6 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
         || has("programar pago")
         || has("recordarme pagar")
         || has("pagar el dia")
-        || has("pagar el día")
     {
         return Some(CategoriaIntencion::AgendarPago);
     }
@@ -637,40 +647,52 @@ fn responder_historial_acreedor(
 }
 
 /// Extrae el nombre de un acreedor/empresa de la consulta del usuario.
-/// Detecta patrones como "de carrington", "a carrington", "pagos a X", etc.
+/// Detecta patrones como "de carrington", "pagos a X", "historial de X", etc.
+/// Funciona con o sin tildes.
 fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
-    // Palabras trigger que indican que viene un nombre
+    // Normalizar para matching (sin tildes, minúsculas)
+    let norm = sin_tildes(&consulta.to_lowercase());
+
+    // Triggers: frases que indican que viene el nombre del acreedor
     let triggers = [
         "pagos de ",
         "pagos a ",
         "pague a ",
-        "pagué a ",
+        "pago de ",
+        "pago a ",
         "registros de ",
+        "registro de ",
         "historial de ",
         "buscar ",
         "cuanto pague a ",
-        "cuánto pagué a ",
         "cuanto pago de ",
-        "cuánto pago de ",
+        "cuanto pague de ",
+        "cuantas veces pague ",
+        "cuantas veces pago ",
+        "veces que pague ",
+        "veces pague ",
         "tengo de ",
         "tengo a ",
+        "gaste en ",
+        "gaste a ",
+        "cobros de ",
+        "cobros a ",
+        "informacion de ",
+        "informacion sobre ",
+        "datos de ",
     ];
-    // Palabras de parada que NO son nombres de acreedores
-    let stopwords = [
-        "carrington", // esta SÍ es un nombre — solo es ejemplo, no filtrar
-    ];
-    let _ = stopwords; // no filtrar, solo referencia
 
-    let lower = consulta.to_lowercase();
-
-    // Buscar por triggers primero (más específicos)
+    // Buscar por triggers (más específicos)
     for trigger in &triggers {
-        if let Some(pos) = lower.find(trigger) {
-            let after = &consulta[pos + trigger.len()..];
-            let nombre = after
+        if let Some(pos) = norm.find(trigger) {
+            // Calcular offset en el string original (mismo byte offset porque
+            // el trigger y norm usan misma codificación tras normalizar)
+            let after_norm = &norm[pos + trigger.len()..];
+            // Tomar el texto después del trigger hasta puntuación o fin
+            let nombre = after_norm
                 .split([',', '.', '?', '!'].as_ref())
                 .next()
-                .unwrap_or(after)
+                .unwrap_or(after_norm)
                 .trim()
                 .to_string();
             if !nombre.is_empty() && nombre.split_whitespace().count() <= 4 {
@@ -679,34 +701,38 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         }
     }
 
-    // Fallback: buscar "de/a" + palabra capitalizada (nombre propio)
-    let words: Vec<&str> = consulta.split_whitespace().collect();
+    // Fallback: "de/a" + cualquier palabra de >4 letras (nombre propio o empresa)
+    let words: Vec<&str> = norm.split_whitespace().collect();
+    let stopwords = [
+        "este",
+        "este mes",
+        "el mes",
+        "la semana",
+        "hoy",
+        "ayer",
+        "pago",
+        "pagos",
+        "gasto",
+        "gastos",
+        "cobro",
+        "cobros",
+        "mes",
+        "año",
+        "semana",
+        "dia",
+        "fecha",
+    ];
     for (i, w) in words.iter().enumerate() {
-        if (w.to_lowercase() == "de" || w.to_lowercase() == "a") && i + 1 < words.len() {
+        if (*w == "de" || *w == "a" || *w == "al") && i + 1 < words.len() {
             let next = words[i + 1];
-            // Heurística: si empieza con mayúscula o tiene >4 chars, es nombre propio
-            let primera = next.chars().next().unwrap_or(' ');
-            if primera.is_uppercase() || next.len() > 4 {
-                // Tomar hasta 2 palabras siguientes como nombre
-                let nombre: String = words[i + 1..]
+            if next.len() > 4 {
+                let nombre = words[i + 1..]
                     .iter()
                     .take(2)
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(" ");
-                // Filtrar palabras genéricas que no son acreedores
-                let lower_nombre = nombre.to_lowercase();
-                let genericas = [
-                    "este",
-                    "este mes",
-                    "el mes",
-                    "la semana",
-                    "hoy",
-                    "ayer",
-                    "pago",
-                    "pagos",
-                ];
-                if !genericas.iter().any(|g| lower_nombre.starts_with(g)) {
+                if !stopwords.iter().any(|s| nombre.starts_with(s)) {
                     return Some(nombre);
                 }
             }
