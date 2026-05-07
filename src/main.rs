@@ -9945,8 +9945,9 @@ pub(crate) fn menu_asesor(state: &mut AppState) {
             "💰  Presupuesto mensual (simple)",
             "📈  Proyecciones de ahorro",
             "📝  Registrar acción / decisión",
-            "�  Rastreador de Deudas (multi-cuenta + diagnóstico)",
+            "🗂️   Rastreador de Deudas (multi-cuenta + diagnóstico)",
             "📂  Historial y Exportación",
+            "🧾  Gastos Reales (registro de transacciones)",
             "🔙  Volver",
         ];
 
@@ -9961,6 +9962,7 @@ pub(crate) fn menu_asesor(state: &mut AppState) {
             Some(7) => menu_asesor_registrar_accion(state),
             Some(8) => menu_asesor_rastreador(state),
             Some(9) => menu_asesor_historial(state),
+            Some(10) => menu_gastos_reales(state),
             _ => return,
         }
     }
@@ -15911,6 +15913,223 @@ fn main() {
         if let Err(e) = state.guardar() {
             eprintln!("  {} Error guardando: {}", "✗".red(), e);
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Gastos Reales — registro de transacciones individuales
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_gastos_reales(state: &mut AppState) {
+    use chrono::Datelike;
+    use omniplanner::ml::gastos::GastoReal;
+    use omniplanner::ml::presupuesto_cero::Categoria;
+
+    loop {
+        limpiar();
+        println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
+        println!("{}", "║  🧾 G A S T O S   R E A L E S                              ║".cyan().bold());
+        println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+        println!();
+
+        // Resumen del mes actual
+        let ahora = chrono::Local::now();
+        let resumen = state.gastos.resumen_mes(ahora.year(), ahora.month());
+        println!(
+            "  {} {}  |  Gastos: {}  Ingresos: {}  Balance: {}",
+            "Mes actual:".dimmed(),
+            format!("{}/{}", ahora.month(), ahora.year()).cyan(),
+            format!("${:.2}", resumen.total_gastos).red(),
+            format!("${:.2}", resumen.total_ingresos).green(),
+            if resumen.balance >= 0.0 {
+                format!("${:.2}", resumen.balance).green().to_string()
+            } else {
+                format!("-${:.2}", resumen.balance.abs()).red().to_string()
+            },
+        );
+        println!("  {} {} transacciones este mes.", "•".dimmed(), resumen.num_transacciones);
+        println!();
+
+        let opciones = &[
+            "➕  Registrar gasto",
+            "➕  Registrar ingreso",
+            "📋  Ver transacciones del mes",
+            "📊  Resumen por categoría",
+            "🗑️   Eliminar transacción",
+            "🔙  Volver",
+        ];
+
+        match menu("Gastos reales", opciones) {
+            Some(0) => {
+                // Registrar gasto
+                let desc = match pedir_texto("Descripción del gasto") {
+                    Some(d) => d,
+                    None => { pausa(); continue; }
+                };
+                let monto_str = match pedir_texto("Monto ($)") {
+                    Some(m) => m,
+                    None => { pausa(); continue; }
+                };
+                let monto: f64 = match monto_str.trim().parse() {
+                    Ok(v) if v > 0.0 => v,
+                    _ => { println!("  {} Monto inválido.", "✗".red()); pausa(); continue; }
+                };
+                let v = seguridad::validar_monto(monto, 0.01, 1_000_000.0);
+                if !v.valido {
+                    for e in &v.errores { println!("  {} {}", "✗".red(), e); }
+                    pausa(); continue;
+                }
+
+                let cat_opts = &["Gasto Fijo 🏠", "Gasto Variable 🛒", "Pago Deuda 💳", "Ahorro 🏦"];
+                let cat = match menu("Categoría", cat_opts) {
+                    Some(0) => Categoria::GastoFijo,
+                    Some(1) => Categoria::GastoVariable,
+                    Some(2) => Categoria::PagoDeuda,
+                    Some(3) => Categoria::Ahorro,
+                    _ => { continue; }
+                };
+
+                let fecha = pedir_fecha("Fecha (hoy si Enter)").unwrap_or_else(|| chrono::Local::now().date_naive());
+                let metodo = pedir_texto_opcional("Método de pago (ej: efectivo, tarjeta, transferencia)");
+                let linea = pedir_texto_opcional("Línea de presupuesto asociada (opcional)");
+                let notas = pedir_texto_opcional("Notas (opcional)");
+
+                let mut g = GastoReal::nuevo(fecha, desc, cat, monto);
+                g.metodo_pago = metodo;
+                g.linea_presupuesto = if linea.is_empty() { None } else { Some(linea) };
+                g.notas = notas;
+
+                state.gastos.agregar(g);
+                state.auditoria.registrar(
+                    TipoAuditoria::PagoRegistrado { monto },
+                    Some("Gasto real registrado"),
+                );
+                println!("  {} Gasto registrado.", "✓".green());
+                pausa();
+            }
+            Some(1) => {
+                // Registrar ingreso (monto negativo internamente)
+                let desc = match pedir_texto("Descripción del ingreso") {
+                    Some(d) => d,
+                    None => { pausa(); continue; }
+                };
+                let monto_str = match pedir_texto("Monto ($)") {
+                    Some(m) => m,
+                    None => { pausa(); continue; }
+                };
+                let monto: f64 = match monto_str.trim().parse::<f64>() {
+                    Ok(v) if v > 0.0 => v,
+                    _ => { println!("  {} Monto inválido.", "✗".red()); pausa(); continue; }
+                };
+
+                let fecha = pedir_fecha("Fecha (hoy si Enter)").unwrap_or_else(|| chrono::Local::now().date_naive());
+                let notas = pedir_texto_opcional("Notas (opcional)");
+
+                // Ingreso = monto negativo en el almacén
+                let mut g = GastoReal::nuevo(fecha, desc, Categoria::Ingreso, -monto);
+                g.notas = notas;
+
+                state.gastos.agregar(g);
+                println!("  {} Ingreso registrado.", "✓".green());
+                pausa();
+            }
+            Some(2) => {
+                // Ver transacciones del mes
+                limpiar();
+                separador("📋 Transacciones del mes");
+                let transacciones = state.gastos.del_mes(ahora.year(), ahora.month());
+                if transacciones.is_empty() {
+                    println!("  {}", "(sin transacciones este mes)".dimmed());
+                } else {
+                    println!(
+                        "  {:<8} {:<12} {:<22} {:<14} {}",
+                        "ID", "Fecha", "Descripción", "Monto", "Categoría"
+                    );
+                    println!("  {}", "─".repeat(72));
+                    for g in &transacciones {
+                        let monto_fmt = if g.monto < 0.0 {
+                            format!("+${:.2}", g.monto.abs()).green().to_string()
+                        } else {
+                            format!("-${:.2}", g.monto).red().to_string()
+                        };
+                        println!(
+                            "  {:<8} {:<12} {:<22} {:<14} {} {}",
+                            g.id,
+                            g.fecha.format("%d/%m/%Y"),
+                            truncar(&g.descripcion, 20),
+                            monto_fmt,
+                            g.categoria.emoji(),
+                            g.categoria.nombre(),
+                        );
+                    }
+                }
+                pausa();
+            }
+            Some(3) => {
+                // Resumen por categoría
+                limpiar();
+                separador("📊 Gastos por categoría — mes actual");
+                let desde = chrono::NaiveDate::from_ymd_opt(ahora.year(), ahora.month(), 1).unwrap();
+                let hasta = chrono::Local::now().date_naive();
+                let por_cat = state.gastos.por_categoria(desde, hasta);
+                if por_cat.is_empty() {
+                    println!("  {}", "(sin gastos este mes)".dimmed());
+                } else {
+                    let total: f64 = por_cat.iter().map(|(_, m)| m).sum();
+                    for (cat, monto) in &por_cat {
+                        let pct = if total > 0.0 { monto / total * 100.0 } else { 0.0 };
+                        let barra: String = "█".repeat((pct / 5.0) as usize);
+                        println!(
+                            "  {} {:<16} {} {:>6.1}%  {}",
+                            cat.emoji(),
+                            cat.nombre(),
+                            format!("${:.2}", monto).red(),
+                            pct,
+                            barra.yellow(),
+                        );
+                    }
+                    println!("  {}", "─".repeat(52));
+                    println!("  Total gastos: {}", format!("${:.2}", total).red().bold());
+                }
+                pausa();
+            }
+            Some(4) => {
+                // Eliminar transacción
+                let ids: Vec<String> = {
+                    let mes = state.gastos.del_mes(ahora.year(), ahora.month());
+                    mes.iter().map(|g| format!("[{}] {} ${:.2}", g.id, g.descripcion, g.monto.abs())).collect()
+                };
+                if ids.is_empty() {
+                    println!("  {}", "(sin transacciones este mes)".dimmed());
+                    pausa(); continue;
+                }
+                let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                if let Some(idx) = menu("¿Cuál eliminar?", &refs) {
+                    let id = {
+                        let mes = state.gastos.del_mes(ahora.year(), ahora.month());
+                        mes.get(idx).map(|g| g.id.clone())
+                    };
+                    if let Some(id) = id {
+                        state.gastos.eliminar(&id);
+                        println!("  {} Transacción eliminada.", "✓".green());
+                    }
+                }
+                pausa();
+            }
+            _ => return,
+        }
+
+        if let Err(e) = state.guardar() {
+            eprintln!("  {} Error guardando: {}", "✗".red(), e);
+        }
+    }
+}
+
+fn truncar(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max - 1).collect::<String>())
     }
 }
 

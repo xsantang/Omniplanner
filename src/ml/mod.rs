@@ -11,6 +11,7 @@ pub mod ann;
 pub mod cnn;
 pub mod decision_tree;
 pub mod dnn;
+pub mod gastos;
 pub mod linalg;
 pub mod optimizer;
 pub mod presupuesto_cero;
@@ -40,6 +41,7 @@ pub use optimizer::{
     ResultadoCV, TipoOptimizador,
 };
 pub use presupuesto_cero::AlmacenPresupuesto;
+pub use gastos::{AlmacenGastos, GastoReal};
 pub use random_forest::BosqueAleatorio;
 pub use reinforcement::{GridWorld, MultiBandit, QTable};
 pub use rnn::{TipoRNN, RNN};

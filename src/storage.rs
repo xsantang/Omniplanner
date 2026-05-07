@@ -18,7 +18,7 @@ use crate::diagrams::Diagrama;
 use crate::eventos::BusEventos;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
-use crate::ml::{AlmacenAsesor, AlmacenML, AlmacenPresupuesto};
+use crate::ml::{AlmacenAsesor, AlmacenGastos, AlmacenML, AlmacenPresupuesto};
 use crate::nlp::AlmacenNLP;
 use crate::seguridad::{ConfigSeguridad, RegistroAuditoria};
 use crate::sync::SyncConfig;
@@ -61,6 +61,9 @@ pub struct AppState {
     /// Registro de auditoría de seguridad.
     #[serde(default)]
     pub auditoria: RegistroAuditoria,
+    /// Gastos reales registrados (transacciones individuales).
+    #[serde(default)]
+    pub gastos: AlmacenGastos,
     /// Timestamp de última modificación (epoch secs)
     #[serde(default)]
     pub ultima_modificacion: i64,
@@ -85,6 +88,7 @@ impl AppState {
             bus: BusEventos::default(),
             seguridad: ConfigSeguridad::default(),
             auditoria: RegistroAuditoria::default(),
+            gastos: AlmacenGastos::default(),
             ultima_modificacion: 0,
         }
     }
