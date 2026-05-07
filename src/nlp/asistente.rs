@@ -444,15 +444,36 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
 
     // ── 1. Consultas interrogativas sobre gastos (ANTES de RegistrarGasto) ──
     let cuanto_gaste = has_word("cuanto")
-        && (has_word("gaste") || has_word("gastado") || has_word("gasto") || has_word("he"));
-    // "cuanto pago de X", "cuanto pague de X", "cuantas veces pague"
+        && (has_word("gaste")
+            || has_word("gasta")
+            || has_word("gastado")
+            || has_word("gasto")
+            || has_word("he"));
+    // "cuanto pago de X", "cuanto se paga por X", "cuanto pague de X"
     let cuanto_pago_de = (has_word("cuanto") || has_word("cuantos") || has_word("cuantas"))
-        && (has_word("pago") || has_word("pague") || has_word("cobro") || has_word("cargo"))
-        && (has_word("de") || has_word("del") || has_word("por") || has_word("a"));
+        && (has_word("pago")
+            || has_word("paga")
+            || has_word("pague")
+            || has_word("cobro")
+            || has_word("cobra")
+            || has_word("cargo")
+            || has_word("cuesta")
+            || has_word("vale")
+            || has_word("sale"))
+        && (has_word("de")
+            || has_word("del")
+            || has_word("por")
+            || has_word("el")
+            || has_word("la")
+            || has_word("a"));
     // "cuantas veces pague/pago a X"
     let cuantas_veces = (has_word("cuantas") || has_word("cuanto"))
         && has_word("veces")
-        && (has_word("pague") || has_word("pago") || has_word("pagar") || has_word("cobre"));
+        && (has_word("pague")
+            || has_word("pago")
+            || has_word("paga")
+            || has_word("pagar")
+            || has_word("cobre"));
     // "que pagos tengo de X"
     let que_pagos_tengo = has_word("que")
         && (has_word("pagos") || has_word("gastos") || has_word("cobros") || has_word("cargos"))
@@ -680,6 +701,24 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         "informacion de ",
         "informacion sobre ",
         "datos de ",
+        "se paga por ",
+        "se paga el ",
+        "se paga la ",
+        "se paga de ",
+        "se gasta en ",
+        "se gasta por ",
+        "se cobra por ",
+        "cobran por ",
+        "cobran el ",
+        "cobran de ",
+        "cuesta el ",
+        "cuesta la ",
+        "vale el ",
+        "vale la ",
+        "pago por ",
+        "pago el ",
+        "pago la ",
+        "pague por ",
     ];
 
     // Buscar por triggers (más específicos)
@@ -723,7 +762,9 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         "fecha",
     ];
     for (i, w) in words.iter().enumerate() {
-        if (*w == "de" || *w == "a" || *w == "al") && i + 1 < words.len() {
+        if (*w == "de" || *w == "a" || *w == "al" || *w == "por" || *w == "el" || *w == "la")
+            && i + 1 < words.len()
+        {
             let next = words[i + 1];
             if next.len() > 4 {
                 let nombre = words[i + 1..]
