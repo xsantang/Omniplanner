@@ -136,6 +136,45 @@ pub fn responder(
              También entiendo expresiones de fechas: hoy, ayer, el 15, mañana.",
         ),
         _ => {
+            // Antes de mostrar error genérico, detectar si es consulta de agenda
+            let norm_q = sin_tildes(&consulta.to_lowercase());
+            let es_agenda = norm_q.contains("cumplean")
+                || norm_q.contains("cita")
+                || norm_q.contains("evento")
+                || norm_q.contains("reunion")
+                || norm_q.contains("recordatorio");
+            if es_agenda {
+                // Extraer el nombre si viene "de X"
+                let nombre = {
+                    let words: Vec<&str> = norm_q.split_whitespace().collect();
+                    words
+                        .iter()
+                        .position(|w| *w == "de")
+                        .and_then(|i| words.get(i + 1))
+                        .map(|w| {
+                            // Capitalizar
+                            let mut c = w.chars();
+                            match c.next() {
+                                None => String::new(),
+                                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                            }
+                        })
+                };
+                let quien = nombre.as_deref().unwrap_or("esa persona");
+                return RespuestaAsistente::solo_texto(
+                    CategoriaIntencion::Consultar,
+                    conf,
+                    format!(
+                        "📅 Para consultar eventos de agenda (como el cumpleaños de {}), \
+                         usa el módulo Agenda desde el menú principal.\n\n\
+                         El Asistente Financiero solo maneja:\n\
+                         • Gastos e ingresos\n\
+                         • Resumen y estrategia financiera\n\
+                         • Pagos y deudas",
+                        quien
+                    ),
+                );
+            }
             // Construir una Intencion temporal con el intent efectivo para el mensaje
             let intent_info = Intencion {
                 categoria: intent_efectivo.clone(),
