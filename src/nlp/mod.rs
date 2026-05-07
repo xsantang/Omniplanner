@@ -10,6 +10,7 @@ pub mod intent;
 pub mod knowledge;
 pub mod sentiment;
 pub mod tokenizer;
+pub mod asistente;
 
 // Re-exports principales
 pub use conversation::{

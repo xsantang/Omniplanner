@@ -15991,6 +15991,7 @@ fn main() {
             "📄  Reportes (Diario / Semanal)",
             "💡  Asesor Inteligente (Decisiones y Finanzas)",
             "🤖  ML/NLP Avanzado (Herramientas técnicas)",
+            "�  Asistente Financiero (lenguaje natural)",
             "🔐  Seguridad y Privacidad",
             "❌  Salir",
         ];
@@ -16007,7 +16008,8 @@ fn main() {
             Some(8) => menu_reportes(&mut state),
             Some(9) => menu_asesor(&mut state),
             Some(10) => menu_ml_nlp_avanzado(&mut state),
-            Some(11) => menu_seguridad(&mut state),
+            Some(11) => menu_asistente_financiero(&mut state),
+            Some(12) => menu_seguridad(&mut state),
             _ => {
                 // Guardar antes de salir
                 if let Err(e) = state.guardar() {
@@ -16361,6 +16363,90 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
     );
 
     pausa();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Asistente Financiero — Conversación en lenguaje natural
+// ═══════════════════════════════════════════════════════════════════════
+
+fn menu_asistente_financiero(state: &mut AppState) {
+    use omniplanner::nlp::asistente;
+    limpiar();
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
+    println!("{}", "║  💬 A S I S T E N T E   F I N A N C I E R O   I N T E L I G E N T E ║".cyan().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+    println!();
+    println!("  {}", "Háblame en lenguaje natural. Ejemplos:".dimmed());
+    println!("    {}", "• \"gasté 50 en gasolina hoy\"".dimmed());
+    println!("    {}", "• \"recibí 1500 de sueldo\"".dimmed());
+    println!("    {}", "• \"cuánto llevo gastado este mes\"".dimmed());
+    println!("    {}", "• \"qué deuda debo pagar primero\"".dimmed());
+    println!("    {}", "• \"cómo voy financieramente\"".dimmed());
+    println!("    {}", "• \"recordarme pagar la luz el 15\"".dimmed());
+    println!();
+    println!("  Escribe '{}' o '{}' para volver al menú.\n", "salir".yellow(), "exit".yellow());
+
+    loop {
+        let input: String = match Input::new().with_prompt("  💬 Tú").interact_text() {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+
+        let input = input.trim().to_string();
+        if input.is_empty() {
+            continue;
+        }
+        if input == "salir" || input == "exit" || input == "quit" || input == "volver" {
+            return;
+        }
+
+        // Clasificar intención usando el motor NLP
+        let intencion = state.nlp.motor.intencion.clasificar(&input);
+
+        // Despachar al handler adecuado
+        let respuesta = asistente::responder(
+            &input,
+            &intencion,
+            &state.asesor,
+            &mut state.gastos,
+        );
+
+        // Auditar acceso a datos financieros
+        state.auditoria.registrar(
+            TipoAuditoria::AccesoDatosFinancieros,
+            Some(&format!("asistente: {}", intencion.categoria.nombre())),
+        );
+
+        // Mostrar respuesta
+        println!();
+        println!("  {} {}", "🤖".cyan(), respuesta.texto);
+        println!();
+        println!(
+            "  {} Intención: {} · Confianza: {:.0}%",
+            "→".dimmed(),
+            respuesta.intent.nombre().yellow(),
+            respuesta.confianza * 100.0,
+        );
+
+        if let Some(accion) = &respuesta.accion_realizada {
+            println!("  {} Acción: {}", "✓".green(), accion.green());
+        }
+
+        if !respuesta.seguimientos.is_empty() {
+            println!("  {} Sugerencias de seguimiento:", "💡".yellow());
+            for s in &respuesta.seguimientos {
+                println!("    • {}", s.dimmed());
+            }
+        }
+        println!();
+
+        // Persistir si hubo cambios
+        if respuesta.modifico_estado {
+            if let Err(e) = state.guardar() {
+                eprintln!("  {} Error guardando: {}", "✗".red(), e);
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
