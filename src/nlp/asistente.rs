@@ -84,7 +84,22 @@ pub fn responder(
     gastos: &mut AlmacenGastos,
 ) -> RespuestaAsistente {
     let conf = intencion.confianza;
-    match intencion.categoria {
+
+    // Si el clasificador NLP genérico ganó, intentar rescatar intent financiero
+    // por heurística de palabras clave de dominio.
+    let intent_efectivo = match &intencion.categoria {
+        CategoriaIntencion::Consultar
+        | CategoriaIntencion::Listar
+        | CategoriaIntencion::Buscar
+        | CategoriaIntencion::Modificar
+        | CategoriaIntencion::Crear
+        | CategoriaIntencion::Desconocido => {
+            intent_financiero(consulta).unwrap_or(intencion.categoria.clone())
+        }
+        otro => otro.clone(),
+    };
+
+    match intent_efectivo {
         CategoriaIntencion::RegistrarGasto => {
             responder_registrar_gasto(consulta, conf, gastos, false)
         }
@@ -118,7 +133,16 @@ pub fn responder(
              • Agenda: \"recordarme pagar la luz el 15\"\n\
              También entiendo expresiones de fechas: hoy, ayer, el 15, mañana.",
         ),
-        _ => responder_no_entendido(consulta, intencion),
+        _ => {
+            // Construir una Intencion temporal con el intent efectivo para el mensaje
+            let intent_info = Intencion {
+                categoria: intent_efectivo.clone(),
+                confianza: conf,
+                entidades: intencion.entidades.clone(),
+                alternativas: intencion.alternativas.clone(),
+            };
+            responder_no_entendido(consulta, &intent_info)
+        }
     }
 }
 
@@ -367,7 +391,140 @@ fn responder_no_entendido(consulta: &str, intencion: &Intencion) -> RespuestaAsi
 
 // ─── Extracción de entidades ─────────────────────────────────────────────────
 
-/// Extrae el primer número decimal/entero del texto como monto.
+/// Cuando el clasificador NLP genérico gana (Consultar / Listar / Buscar /
+/// Desconocido), este detector de dominio comprueba si el texto contiene
+/// léxico financiero y devuelve el intent correcto.
+fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
+    let lower = consulta.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let has_word = |w: &str| words.contains(&w);
+    let has = |s: &str| lower.as_str().contains(s);
+
+    // ¿Es una pregunta? (interrogativo al inicio)
+    let es_pregunta = has_word("cuanto")
+        || has("cuánto")
+        || has_word("que")
+        || has("qué")
+        || has_word("como")
+        || has("cómo")
+        || has_word("cual")
+        || has("cuál");
+
+    // ── 1. Consultas interrogativas sobre gastos (ANTES de RegistrarGasto) ──
+    // "cuánto gasté" es consulta, no registro
+    let cuanto_gaste = (has_word("cuanto") || has("cuánto"))
+        && (has_word("gaste") || has("gasté") || has_word("gastado") || has_word("gasto"));
+    if cuanto_gaste
+        || has("cuánto gasté")
+        || has("cuánto he gastado")
+        || has("en qué gasté")
+        || has("cuánto llevo")
+        || has("gastos por categoría")
+        || has("gastos del mes")
+        || has("mis gastos")
+        || has("cuanto llevo")
+        || has("en que gaste")
+        || has("balance del mes")
+        || has("balance mes")
+        || has_word("transacciones")
+        || has_word("movimientos")
+    {
+        return Some(CategoriaIntencion::ConsultarGastos);
+    }
+
+    // ── 2. Resumen financiero ────────────────────────────────────────
+    let queda_financiero = has_word("queda")
+        && (has_word("dinero")
+            || has_word("mes")
+            || has_word("disponible")
+            || has_word("pagar")
+            || has_word("pago"));
+    let cuanto_queda = (has_word("cuanto") || has("cuánto"))
+        && (has_word("queda") || has_word("tengo") || has_word("debo") || has_word("disponible"))
+        && (has_word("dinero") || has_word("mes") || has_word("pagar"));
+    if has("como voy")
+        || has("cómo voy")
+        || has("situacion financiera")
+        || has("situación financiera")
+        || has("estado financiero")
+        || has("mis finanzas")
+        || has("resumen financiero")
+        || has("panorama financiero")
+        || has("mis deudas")
+        || has("total deudas")
+        || has("dinero disponible")
+        || has("saldo disponible")
+        || has("cuánto me queda")
+        || has("cuánto debo")
+        || has("cuánto queda")
+        || queda_financiero
+        || cuanto_queda
+        || (has_word("deudas") && !has_word("primero"))
+        || (has_word("finanzas") && !has("gasté"))
+    {
+        return Some(CategoriaIntencion::ResumenFinanciero);
+    }
+
+    // ── 3. Registro de gasto (declarativo, no pregunta) ──────────────
+    let gasto_verbos = ["gaste", "pague", "compre", "desembolse"];
+    if !es_pregunta
+        && (gasto_verbos.iter().any(|v| has_word(v))
+            || has("gasté")
+            || has("pagué")
+            || has("compré")
+            || has("desembolsé")
+            || has("me costó")
+            || has("me costo")
+            || has("cobré un cargo"))
+    {
+        return Some(CategoriaIntencion::RegistrarGasto);
+    }
+
+    // ── 4. Registro de ingreso (declarativo) ─────────────────────────
+    if !es_pregunta
+        && (has_word("recibi")
+            || has_word("depositaron")
+            || has_word("sueldo")
+            || has_word("nomina")
+            || has_word("salario")
+            || has("recibí")
+            || has("cobré")
+            || has("entró")
+            || has("nómina")
+            || has("comisión")
+            || has("me pagaron")
+            || has("me depositaron")
+            || has("entro dinero"))
+    {
+        return Some(CategoriaIntencion::RegistrarIngreso);
+    }
+
+    // ── 5. Estrategia de pago ─────────────────────────────────────────
+    if has("bola de nieve")
+        || has("avalancha")
+        || has("plan de pagos")
+        || has("plan pagos")
+        || has("orden de pago")
+        || has("estrategia de pago")
+        || (has_word("primero") && (has_word("deuda") || has_word("pago")))
+        || (has_word("antes") && has_word("deuda"))
+    {
+        return Some(CategoriaIntencion::PedirSugerenciaPago);
+    }
+
+    // ── 6. Agendar / recordar pago ────────────────────────────────────
+    if has("agendar pago")
+        || has("recordar pago")
+        || has("programar pago")
+        || has("recordarme pagar")
+        || has("pagar el dia")
+        || has("pagar el día")
+    {
+        return Some(CategoriaIntencion::AgendarPago);
+    }
+
+    None
+}
 fn extraer_monto(s: &str) -> Option<f64> {
     let mut buf = String::new();
     let mut visto_punto = false;
@@ -599,5 +756,42 @@ mod tests {
             "gasolina"
         );
         assert_eq!(extraer_descripcion("recibí 1500 de sueldo", true), "sueldo");
+    }
+
+    #[test]
+    fn test_heuristica_financiera_override() {
+        assert_eq!(
+            intent_financiero("cuanto dinero queda este mes de Junio por pagar"),
+            Some(CategoriaIntencion::ResumenFinanciero)
+        );
+        assert_eq!(
+            intent_financiero("cuánto dinero me queda disponible"),
+            Some(CategoriaIntencion::ResumenFinanciero)
+        );
+        assert_eq!(
+            intent_financiero("cómo voy financieramente"),
+            Some(CategoriaIntencion::ResumenFinanciero)
+        );
+        assert_eq!(
+            intent_financiero("mis gastos del mes"),
+            Some(CategoriaIntencion::ConsultarGastos)
+        );
+        assert_eq!(
+            intent_financiero("cuánto gasté esta semana"),
+            Some(CategoriaIntencion::ConsultarGastos)
+        );
+        assert_eq!(
+            intent_financiero("qué deuda pago primero"),
+            Some(CategoriaIntencion::PedirSugerenciaPago)
+        );
+        assert_eq!(
+            intent_financiero("recibí 2000 de sueldo"),
+            Some(CategoriaIntencion::RegistrarIngreso)
+        );
+        assert_eq!(
+            intent_financiero("gasté 80 en supermercado"),
+            Some(CategoriaIntencion::RegistrarGasto)
+        );
+        assert_eq!(intent_financiero("hola cómo estás"), None);
     }
 }
