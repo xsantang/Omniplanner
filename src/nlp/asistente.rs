@@ -599,13 +599,26 @@ fn responder_historial_acreedor(
     let encontrados = gastos.buscar_por_keyword(keyword);
 
     if encontrados.is_empty() {
+        let hoy = Local::now().date_naive();
+        let resumen = gastos.resumen_mes(hoy.year(), hoy.month());
         return RespuestaAsistente::solo_texto(
             CategoriaIntencion::ConsultarGastos,
             conf,
             format!(
-                "🔍 No encontré registros que coincidan con \"{}\".\n\
-                 Verifica el nombre tal como lo escribiste al registrar el gasto.",
-                keyword
+                "🔍 No encontré registros con \"{}\".\n\
+                 Verifica que el nombre coincida con como lo escribiste al registrar el pago.\n\n\
+                 📊 Resumen del mes {}/{}:\n  \
+                 💸 Gastos:        ${:.2}\n  \
+                 💰 Ingresos:      ${:.2}\n  \
+                 ⚖  Balance:       ${:.2}\n  \
+                 📝 Transacciones: {}",
+                keyword,
+                hoy.month(),
+                hoy.year(),
+                resumen.total_gastos,
+                resumen.total_ingresos,
+                resumen.balance,
+                resumen.num_transacciones,
             ),
         );
     }
@@ -724,27 +737,24 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
     // Buscar por triggers (más específicos)
     for trigger in &triggers {
         if let Some(pos) = norm.find(trigger) {
-            // Calcular offset en el string original (mismo byte offset porque
-            // el trigger y norm usan misma codificación tras normalizar)
             let after_norm = &norm[pos + trigger.len()..];
-            // Tomar el texto después del trigger hasta puntuación o fin
-            let nombre = after_norm
-                .split([',', '.', '?', '!'].as_ref())
-                .next()
-                .unwrap_or(after_norm)
-                .trim()
-                .to_string();
+            let nombre = limpiar_articulos(
+                after_norm
+                    .split([',', '.', '?', '!'].as_ref())
+                    .next()
+                    .unwrap_or(after_norm)
+                    .trim(),
+            );
             if !nombre.is_empty() && nombre.split_whitespace().count() <= 4 {
                 return Some(nombre);
             }
         }
     }
 
-    // Fallback: "de/a" + cualquier palabra de >4 letras (nombre propio o empresa)
+    // Fallback: "de/a/por" + cualquier palabra de >4 letras (nombre propio o empresa)
     let words: Vec<&str> = norm.split_whitespace().collect();
     let stopwords = [
         "este",
-        "este mes",
         "el mes",
         "la semana",
         "hoy",
@@ -756,18 +766,21 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         "cobro",
         "cobros",
         "mes",
-        "año",
         "semana",
         "dia",
         "fecha",
     ];
     for (i, w) in words.iter().enumerate() {
-        if (*w == "de" || *w == "a" || *w == "al" || *w == "por" || *w == "el" || *w == "la")
-            && i + 1 < words.len()
-        {
-            let next = words[i + 1];
-            if next.len() > 4 {
-                let nombre = words[i + 1..]
+        if (*w == "de" || *w == "a" || *w == "al" || *w == "por") && i + 1 < words.len() {
+            // saltar artículo si el siguiente token es el/la/los/las
+            let skip = matches!(words[i + 1], "el" | "la" | "los" | "las");
+            let start = i + 1 + skip as usize;
+            if start >= words.len() {
+                continue;
+            }
+            let next = words[start];
+            if next.len() > 3 {
+                let nombre = words[start..]
                     .iter()
                     .take(2)
                     .cloned()
@@ -781,6 +794,21 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Elimina artículos definidos/indefinidos al inicio de un keyword.
+fn limpiar_articulos(s: &str) -> String {
+    let arts = [
+        "el ", "la ", "los ", "las ", "un ", "una ", "unos ", "unas ", "al ", "del ",
+    ];
+    let mut result = s;
+    for art in &arts {
+        if let Some(stripped) = result.strip_prefix(art) {
+            result = stripped.trim_start();
+            break;
+        }
+    }
+    result.to_string()
 }
 
 fn extraer_monto(s: &str) -> Option<f64> {
