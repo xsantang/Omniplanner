@@ -411,10 +411,16 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
         || has("cuál");
 
     // ── 1. Consultas interrogativas sobre gastos (ANTES de RegistrarGasto) ──
-    // "cuánto gasté" es consulta, no registro
+    // "cuánto gasté", "cuánto pago de X", "mis gastos", etc.
     let cuanto_gaste = (has_word("cuanto") || has("cuánto"))
         && (has_word("gaste") || has("gasté") || has_word("gastado") || has_word("gasto"));
+    // "cuanto pago de celular" / "cuánto pago de kissimmee"
+    let cuanto_pago_de =
+        (has_word("cuanto") || has("cuánto") || has("cuántos") || has_word("cuantos"))
+            && (has_word("pago") || has_word("cobro") || has_word("cargo"))
+            && (has_word("de") || has_word("del") || has_word("por"));
     if cuanto_gaste
+        || cuanto_pago_de
         || has("cuánto gasté")
         || has("cuánto he gastado")
         || has("en qué gasté")
@@ -442,6 +448,9 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
     let cuanto_queda = (has_word("cuanto") || has("cuánto"))
         && (has_word("queda") || has_word("tengo") || has_word("debo") || has_word("disponible"))
         && (has_word("dinero") || has_word("mes") || has_word("pagar"));
+    // "cuantas cuentas tengo que pagar", "cuentas por pagar", "qué cuentas tengo"
+    let cuentas_pendientes = has_word("cuentas")
+        && (has_word("pagar") || has_word("pendientes") || has_word("vencen") || has_word("tengo"));
     if has("como voy")
         || has("cómo voy")
         || has("situacion financiera")
@@ -457,6 +466,11 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
         || has("cuánto me queda")
         || has("cuánto debo")
         || has("cuánto queda")
+        || has("cuantas cuentas")
+        || has("cuántas cuentas")
+        || has("que cuentas")
+        || has("qué cuentas")
+        || cuentas_pendientes
         || queda_financiero
         || cuanto_queda
         || (has_word("deudas") && !has_word("primero"))
@@ -793,5 +807,22 @@ mod tests {
             Some(CategoriaIntencion::RegistrarGasto)
         );
         assert_eq!(intent_financiero("hola cómo estás"), None);
+        // Frases con "pago de" y "cuentas"
+        assert_eq!(
+            intent_financiero("cuanto pago de kissimmee"),
+            Some(CategoriaIntencion::ConsultarGastos)
+        );
+        assert_eq!(
+            intent_financiero("cuanto pago de celular"),
+            Some(CategoriaIntencion::ConsultarGastos)
+        );
+        assert_eq!(
+            intent_financiero("cuantas cuentas tengo que pagar"),
+            Some(CategoriaIntencion::ResumenFinanciero)
+        );
+        assert_eq!(
+            intent_financiero("que cuentas tengo pendientes"),
+            Some(CategoriaIntencion::ResumenFinanciero)
+        );
     }
 }
