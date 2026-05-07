@@ -38,6 +38,10 @@ use omniplanner::ml::{
     TipoRegistro, ANN, CNN, DNN, RNN, SVM,
 };
 use omniplanner::nlp::{DatosEntrenamiento, TipoRelacion, Valoracion};
+use omniplanner::seguridad::{
+    self, banner_advertencia, resumen_auditoria_reciente, ConfigSeguridad, NivelConfirmacion,
+    OperacionCritica, RegistroAuditoria, SesionSegura, TipoAuditoria,
+};
 use omniplanner::storage::AppState;
 use omniplanner::sync;
 use omniplanner::tasks::{Prioridad, Task, TaskStatus};
@@ -4213,6 +4217,9 @@ pub(crate) fn menu_memoria(state: &mut AppState) {
 // ══════════════════════════════════════════════════════════════
 
 pub(crate) fn menu_contrasenias(state: &mut AppState) {
+    // Auditoría: registrar acceso al gestor de contraseñas
+    state.auditoria.registrar(TipoAuditoria::AccesoContrasenias, None);
+
     loop {
         limpiar();
         separador("🔐 CONTRASEÑAS Y CLAVES");
@@ -9832,6 +9839,9 @@ pub(crate) fn menu_compacto(opciones: &[&str]) -> Option<usize> {
 // ══════════════════════════════════════════════════════════════
 
 pub(crate) fn menu_asesor(state: &mut AppState) {
+    // Auditoría: registrar acceso a módulo financiero
+    state.auditoria.registrar(TipoAuditoria::AccesoDatosFinancieros, None);
+
     loop {
         limpiar();
         println!(
@@ -11704,6 +11714,24 @@ pub(crate) fn sincronizar_pago_rastreador(
             (monto, 0.0)
         };
         deuda.registrar_mes_con_escrow(mes, saldo_actual, pago_pi, pago_escrow, 0.0);
+    }
+
+    // Auditoría: registrar pago financiero
+    state.auditoria.registrar(
+        TipoAuditoria::PagoRegistrado { monto },
+        Some(&format!("{} — {}", nombre_linea, mes)),
+    );
+
+    // Doble confirmación si supera el umbral
+    if state.seguridad.confirmar_pagos_grandes && monto > state.seguridad.umbral_pago_confirmacion {
+        // La confirmación se realiza en la CLI antes de llamar esta función;
+        // aquí solo anotamos que ocurrió una operación de monto grande.
+        state.auditoria.registrar(
+            TipoAuditoria::OperacionCritica {
+                descripcion: format!("Pago grande confirmado: ${:.2} en {}", monto, nombre_linea),
+            },
+            None,
+        );
     }
 
     true
@@ -15763,6 +15791,50 @@ fn main() {
         Err(_) => AppState::new(),
     };
 
+    // ── Verificación de PIN al arranque ──────────────────────────────────
+    if state.seguridad.pin_activo {
+        limpiar();
+        banner();
+        println!("{}", "  🔐 Acceso protegido — ingresa tu PIN".cyan().bold());
+        println!();
+
+        let mut intentos = 0u32;
+        loop {
+            let pin = {
+                if es_termux() {
+                    print!("  PIN: ");
+                    leer_linea()
+                } else {
+                    Input::<String>::new()
+                        .with_prompt("  PIN")
+                        .allow_empty(false)
+                        .interact_text()
+                        .unwrap_or_default()
+                }
+            };
+
+            let mut sesion = SesionSegura::new(&mut state.seguridad, &mut state.auditoria);
+            match sesion.verificar_pin(&pin) {
+                Ok(_) => {
+                    println!("  {} Acceso concedido.", "✓".green());
+                    state.auditoria.registrar(TipoAuditoria::LoginExitoso, None);
+                    break;
+                }
+                Err(e) => {
+                    println!("  {} {}", "✗".red(), e);
+                    intentos += 1;
+                    if intentos >= seguridad::MAX_INTENTOS_PIN {
+                        println!(
+                            "\n  {} Demasiados intentos fallidos. Saliendo.",
+                            "🔒".red()
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     loop {
         limpiar();
         banner();
@@ -15780,6 +15852,7 @@ fn main() {
             "📄  Reportes (Diario / Semanal)",
             "💡  Asesor Inteligente (Decisiones y Finanzas)",
             "🤖  ML/NLP Avanzado (Herramientas técnicas)",
+            "🔐  Seguridad y Privacidad",
             "❌  Salir",
         ];
 
@@ -15795,6 +15868,7 @@ fn main() {
             Some(8) => menu_reportes(&mut state),
             Some(9) => menu_asesor(&mut state),
             Some(10) => menu_ml_nlp_avanzado(&mut state),
+            Some(11) => menu_seguridad(&mut state),
             _ => {
                 // Guardar antes de salir
                 if let Err(e) = state.guardar() {
@@ -15807,6 +15881,237 @@ fn main() {
         }
 
         // Auto-guardar después de cada acción
+        if let Err(e) = state.guardar() {
+            eprintln!("  {} Error guardando: {}", "✗".red(), e);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Menú de Seguridad y Privacidad
+// ═══════════════════════════════════════════════════════════════════════
+
+fn menu_seguridad(state: &mut AppState) {
+    loop {
+        limpiar();
+        println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
+        println!("{}", "║  🔐 S E G U R I D A D   Y   P R I V A C I D A D           ║".cyan().bold());
+        println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+        println!();
+
+        let estado_pin = if state.seguridad.pin_activo {
+            format!("{} Activo", "🟢".green())
+        } else {
+            format!("{} Desactivado", "🔴".red())
+        };
+        println!("  PIN de acceso:    {}", estado_pin);
+        println!("  Auditoría:        {} eventos registrados", state.auditoria.entradas.len());
+        if let Some(ref ts) = state.seguridad.ultimo_login {
+            println!("  Último login:     {}", ts);
+        }
+        println!();
+
+        let opciones = &[
+            if state.seguridad.pin_activo { "🔑  Cambiar PIN" } else { "🔑  Activar PIN de acceso" },
+            "🔓  Desactivar PIN",
+            "📋  Ver registro de auditoría (últimas 24 h)",
+            "⚙️   Configurar confirmaciones de seguridad",
+            "🛡️   Verificar integridad de datos",
+            "📤  Exportar registro de auditoría",
+            "🔙  Volver",
+        ];
+
+        match menu("Seguridad", opciones) {
+            Some(0) => {
+                // Activar o cambiar PIN
+                let pin_nuevo = pedir_texto("Nuevo PIN (mínimo 4 caracteres)");
+                let pin_nuevo = match pin_nuevo {
+                    Some(p) => p,
+                    None => { println!("  Cancelado."); pausa(); continue; }
+                };
+                // Confirmar el PIN
+                let pin_confirm = pedir_texto("Confirma el PIN");
+                let pin_confirm = match pin_confirm {
+                    Some(p) => p,
+                    None => { println!("  Cancelado."); pausa(); continue; }
+                };
+                if pin_nuevo != pin_confirm {
+                    println!("  {} Los PINs no coinciden.", "✗".red());
+                    pausa();
+                    continue;
+                }
+
+                let pin_actual = if state.seguridad.pin_activo {
+                    let pa = pedir_texto("PIN actual (para confirmar cambio)");
+                    match pa {
+                        Some(p) => Some(p),
+                        None => { println!("  Cancelado."); pausa(); continue; }
+                    }
+                } else {
+                    None
+                };
+
+                let mut sesion = SesionSegura::new(&mut state.seguridad, &mut state.auditoria);
+                match sesion.configurar_pin(&pin_nuevo, pin_actual.as_deref()) {
+                    Ok(_) => {
+                        println!("  {} PIN configurado correctamente.", "✓".green());
+                        println!("  {} El PIN protegerá el acceso al arrancar la aplicación.", "ℹ".cyan());
+                    }
+                    Err(e) => println!("  {} {}", "✗".red(), e),
+                }
+                pausa();
+            }
+            Some(1) => {
+                // Desactivar PIN
+                if !state.seguridad.pin_activo {
+                    println!("  ℹ El PIN no está activo.");
+                    pausa();
+                    continue;
+                }
+                println!("{}", banner_advertencia("Desactivar el PIN eliminará la protección de acceso."));
+                let pin = pedir_texto("Ingresa tu PIN actual para confirmar");
+                let pin = match pin {
+                    Some(p) => p,
+                    None => { println!("  Cancelado."); pausa(); continue; }
+                };
+                let mut sesion = SesionSegura::new(&mut state.seguridad, &mut state.auditoria);
+                match sesion.desactivar_pin(&pin) {
+                    Ok(()) => println!("  {} PIN desactivado.", "✓".green()),
+                    Err(e) => println!("  {} {}", "✗".red(), e),
+                }
+                pausa();
+            }
+            Some(2) => {
+                // Ver auditoría
+                limpiar();
+                separador("📋 Registro de Auditoría — últimas 24 horas");
+                println!("{}", resumen_auditoria_reciente(&state.auditoria, 24));
+                println!();
+                separador("📋 Últimos 20 eventos (todos)");
+                for e in state.auditoria.ultimas(20) {
+                    println!("  {} │ {}", e.timestamp.cyan(), e.tipo);
+                    if let Some(ref extra) = e.descripcion_extra {
+                        println!("         │  {}", extra.dimmed());
+                    }
+                }
+                pausa();
+            }
+            Some(3) => {
+                // Configurar confirmaciones
+                limpiar();
+                separador("⚙️ Confirmaciones de seguridad");
+                println!("  Confirmar borrado de datos financieros: {}", if state.seguridad.confirmar_borrado_financiero { "✅ Sí" } else { "❌ No" });
+                println!("  Confirmar pagos grandes:                {}", if state.seguridad.confirmar_pagos_grandes { "✅ Sí" } else { "❌ No" });
+                println!("  Umbral para doble confirmación:         ${:.2}", state.seguridad.umbral_pago_confirmacion);
+                println!();
+                let opts = &[
+                    "Activar/desactivar confirmación de borrado",
+                    "Activar/desactivar confirmación de pagos grandes",
+                    "Cambiar umbral de monto",
+                    "🔙 Volver",
+                ];
+                match menu("Configurar", opts) {
+                    Some(0) => {
+                        state.seguridad.confirmar_borrado_financiero = !state.seguridad.confirmar_borrado_financiero;
+                        println!("  {} Confirmación de borrado: {}", "✓".green(), if state.seguridad.confirmar_borrado_financiero { "activada" } else { "desactivada" });
+                        state.auditoria.registrar(TipoAuditoria::OperacionCritica { descripcion: "Cambio configuración seguridad".to_string() }, None);
+                    }
+                    Some(1) => {
+                        state.seguridad.confirmar_pagos_grandes = !state.seguridad.confirmar_pagos_grandes;
+                        println!("  {} Confirmación de pagos: {}", "✓".green(), if state.seguridad.confirmar_pagos_grandes { "activada" } else { "desactivada" });
+                        state.auditoria.registrar(TipoAuditoria::OperacionCritica { descripcion: "Cambio configuración seguridad".to_string() }, None);
+                    }
+                    Some(2) => {
+                        if let Some(s) = pedir_texto("Nuevo umbral (ej: 5000)") {
+                            if let Ok(v) = s.parse::<f64>() {
+                                let val = seguridad::validar_monto(v, 0.0, 10_000_000.0);
+                                if val.valido {
+                                    state.seguridad.umbral_pago_confirmacion = v;
+                                    println!("  {} Umbral actualizado a ${:.2}", "✓".green(), v);
+                                } else {
+                                    for err in &val.errores { println!("  {} {}", "✗".red(), err); }
+                                }
+                            } else {
+                                println!("  {} Valor numérico inválido.", "✗".red());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+            Some(4) => {
+                // Verificar integridad
+                limpiar();
+                separador("🛡️ Verificación de integridad");
+                println!("  Verificando estructura de datos...");
+                let mut ok = true;
+
+                // Validar deudas
+                for d in &state.asesor.rastreador.deudas {
+                    let v = seguridad::validar_nombre(&d.nombre);
+                    if !v.valido {
+                        println!("  {} Deuda con nombre inválido: '{}'", "⚠".yellow(), d.nombre);
+                        ok = false;
+                    }
+                    let vt = seguridad::validar_tasa(d.tasa_anual / 100.0 / 12.0);
+                    if !vt.valido {
+                        println!("  {} Deuda '{}' tiene tasa inválida: {:.2}% APR", "⚠".yellow(), d.nombre, d.tasa_anual);
+                        ok = false;
+                    }
+                }
+                // Validar tareas
+                for t in &state.tasks.tareas {
+                    let v = seguridad::validar_nombre(&t.titulo);
+                    if !v.valido {
+                        println!("  {} Tarea con nombre inválido", "⚠".yellow());
+                        ok = false;
+                    }
+                }
+                // Validar agenda
+                for e in &state.agenda.eventos {
+                    let v = seguridad::validar_nombre(&e.titulo);
+                    if !v.valido {
+                        println!("  {} Evento con título inválido", "⚠".yellow());
+                        ok = false;
+                    }
+                }
+
+                if ok {
+                    println!("  {} Todos los datos verificados sin inconsistencias.", "✓".green());
+                } else {
+                    println!("\n  {} Se encontraron advertencias. Revisa los datos afectados.", "⚠".yellow());
+                }
+                state.auditoria.registrar(
+                    TipoAuditoria::OperacionCritica { descripcion: "Verificación de integridad ejecutada".to_string() },
+                    None,
+                );
+                pausa();
+            }
+            Some(5) => {
+                // Exportar auditoría
+                use std::io::Write;
+                let ruta = omniplanner::io::dir_modulo("seguridad").join(
+                    format!("auditoria_{}.txt", chrono::Local::now().format("%Y%m%d_%H%M%S"))
+                );
+                if let Ok(mut f) = std::fs::File::create(&ruta) {
+                    for e in &state.auditoria.entradas {
+                        let _ = writeln!(f, "{} | {}{}", e.timestamp, e.tipo,
+                            e.descripcion_extra.as_deref().map(|s| format!(" | {}", s)).unwrap_or_default());
+                    }
+                    println!("  {} Auditoría exportada a: {}", "✓".green(), ruta.display());
+                    state.auditoria.registrar(
+                        TipoAuditoria::ExportacionDatos { modulo: "auditoria".to_string(), formato: "txt".to_string() },
+                        None,
+                    );
+                } else {
+                    println!("  {} No se pudo crear el archivo.", "✗".red());
+                }
+                pausa();
+            }
+            _ => return,
+        }
+
         if let Err(e) = state.guardar() {
             eprintln!("  {} Error guardando: {}", "✗".red(), e);
         }

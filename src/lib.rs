@@ -29,6 +29,7 @@ pub mod mapper;
 pub mod memoria;
 pub mod ml;
 pub mod nlp;
+pub mod seguridad;
 pub mod storage;
 pub mod sync;
 pub mod tasks;

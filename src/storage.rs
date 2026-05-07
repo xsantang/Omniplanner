@@ -20,6 +20,7 @@ use crate::mapper::Mapper;
 use crate::memoria::Memoria;
 use crate::ml::{AlmacenAsesor, AlmacenML, AlmacenPresupuesto};
 use crate::nlp::AlmacenNLP;
+use crate::seguridad::{ConfigSeguridad, RegistroAuditoria};
 use crate::sync::SyncConfig;
 use crate::tasks::TaskManager;
 use crate::vcs::DataVcs;
@@ -54,6 +55,12 @@ pub struct AppState {
     /// Bus de eventos central — paper trail de todas las acciones del sistema.
     #[serde(default)]
     pub bus: BusEventos,
+    /// Configuración de seguridad (PIN, bloqueo, confirmaciones).
+    #[serde(default)]
+    pub seguridad: ConfigSeguridad,
+    /// Registro de auditoría de seguridad.
+    #[serde(default)]
+    pub auditoria: RegistroAuditoria,
     /// Timestamp de última modificación (epoch secs)
     #[serde(default)]
     pub ultima_modificacion: i64,
@@ -76,6 +83,8 @@ impl AppState {
             presupuesto: AlmacenPresupuesto::default(),
             contrasenias: AlmacenContrasenias::default(),
             bus: BusEventos::default(),
+            seguridad: ConfigSeguridad::default(),
+            auditoria: RegistroAuditoria::default(),
             ultima_modificacion: 0,
         }
     }
