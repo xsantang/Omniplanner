@@ -18,6 +18,7 @@ pub mod presupuesto_cero;
 pub mod random_forest;
 pub mod reinforcement;
 pub mod rnn;
+pub mod sugerencias;
 pub mod svm;
 
 // Re-exports para conveniencia
@@ -42,6 +43,7 @@ pub use optimizer::{
 };
 pub use presupuesto_cero::AlmacenPresupuesto;
 pub use gastos::{AlmacenGastos, GastoReal};
+pub use sugerencias::{PlanPagosMes, SugerenciaPago, TipoSugerencia};
 pub use random_forest::BosqueAleatorio;
 pub use reinforcement::{GridWorld, MultiBandit, QTable};
 pub use rnn::{TipoRNN, RNN};

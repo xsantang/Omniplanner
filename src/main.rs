@@ -9948,6 +9948,7 @@ pub(crate) fn menu_asesor(state: &mut AppState) {
             "🗂️   Rastreador de Deudas (multi-cuenta + diagnóstico)",
             "📂  Historial y Exportación",
             "🧾  Gastos Reales (registro de transacciones)",
+            "�  Sugerencias de Pago (plan inteligente del mes)",
             "🔙  Volver",
         ];
 
@@ -9963,6 +9964,7 @@ pub(crate) fn menu_asesor(state: &mut AppState) {
             Some(8) => menu_asesor_rastreador(state),
             Some(9) => menu_asesor_historial(state),
             Some(10) => menu_gastos_reales(state),
+            Some(11) => menu_sugerencias_pago(state),
             _ => return,
         }
     }
@@ -16131,6 +16133,126 @@ fn truncar(s: &str, max: usize) -> String {
     } else {
         format!("{}…", s.chars().take(max - 1).collect::<String>())
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Sugerencias de Pago — plan inteligente del mes
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
+    use chrono::Datelike;
+    use omniplanner::ml::sugerencias::{PlanPagosMes, TipoSugerencia};
+
+    limpiar();
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
+    println!("{}", "║  💡 S U G E R E N C I A S   D E   P A G O                 ║".cyan().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+    println!();
+
+    let ahora = chrono::Local::now();
+    let plan = PlanPagosMes::generar(
+        &state.asesor.rastreador,
+        &state.gastos,
+        ahora.year(),
+        ahora.month(),
+    );
+
+    // ── Resumen financiero del mes ──────────────────────────────────
+    println!("  {}", "── Resumen del mes ─────────────────────────────────────".dimmed());
+    println!(
+        "  Ingreso mensual confirmado: {}",
+        format!("${:.2}", plan.ingreso_mensual).green().bold()
+    );
+    println!(
+        "  Gastos reales registrados:  {}",
+        format!("${:.2}", plan.gastos_reales_mes).red()
+    );
+    println!(
+        "  Pagos mínimos de deudas:    {}",
+        format!("${:.2}", plan.pagos_minimos_total).yellow()
+    );
+    let excedente_color = if plan.excedente > 0.01 {
+        format!("${:.2}", plan.excedente).green().bold().to_string()
+    } else {
+        format!("${:.2} (sin excedente)", plan.excedente).red().to_string()
+    };
+    println!("  Excedente para abonos:      {}", excedente_color);
+    println!();
+
+    // ── Advertencias ────────────────────────────────────────────────
+    for w in &plan.advertencias {
+        println!("  {} {}", "⚠".yellow(), w);
+    }
+    if !plan.advertencias.is_empty() {
+        println!();
+    }
+
+    // ── Sugerencias priorizadas ─────────────────────────────────────
+    if plan.sugerencias.is_empty() {
+        println!("  {}", "No hay deudas activas para sugerir pagos.".dimmed());
+    } else {
+        println!("  {}", "── Plan de pagos sugerido ──────────────────────────────".dimmed());
+        println!();
+        for (i, s) in plan.sugerencias.iter().enumerate() {
+            let tipo_color = match s.tipo {
+                TipoSugerencia::Urgente => format!("{}", s.tipo).red().bold().to_string(),
+                TipoSugerencia::CasiLiquidada => format!("{}", s.tipo).green().bold().to_string(),
+                TipoSugerencia::AbonoExtra => format!("{}", s.tipo).yellow().bold().to_string(),
+                TipoSugerencia::BolaNieve => format!("{}", s.tipo).cyan().bold().to_string(),
+                TipoSugerencia::SoloMinimo => format!("{}", s.tipo).dimmed().to_string(),
+            };
+            println!(
+                "  {}. {} — {}",
+                i + 1,
+                s.nombre_deuda.bold(),
+                tipo_color,
+            );
+            println!(
+                "     Saldo: {}  APR: {:.1}%  Mínimo: {}  → Pagar: {}",
+                format!("${:.2}", s.saldo_actual).red(),
+                s.tasa_anual,
+                format!("${:.2}", s.pago_minimo).yellow(),
+                format!("${:.2}", s.monto_sugerido).green().bold(),
+            );
+            if s.ahorro_interes_estimado > 0.01 {
+                println!(
+                    "     {} Interés evitado este mes: {}",
+                    "→".cyan(),
+                    format!("${:.2}", s.ahorro_interes_estimado).green()
+                );
+            }
+            println!("     {}", s.razon.dimmed());
+            println!();
+        }
+
+        // Resumen total sugerido
+        let total_sugerido: f64 = plan.sugerencias.iter().map(|s| s.monto_sugerido).sum();
+        let total_ahorro: f64 = plan
+            .sugerencias
+            .iter()
+            .map(|s| s.ahorro_interes_estimado)
+            .sum();
+        println!("  {}", "─".repeat(60));
+        println!(
+            "  Total a pagar este mes: {}   Ahorro en intereses: {}",
+            format!("${:.2}", total_sugerido).yellow().bold(),
+            format!("${:.2}", total_ahorro).green().bold(),
+        );
+    }
+
+    println!();
+    println!(
+        "  {} Las sugerencias se basan en tus gastos registrados este mes",
+        "ℹ".cyan()
+    );
+    println!("    y los ingresos confirmados en el Rastreador de Deudas.");
+
+    state.auditoria.registrar(
+        TipoAuditoria::AccesoDatosFinancieros,
+        Some("Sugerencias de pago consultadas"),
+    );
+
+    pausa();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
