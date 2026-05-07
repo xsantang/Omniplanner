@@ -604,6 +604,8 @@ fn filas_a_eventos(cabs: &[String], filas: &[Vec<String>]) -> Vec<Evento> {
             concepto: campo(fila, i_con).to_string(),
             notas,
             creado: parse_dt(campo(fila, i_cre)).unwrap_or(ahora),
+            emoji: None,
+            mensaje_recordatorio: None,
         });
     }
     out
@@ -1492,6 +1494,8 @@ fn item_a_evento(it: &ItemDetectado) -> Evento {
         concepto: String::new(),
         notas: it.notas.clone(),
         creado: ahora,
+        emoji: None,
+        mensaje_recordatorio: None,
     }
 }
 

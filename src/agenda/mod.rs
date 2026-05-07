@@ -145,6 +145,12 @@ pub struct Evento {
     pub concepto: String,
     pub notas: Vec<String>,
     pub creado: NaiveDateTime,
+    /// Emoji visual del recordatorio (ej: "🔥", "💊", "📞")
+    #[serde(default)]
+    pub emoji: Option<String>,
+    /// Mensaje personalizado que se incluye en el recordatorio/email
+    #[serde(default)]
+    pub mensaje_recordatorio: Option<String>,
 }
 
 impl Evento {
@@ -169,6 +175,8 @@ impl Evento {
             concepto: String::new(),
             notas: Vec::new(),
             creado: chrono::Local::now().naive_local(),
+            emoji: None,
+            mensaje_recordatorio: None,
         }
     }
 
@@ -204,6 +212,22 @@ impl Evento {
 
     pub fn agregar_nota(&mut self, nota: String) {
         self.notas.push(nota);
+    }
+
+    /// Texto completo del recordatorio: emoji + título + mensaje personalizado.
+    /// Usado en emails y notificaciones.
+    pub fn texto_recordatorio(&self) -> String {
+        let emoji_str = self.emoji.as_deref().unwrap_or("");
+        let prefijo = if emoji_str.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", emoji_str)
+        };
+        let base = format!("{}{}", prefijo, self.titulo);
+        match &self.mensaje_recordatorio {
+            Some(msg) if !msg.is_empty() => format!("{}\n  → {}", base, msg),
+            _ => base,
+        }
     }
 
     pub fn duracion_minutos(&self) -> Option<i64> {

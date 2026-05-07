@@ -81,22 +81,31 @@ pub fn enviar_recordatorio_evento(config: &SyncConfig, evento: &Evento) -> Resul
         .map(|h| format!(" - {}", h.format("%H:%M")))
         .unwrap_or_default();
 
-    let asunto = format!("Recordatorio: {}", evento.titulo);
+    let asunto = format!("Recordatorio: {}", evento.texto_recordatorio());
+    let mensaje_extra = match &evento.mensaje_recordatorio {
+        Some(m) if !m.is_empty() => format!("\n  Mensaje:     {}", m),
+        _ => String::new(),
+    };
+    let emoji_linea = match &evento.emoji {
+        Some(e) if !e.is_empty() => format!("\n  Emoji:       {}", e),
+        _ => String::new(),
+    };
     let cuerpo = format!(
         "\
 ═══════════════════════════════════════
   OMNIPLANNER — Recordatorio de Evento
 ═══════════════════════════════════════
 
-  Título:      {}
+  Título:      {}{}
   Descripción: {}
   Tipo:        {}
   Fecha:       {}
-  Hora:        {}{}
+  Hora:        {}{}{}
 
 ───────────────────────────────────────
 Enviado por OmniPlanner",
         evento.titulo,
+        emoji_linea,
         if evento.descripcion.is_empty() {
             "(sin descripción)"
         } else {
@@ -106,6 +115,7 @@ Enviado por OmniPlanner",
         evento.fecha.format("%d/%m/%Y"),
         evento.hora_inicio.format("%H:%M"),
         fin,
+        mensaje_extra,
     );
 
     enviar_correo(config, &asunto, &cuerpo)

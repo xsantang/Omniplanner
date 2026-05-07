@@ -546,6 +546,8 @@ fn cmd_evento_crear(params: &Value) -> String {
             concepto: String::new(),
             notas: vec![],
             creado: Local::now().naive_local(),
+            emoji: None,
+            mensaje_recordatorio: None,
         };
 
         state.agenda.eventos.push(evento.clone());

@@ -2089,6 +2089,19 @@ pub(crate) fn menu_agenda(state: &mut AppState) {
                     "Registrado:".dimmed(),
                     e.creado.format("%d/%m/%Y %H:%M").to_string().dimmed(),
                 );
+                // Mostrar emoji y mensaje si existen (recordatorios)
+                if e.emoji.is_some() || e.mensaje_recordatorio.is_some() {
+                    let emoji_str = e.emoji.as_deref().unwrap_or("");
+                    let msg_str = e.mensaje_recordatorio.as_deref().unwrap_or("");
+                    if !emoji_str.is_empty() || !msg_str.is_empty() {
+                        println!(
+                            "      {} {}{}",
+                            "💬".dimmed(),
+                            if emoji_str.is_empty() { String::new() } else { format!("{} ", emoji_str) },
+                            msg_str.dimmed(),
+                        );
+                    }
+                }
             }
         } else {
             println!("  {}", "(sin eventos — agenda tu primer evento)".dimmed());
@@ -2238,8 +2251,22 @@ pub(crate) fn nuevo_evento(state: &mut AppState) {
 
     let tags = pedir_texto_opcional("Palabras clave (opcional, separadas por coma)");
 
+    // Emoji y mensaje personalizados para Recordatorios
+    let (emoji_evento, mensaje_recordatorio) = if matches!(tipo, TipoEvento::Recordatorio) {
+        let emoji = pedir_texto_opcional("Emoji del recordatorio (opcional, ej: 🔔 💊 📞 🎯)");
+        let msg = pedir_texto_opcional("Mensaje personalizado (opcional, ej: 'Confirmar antes de ir')");
+        (
+            if emoji.is_empty() { None } else { Some(emoji) },
+            if msg.is_empty() { None } else { Some(msg) },
+        )
+    } else {
+        (None, None)
+    };
+
     let mut evento = Evento::new(titulo.clone(), desc, tipo, fecha, hora, hora_fin);
     evento = evento.con_frecuencia(frecuencia).con_concepto(concepto);
+    evento.emoji = emoji_evento;
+    evento.mensaje_recordatorio = mensaje_recordatorio;
 
     if !tags.is_empty() {
         let palabras: Vec<String> = tags
