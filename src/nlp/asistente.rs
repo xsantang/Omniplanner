@@ -106,7 +106,7 @@ pub fn responder(
         CategoriaIntencion::RegistrarIngreso => {
             responder_registrar_gasto(consulta, conf, gastos, true)
         }
-        CategoriaIntencion::ConsultarGastos => responder_consultar_gastos(conf, gastos),
+        CategoriaIntencion::ConsultarGastos => responder_consultar_gastos(consulta, conf, gastos),
         CategoriaIntencion::PedirSugerenciaPago => {
             responder_sugerencia_pago(conf, &rastreador.rastreador, gastos)
         }
@@ -206,7 +206,16 @@ fn responder_registrar_gasto(
     r
 }
 
-fn responder_consultar_gastos(conf: f64, gastos: &AlmacenGastos) -> RespuestaAsistente {
+fn responder_consultar_gastos(
+    consulta: &str,
+    conf: f64,
+    gastos: &AlmacenGastos,
+) -> RespuestaAsistente {
+    // Si la consulta menciona un acreedor específico, buscar por keyword
+    if let Some(keyword) = extraer_nombre_acreedor(consulta) {
+        return responder_historial_acreedor(&keyword, conf, gastos);
+    }
+
     let hoy = Local::now().date_naive();
     let resumen = gastos.resumen_mes(hoy.year(), hoy.month());
     let por_cat = gastos.por_categoria(
@@ -550,6 +559,163 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
 
     None
 }
+/// Muestra el historial completo de pagos a un acreedor/descripción específico.
+fn responder_historial_acreedor(
+    keyword: &str,
+    conf: f64,
+    gastos: &AlmacenGastos,
+) -> RespuestaAsistente {
+    let encontrados = gastos.buscar_por_keyword(keyword);
+
+    if encontrados.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::ConsultarGastos,
+            conf,
+            format!(
+                "🔍 No encontré registros que coincidan con \"{}\".\n\
+                 Verifica el nombre tal como lo escribiste al registrar el gasto.",
+                keyword
+            ),
+        );
+    }
+
+    let total_gastos: f64 = encontrados
+        .iter()
+        .filter(|g| g.monto > 0.0)
+        .map(|g| g.monto)
+        .sum();
+    let total_ingresos: f64 = encontrados
+        .iter()
+        .filter(|g| g.monto < 0.0)
+        .map(|g| g.monto.abs())
+        .sum();
+    let veces_pagado = encontrados.iter().filter(|g| g.monto > 0.0).count();
+
+    let mut texto = format!(
+        "🔍 Historial de \"{}\" — {} registro(s) encontrado(s)\n\n\
+         📊 Resumen:\n\
+         \x20  💸 Veces pagado:   {}\n\
+         \x20  💰 Total pagado:   ${:.2}\n",
+        keyword,
+        encontrados.len(),
+        veces_pagado,
+        total_gastos,
+    );
+    if total_ingresos > 0.0 {
+        texto.push_str(&format!("  💵 Total reembolso: ${:.2}\n", total_ingresos));
+    }
+
+    texto.push_str("\n📅 Detalle por fecha:\n");
+    let meses = [
+        "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
+    ];
+    for g in &encontrados {
+        let mes_str = meses.get(g.fecha.month0() as usize).unwrap_or(&"?");
+        let tipo = if g.monto < 0.0 {
+            "💵 Reembolso"
+        } else {
+            "💸 Pago    "
+        };
+        texto.push_str(&format!(
+            "  {} {:02}/{}/{} — {} ${:.2}  [{}]\n",
+            tipo,
+            g.fecha.day(),
+            mes_str,
+            g.fecha.year(),
+            g.descripcion,
+            g.monto.abs(),
+            g.id,
+        ));
+    }
+
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarGastos, conf, texto);
+    r.seguimientos
+        .push(format!("¿Cuánto pagué en total a \"{}\"?", keyword));
+    r.seguimientos
+        .push("Ver resumen financiero completo".to_string());
+    r
+}
+
+/// Extrae el nombre de un acreedor/empresa de la consulta del usuario.
+/// Detecta patrones como "de carrington", "a carrington", "pagos a X", etc.
+fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
+    // Palabras trigger que indican que viene un nombre
+    let triggers = [
+        "pagos de ",
+        "pagos a ",
+        "pague a ",
+        "pagué a ",
+        "registros de ",
+        "historial de ",
+        "buscar ",
+        "cuanto pague a ",
+        "cuánto pagué a ",
+        "cuanto pago de ",
+        "cuánto pago de ",
+        "tengo de ",
+        "tengo a ",
+    ];
+    // Palabras de parada que NO son nombres de acreedores
+    let stopwords = [
+        "carrington", // esta SÍ es un nombre — solo es ejemplo, no filtrar
+    ];
+    let _ = stopwords; // no filtrar, solo referencia
+
+    let lower = consulta.to_lowercase();
+
+    // Buscar por triggers primero (más específicos)
+    for trigger in &triggers {
+        if let Some(pos) = lower.find(trigger) {
+            let after = &consulta[pos + trigger.len()..];
+            let nombre = after
+                .split([',', '.', '?', '!'].as_ref())
+                .next()
+                .unwrap_or(after)
+                .trim()
+                .to_string();
+            if !nombre.is_empty() && nombre.split_whitespace().count() <= 4 {
+                return Some(nombre);
+            }
+        }
+    }
+
+    // Fallback: buscar "de/a" + palabra capitalizada (nombre propio)
+    let words: Vec<&str> = consulta.split_whitespace().collect();
+    for (i, w) in words.iter().enumerate() {
+        if (w.to_lowercase() == "de" || w.to_lowercase() == "a") && i + 1 < words.len() {
+            let next = words[i + 1];
+            // Heurística: si empieza con mayúscula o tiene >4 chars, es nombre propio
+            let primera = next.chars().next().unwrap_or(' ');
+            if primera.is_uppercase() || next.len() > 4 {
+                // Tomar hasta 2 palabras siguientes como nombre
+                let nombre: String = words[i + 1..]
+                    .iter()
+                    .take(2)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                // Filtrar palabras genéricas que no son acreedores
+                let lower_nombre = nombre.to_lowercase();
+                let genericas = [
+                    "este",
+                    "este mes",
+                    "el mes",
+                    "la semana",
+                    "hoy",
+                    "ayer",
+                    "pago",
+                    "pagos",
+                ];
+                if !genericas.iter().any(|g| lower_nombre.starts_with(g)) {
+                    return Some(nombre);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn extraer_monto(s: &str) -> Option<f64> {
     let mut buf = String::new();
     let mut visto_punto = false;

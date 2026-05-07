@@ -122,6 +122,19 @@ impl AlmacenGastos {
             .collect()
     }
 
+    /// Busca transacciones cuya descripción contenga la palabra clave (case-insensitive).
+    /// Devuelve referencias ordenadas de más reciente a más antigua.
+    pub fn buscar_por_keyword(&self, keyword: &str) -> Vec<&GastoReal> {
+        let kw = keyword.to_lowercase();
+        let mut resultado: Vec<&GastoReal> = self
+            .transacciones
+            .iter()
+            .filter(|g| g.descripcion.to_lowercase().contains(&kw))
+            .collect();
+        resultado.sort_by_key(|g| std::cmp::Reverse(g.fecha));
+        resultado
+    }
+
     /// Resumen textual de un mes: total gasto, total ingreso, balance
     pub fn resumen_mes(&self, anio: i32, mes: u32) -> ResumenMes {
         let transacciones = self.del_mes(anio, mes);
