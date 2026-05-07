@@ -16467,6 +16467,7 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
 
 fn menu_asistente_financiero(state: &mut AppState) {
     use omniplanner::nlp::asistente;
+    use omniplanner::nlp::intent::{CategoriaIntencion, Intencion};
     limpiar();
     println!(
         "{}",
@@ -16514,13 +16515,49 @@ fn menu_asistente_financiero(state: &mut AppState) {
         // Clasificar intención usando el motor NLP
         let intencion = state.nlp.motor.intencion.clasificar(&input);
 
-        // Despachar al handler adecuado
+        // Intentar despachar
         let respuesta = asistente::responder(&input, &intencion, &state.asesor, &mut state.gastos);
+
+        // Si no se entendió, iniciar diálogo de clarificación
+        let respuesta = if matches!(
+            respuesta.intent,
+            CategoriaIntencion::Desconocido
+                | CategoriaIntencion::Consultar
+                | CategoriaIntencion::Listar
+                | CategoriaIntencion::Buscar
+                | CategoriaIntencion::Modificar
+                | CategoriaIntencion::Crear
+        ) && respuesta.confianza < 0.7
+        {
+            println!();
+            println!(
+                "  {} No entendí bien \"{}\".",
+                "🤔".yellow(),
+                input.dimmed()
+            );
+            match clarificar_intencion_financiera() {
+                Some(cat) => {
+                    let intencion_clara = Intencion {
+                        categoria: cat,
+                        confianza: 1.0,
+                        entidades: vec![],
+                        alternativas: vec![],
+                    };
+                    asistente::responder(&input, &intencion_clara, &state.asesor, &mut state.gastos)
+                }
+                None => {
+                    println!("  {} Cancelado.\n", "↩".dimmed());
+                    continue;
+                }
+            }
+        } else {
+            respuesta
+        };
 
         // Auditar acceso a datos financieros
         state.auditoria.registrar(
             TipoAuditoria::AccesoDatosFinancieros,
-            Some(&format!("asistente: {}", intencion.categoria.nombre())),
+            Some(&format!("asistente: {}", respuesta.intent.nombre())),
         );
 
         // Mostrar respuesta
@@ -16552,6 +16589,97 @@ fn menu_asistente_financiero(state: &mut AppState) {
                 eprintln!("  {} Error guardando: {}", "✗".red(), e);
             }
         }
+    }
+}
+
+/// Diálogo de clarificación paso a paso cuando el asistente no entendió.
+/// Hace preguntas encadenadas hasta determinar el intent correcto.
+fn clarificar_intencion_financiera() -> Option<omniplanner::nlp::intent::CategoriaIntencion> {
+    use omniplanner::nlp::intent::CategoriaIntencion;
+
+    // ── Pregunta 1: área temática ────────────────────────────────────
+    let areas = &[
+        "💸  Gastos y compras",
+        "💰  Ingresos y cobros",
+        "📉  Deudas y pagos pendientes",
+        "📊  Mi situación financiera general",
+        "📅  Agendar o recordar un pago",
+        "💡  Estrategia: qué pagar primero",
+    ];
+    let area = Select::new()
+        .with_prompt("     ¿Sobre qué área es tu consulta?")
+        .items(areas)
+        .default(0)
+        .interact_opt()
+        .unwrap_or(None)?;
+
+    match area {
+        // ── Gastos ───────────────────────────────────────────────────
+        0 => {
+            let acciones = &[
+                "📝  Registrar un gasto nuevo  (ej: pagué 50 en comida)",
+                "🔍  Ver o consultar mis gastos  (ej: cuánto gasté, historial)",
+            ];
+            let accion = Select::new()
+                .with_prompt("     ¿Qué quieres hacer con los gastos?")
+                .items(acciones)
+                .default(0)
+                .interact_opt()
+                .unwrap_or(None)?;
+            if accion == 0 {
+                Some(CategoriaIntencion::RegistrarGasto)
+            } else {
+                Some(CategoriaIntencion::ConsultarGastos)
+            }
+        }
+
+        // ── Ingresos ─────────────────────────────────────────────────
+        1 => {
+            let acciones = &[
+                "📝  Registrar un ingreso nuevo  (ej: recibí mi sueldo)",
+                "🔍  Ver mis ingresos registrados",
+            ];
+            let accion = Select::new()
+                .with_prompt("     ¿Qué quieres hacer?")
+                .items(acciones)
+                .default(0)
+                .interact_opt()
+                .unwrap_or(None)?;
+            if accion == 0 {
+                Some(CategoriaIntencion::RegistrarIngreso)
+            } else {
+                Some(CategoriaIntencion::ConsultarGastos)
+            }
+        }
+
+        // ── Deudas y pagos pendientes ─────────────────────────────────
+        2 => {
+            let acciones = &[
+                "📋  Ver resumen de deudas y pagos pendientes",
+                "🏆  Qué deuda conviene pagar primero (estrategia)",
+                "📅  Programar un pago futuro",
+            ];
+            let accion = Select::new()
+                .with_prompt("     ¿Qué necesitas?")
+                .items(acciones)
+                .default(0)
+                .interact_opt()
+                .unwrap_or(None)?;
+            match accion {
+                0 => Some(CategoriaIntencion::ResumenFinanciero),
+                1 => Some(CategoriaIntencion::PedirSugerenciaPago),
+                _ => Some(CategoriaIntencion::AgendarPago),
+            }
+        }
+
+        // ── Resumen general ───────────────────────────────────────────
+        3 => Some(CategoriaIntencion::ResumenFinanciero),
+
+        // ── Agendar pago ──────────────────────────────────────────────
+        4 => Some(CategoriaIntencion::AgendarPago),
+
+        // ── Estrategia ────────────────────────────────────────────────
+        _ => Some(CategoriaIntencion::PedirSugerenciaPago),
     }
 }
 
