@@ -486,7 +486,7 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
             || has_word("gastado")
             || has_word("gasto")
             || has_word("he"));
-    // "cuanto pago de X", "cuanto se paga por X", "cuanto pague de X"
+    // "cuanto pago de X", "cuanto se paga en X", "cuanto pague en X"
     let cuanto_pago_de = (has_word("cuanto") || has_word("cuantos") || has_word("cuantas"))
         && (has_word("pago")
             || has_word("paga")
@@ -502,6 +502,7 @@ fn intent_financiero(consulta: &str) -> Option<CategoriaIntencion> {
             || has_word("por")
             || has_word("el")
             || has_word("la")
+            || has_word("en")
             || has_word("a"));
     // "cuantas veces pague/pago a X"
     let cuantas_veces = (has_word("cuantas") || has_word("cuanto"))
@@ -807,6 +808,7 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         "se paga el ",
         "se paga la ",
         "se paga de ",
+        "se paga en ",
         "se gasta en ",
         "se gasta por ",
         "se cobra por ",
@@ -820,7 +822,9 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         "pago por ",
         "pago el ",
         "pago la ",
+        "pago en ",
         "pague por ",
+        "pague en ",
     ];
 
     // Buscar por triggers (más específicos)
@@ -860,7 +864,9 @@ fn extraer_nombre_acreedor(consulta: &str) -> Option<String> {
         "fecha",
     ];
     for (i, w) in words.iter().enumerate() {
-        if (*w == "de" || *w == "a" || *w == "al" || *w == "por") && i + 1 < words.len() {
+        if (*w == "de" || *w == "a" || *w == "al" || *w == "por" || *w == "en")
+            && i + 1 < words.len()
+        {
             // saltar artículo si el siguiente token es el/la/los/las
             let skip = matches!(words[i + 1], "el" | "la" | "los" | "las");
             let start = i + 1 + skip as usize;
