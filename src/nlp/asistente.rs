@@ -106,7 +106,9 @@ pub fn responder(
         CategoriaIntencion::RegistrarIngreso => {
             responder_registrar_gasto(consulta, conf, gastos, true)
         }
-        CategoriaIntencion::ConsultarGastos => responder_consultar_gastos(consulta, conf, gastos),
+        CategoriaIntencion::ConsultarGastos => {
+            responder_consultar_gastos(consulta, conf, gastos, &rastreador.rastreador)
+        }
         CategoriaIntencion::PedirSugerenciaPago => {
             responder_sugerencia_pago(conf, &rastreador.rastreador, gastos)
         }
@@ -210,10 +212,11 @@ fn responder_consultar_gastos(
     consulta: &str,
     conf: f64,
     gastos: &AlmacenGastos,
+    rastreador: &crate::ml::advisor::RastreadorDeudas,
 ) -> RespuestaAsistente {
     // Si la consulta menciona un acreedor específico, buscar por keyword
     if let Some(keyword) = extraer_nombre_acreedor(consulta) {
-        return responder_historial_acreedor(&keyword, conf, gastos);
+        return responder_historial_acreedor(&keyword, conf, gastos, rastreador);
     }
 
     let hoy = Local::now().date_naive();
@@ -595,10 +598,19 @@ fn responder_historial_acreedor(
     keyword: &str,
     conf: f64,
     gastos: &AlmacenGastos,
+    rastreador: &crate::ml::advisor::RastreadorDeudas,
 ) -> RespuestaAsistente {
     let encontrados = gastos.buscar_por_keyword(keyword);
 
-    if encontrados.is_empty() {
+    // Buscar también en las deudas registradas (pagos fijos/fijos)
+    let kw_norm = sin_tildes(&keyword.to_lowercase());
+    let deudas_match: Vec<&crate::ml::advisor::DeudaRastreada> = rastreador
+        .deudas
+        .iter()
+        .filter(|d| sin_tildes(&d.nombre.to_lowercase()).contains(&kw_norm))
+        .collect();
+
+    if encontrados.is_empty() && deudas_match.is_empty() {
         let hoy = Local::now().date_naive();
         let resumen = gastos.resumen_mes(hoy.year(), hoy.month());
         return RespuestaAsistente::solo_texto(
@@ -621,6 +633,49 @@ fn responder_historial_acreedor(
                 resumen.num_transacciones,
             ),
         );
+    }
+
+    // Si hay deudas/pagos fijos que coinciden, mostrar esa info
+    if !deudas_match.is_empty() {
+        let mut texto = format!("📌 \"{}\" en tus pagos registrados:\n\n", keyword);
+        for d in &deudas_match {
+            let estado = if d.activa {
+                "Activa ✅"
+            } else {
+                "Inactiva ⏸"
+            };
+            let tipo = if d.obligatoria {
+                "Pago fijo"
+            } else {
+                "Deuda/crédito"
+            };
+            texto.push_str(&format!(
+                "  📋 {}\n     Tipo:         {}\n     Pago mensual: ${:.2}\n     Estado:       {}\n",
+                d.nombre, tipo, d.pago_minimo, estado
+            ));
+            if !d.historial.is_empty() {
+                let veces = d.historial.iter().filter(|m| m.pago > 0.0).count();
+                let total: f64 = d.historial.iter().map(|m| m.pago).sum();
+                texto.push_str(&format!(
+                    "     Veces pagado: {}\n     Total pagado: ${:.2}\n",
+                    veces, total
+                ));
+                // Últimos 3 meses
+                let ultimos: Vec<_> = d.historial.iter().rev().take(3).collect();
+                if !ultimos.is_empty() {
+                    texto.push_str("     Últimos pagos:\n");
+                    for m in ultimos {
+                        texto.push_str(&format!("       • {} — ${:.2}\n", m.mes, m.pago));
+                    }
+                }
+            }
+        }
+        let mut r =
+            RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarGastos, conf, texto);
+        r.seguimientos
+            .push("Ver resumen financiero completo".to_string());
+        r.seguimientos.push("¿Qué deuda pagar primero?".to_string());
+        return r;
     }
 
     let total_gastos: f64 = encontrados
