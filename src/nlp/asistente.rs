@@ -249,6 +249,40 @@ fn responder_consultar_gastos(
         }
     }
 
+    // Siempre mostrar los pagos fijos/deudas del rastreador como referencia
+    let deudas_activas: Vec<_> = rastreador.deudas.iter().filter(|d| d.activa).collect();
+    if !deudas_activas.is_empty() {
+        let fijos: Vec<_> = deudas_activas.iter().filter(|d| d.obligatoria).collect();
+        let creditos: Vec<_> = deudas_activas.iter().filter(|d| !d.obligatoria).collect();
+
+        texto.push_str("\n\n  📋 Pagos registrados:");
+
+        if !fijos.is_empty() {
+            texto.push_str("\n  🏠 Pagos fijos:\n");
+            for d in &fijos {
+                texto.push_str(&format!(
+                    "    • {:<25} ${:.2}/mes\n",
+                    d.nombre, d.pago_minimo
+                ));
+            }
+        }
+        if !creditos.is_empty() {
+            texto.push_str("  💳 Créditos/deudas:\n");
+            for d in &creditos {
+                texto.push_str(&format!(
+                    "    • {:<25} ${:.2}/mes\n",
+                    d.nombre, d.pago_minimo
+                ));
+            }
+        }
+        let total_fijos: f64 = fijos.iter().map(|d| d.pago_minimo).sum();
+        let total_creditos: f64 = creditos.iter().map(|d| d.pago_minimo).sum();
+        texto.push_str(&format!(
+            "  ─────────────────────────────────\n  Total fijos: ${:.2}  |  Total créditos: ${:.2}",
+            total_fijos, total_creditos
+        ));
+    }
+
     let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarGastos, conf, texto);
     r.seguimientos
         .push("¿Qué deuda debo pagar primero?".to_string());
