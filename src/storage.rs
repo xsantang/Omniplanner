@@ -13,13 +13,21 @@ use std::path::PathBuf;
 
 use crate::agenda::Agenda;
 use crate::canvas::Canvas;
+use crate::casos::AlmacenCasos;
+use crate::cobranzas::AlmacenCobranzas;
 use crate::contrasenias::AlmacenContrasenias;
 use crate::diagrams::Diagrama;
 use crate::eventos::BusEventos;
 use crate::mapper::Mapper;
 use crate::memoria::Memoria;
-use crate::ml::{AlmacenAsesor, AlmacenGastos, AlmacenML, AlmacenPresupuesto};
+use crate::ml::{
+    AlmacenAsesor, AlmacenBalances, AlmacenConciliacion, AlmacenGastos, AlmacenML,
+    AlmacenPresupuesto, AlmacenResultados,
+};
 use crate::nlp::AlmacenNLP;
+use crate::obras::AlmacenObras;
+use crate::propuestas::AlmacenPropuestas;
+use crate::proveedores::AlmacenProveedores;
 use crate::seguridad::{ConfigSeguridad, RegistroAuditoria};
 use crate::sync::SyncConfig;
 use crate::tasks::TaskManager;
@@ -64,6 +72,30 @@ pub struct AppState {
     /// Gastos reales registrados (transacciones individuales).
     #[serde(default)]
     pub gastos: AlmacenGastos,
+    /// Conciliación bancaria: cuentas, tarjetas y préstamos.
+    #[serde(default)]
+    pub conciliacion: AlmacenConciliacion,
+    /// Balances generales históricos.
+    #[serde(default)]
+    pub balances: AlmacenBalances,
+    /// Estados de resultados históricos.
+    #[serde(default)]
+    pub resultados: AlmacenResultados,
+    /// Gestión de propuestas de planes de salud.
+    #[serde(default)]
+    pub propuestas: AlmacenPropuestas,
+    /// Intake de solicitudes de servicio (casos de coordinación de cuidado).
+    #[serde(default)]
+    pub casos: AlmacenCasos,
+    /// Directorio de proveedores y outreach.
+    #[serde(default)]
+    pub proveedores: AlmacenProveedores,
+    /// Obras y ciclo financiero (RFI → contrato → desembolsos → entrega).
+    #[serde(default)]
+    pub obras: AlmacenObras,
+    /// Cobranzas, alertas de cobro y gestión de cuentas por cobrar.
+    #[serde(default)]
+    pub cobranzas: AlmacenCobranzas,
     /// Timestamp de última modificación (epoch secs)
     #[serde(default)]
     pub ultima_modificacion: i64,
@@ -89,6 +121,14 @@ impl AppState {
             seguridad: ConfigSeguridad::default(),
             auditoria: RegistroAuditoria::default(),
             gastos: AlmacenGastos::default(),
+            conciliacion: AlmacenConciliacion::default(),
+            balances: AlmacenBalances::default(),
+            resultados: AlmacenResultados::default(),
+            propuestas: AlmacenPropuestas::default(),
+            casos: AlmacenCasos::default(),
+            proveedores: AlmacenProveedores::default(),
+            obras: AlmacenObras::default(),
+            cobranzas: AlmacenCobranzas::default(),
             ultima_modificacion: 0,
         }
     }
@@ -247,6 +287,12 @@ impl AppState {
                     }
                 }
             }
+        }
+
+        // Si los modelos NLP no están entrenados (estado guardado antes de entrenar),
+        // los entrenamos automáticamente con los datos predefinidos.
+        if !state.nlp.motor.sentimiento.entrenado_ml || !state.nlp.motor.intencion.entrenado_ml {
+            state.nlp.motor.entrenar_silencioso();
         }
 
         Ok(state)

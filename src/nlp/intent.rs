@@ -44,6 +44,14 @@ pub enum CategoriaIntencion {
     EvaluarPassword,
     BuscarPassword,
     ConsultarDeudas,
+    ConsultarFeriados,
+    // Empresa / Obras / Cobranzas (Fase 7)
+    ConsultarObras,
+    SaldoObra,
+    AlertasObras,
+    ConsultarCobranzas,
+    ResumenEmpresa,
+    GuiaSiguientePaso,
     Desconocido,
 }
 
@@ -83,6 +91,13 @@ impl CategoriaIntencion {
             Self::EvaluarPassword => "EvaluarPassword",
             Self::BuscarPassword => "BuscarPassword",
             Self::ConsultarDeudas => "ConsultarDeudas",
+            Self::ConsultarFeriados => "ConsultarFeriados",
+            Self::ConsultarObras => "ConsultarObras",
+            Self::SaldoObra => "SaldoObra",
+            Self::AlertasObras => "AlertasObras",
+            Self::ConsultarCobranzas => "ConsultarCobranzas",
+            Self::ResumenEmpresa => "ResumenEmpresa",
+            Self::GuiaSiguientePaso => "GuiaSiguientePaso",
             Self::Desconocido => "Desconocido",
         }
     }
@@ -122,6 +137,13 @@ impl CategoriaIntencion {
             Self::EvaluarPassword,
             Self::BuscarPassword,
             Self::ConsultarDeudas,
+            Self::ConsultarFeriados,
+            Self::ConsultarObras,
+            Self::SaldoObra,
+            Self::AlertasObras,
+            Self::ConsultarCobranzas,
+            Self::ResumenEmpresa,
+            Self::GuiaSiguientePaso,
             Self::Desconocido,
         ]
     }
@@ -455,6 +477,81 @@ impl ClasificadorIntencion {
                     &["dashboard", "finanzas"],
                 ],
             ),
+            // ─── Empresa / Obras / Cobranzas (Fase 7) ───
+            (
+                "ConsultarObras",
+                &[
+                    &["mis", "obras"],
+                    &["obras", "activas"],
+                    &["como", "van", "las", "obras"],
+                    &["estado", "obras"],
+                    &["proyectos", "activos"],
+                    &["cuantas", "obras"],
+                    &["ver", "obras"],
+                    &["listar", "obras"],
+                    &["obras", "en", "curso"],
+                    &["avance", "obra"],
+                ],
+            ),
+            (
+                "SaldoObra",
+                &[
+                    &["saldo", "obra"],
+                    &["desembolso", "obra"],
+                    &["cuanto", "queda", "obra"],
+                    &["presupuesto", "obra"],
+                    &["dinero", "obra"],
+                    &["gastos", "obra"],
+                    &["cuanto", "llevamos", "gastado"],
+                ],
+            ),
+            (
+                "AlertasObras",
+                &[
+                    &["alertas", "obras"],
+                    &["problemas", "obras"],
+                    &["obras", "retrasadas"],
+                    &["obra", "vencida"],
+                    &["alerta", "proyecto"],
+                    &["paso", "vencido"],
+                ],
+            ),
+            (
+                "ConsultarCobranzas",
+                &[
+                    &["que", "me", "deben"],
+                    &["cuanto", "me", "deben"],
+                    &["cuentas", "por", "cobrar"],
+                    &["cobrar", "pendiente"],
+                    &["cartera", "cobrar"],
+                    &["facturas", "pendientes"],
+                    &["clientes", "deben"],
+                ],
+            ),
+            (
+                "ResumenEmpresa",
+                &[
+                    &["resumen", "empresa"],
+                    &["estado", "negocio"],
+                    &["como", "va", "empresa"],
+                    &["dashboard", "empresa"],
+                    &["panorama", "empresarial"],
+                    &["mis", "propuestas"],
+                    &["propuestas", "activas"],
+                ],
+            ),
+            (
+                "GuiaSiguientePaso",
+                &[
+                    &["siguiente", "paso"],
+                    &["que", "sigue"],
+                    &["que", "debo", "hacer"],
+                    &["que", "falta"],
+                    &["proxima", "actividad"],
+                    &["guia", "obra"],
+                    &["que", "hacer", "obra"],
+                ],
+            ),
         ];
 
         for &(cat, patrones) in reglas_def {
@@ -644,6 +741,98 @@ impl ClasificadorIntencion {
         }
 
         entidades
+    }
+
+    /// Versión silenciosa de entrenar (sin println) — usada en auto-entrenamiento
+    pub fn entrenar_silencioso(
+        &mut self,
+        datos: &[(&str, CategoriaIntencion)],
+        epocas: usize,
+        lr: f64,
+    ) {
+        let mut vocabulario: Vec<String> = Vec::new();
+        for (texto, _) in datos {
+            let tokens = Tokenizer::tokenizar_limpio(texto);
+            for t in tokens {
+                if !vocabulario.contains(&t) {
+                    vocabulario.push(t);
+                }
+            }
+        }
+        for cat in CategoriaIntencion::todas() {
+            let nombre = cat.nombre().to_string();
+            let pesos: HashMap<String, f64> =
+                vocabulario.iter().map(|v| (v.clone(), 0.0)).collect();
+            self.pesos_ml.entry(nombre.clone()).or_insert(pesos);
+            self.sesgos_ml.entry(nombre).or_insert(0.0);
+        }
+        for _ in 0..epocas {
+            for &(texto, ref target) in datos {
+                let tokens = Tokenizer::tokenizar_limpio(texto);
+                for cat in CategoriaIntencion::todas() {
+                    let nombre = cat.nombre().to_string();
+                    let label = if cat == *target { 1.0 } else { 0.0 };
+                    let mut z = self.sesgos_ml.get(&nombre).copied().unwrap_or(0.0);
+                    if let Some(pesos) = self.pesos_ml.get(&nombre) {
+                        for t in &tokens {
+                            z += pesos.get(t.as_str()).copied().unwrap_or(0.0);
+                        }
+                    }
+                    let pred = sigmoid(z);
+                    let grad = (pred - label) * pred * (1.0 - pred);
+                    if let Some(pesos) = self.pesos_ml.get_mut(&nombre) {
+                        for t in &tokens {
+                            if let Some(peso) = pesos.get_mut(t.as_str()) {
+                                *peso -= lr * grad;
+                            } else {
+                                pesos.insert(t.clone(), -lr * grad);
+                            }
+                        }
+                    }
+                    if let Some(sesgo) = self.sesgos_ml.get_mut(&nombre) {
+                        *sesgo -= lr * grad;
+                    }
+                }
+            }
+        }
+        self.entrenado_ml = true;
+    }
+
+    /// Reentrenamiento incremental con los ejemplos del historial
+    pub fn reentrenar_incremental(&mut self, epocas: usize, lr: f64) {
+        if self.historial.is_empty() || !self.entrenado_ml {
+            return;
+        }
+        let datos: Vec<(String, CategoriaIntencion)> = self.historial.clone();
+        for _ in 0..epocas {
+            for (texto, target) in &datos {
+                let tokens = Tokenizer::tokenizar_limpio(texto);
+                for cat in CategoriaIntencion::todas() {
+                    let nombre = cat.nombre().to_string();
+                    let label = if cat == *target { 1.0 } else { 0.0 };
+                    let mut z = self.sesgos_ml.get(&nombre).copied().unwrap_or(0.0);
+                    if let Some(pesos) = self.pesos_ml.get(&nombre) {
+                        for t in &tokens {
+                            z += pesos.get(t.as_str()).copied().unwrap_or(0.0);
+                        }
+                    }
+                    let pred = sigmoid(z);
+                    let grad = (pred - label) * pred * (1.0 - pred);
+                    if let Some(pesos) = self.pesos_ml.get_mut(&nombre) {
+                        for t in &tokens {
+                            if let Some(peso) = pesos.get_mut(t.as_str()) {
+                                *peso -= lr * grad;
+                            } else {
+                                pesos.insert(t.clone(), -lr * grad);
+                            }
+                        }
+                    }
+                    if let Some(sesgo) = self.sesgos_ml.get_mut(&nombre) {
+                        *sesgo -= lr * grad;
+                    }
+                }
+            }
+        }
     }
 
     /// Entrenar con datos etiquetados: (texto, categoría)

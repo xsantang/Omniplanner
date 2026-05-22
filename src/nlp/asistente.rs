@@ -93,15 +93,27 @@ pub fn responder(
 
     // 1) Si el clasificador genérico ganó, intentar rescatar intent de
     //    dominio: primero multi-módulo (router), luego financiero (legacy).
+    //    También se re-chequean CrearEvento y CrearTarea porque frases como
+    //    "cuánto falta para el cumpleaños de X" se malclasifican con alta
+    //    confianza como CrearEvento cuando en realidad son ConsultarAgenda.
+    //    Además, intents sociales (Saludo, Sentimiento…) con baja confianza
+    //    también pasan por el router, porque la consulta puede ser una pregunta
+    //    real mal clasificada (ej: "cuantos dias faltan para navidad" → Saludo).
     let intent_efectivo = match &intencion.categoria {
         CategoriaIntencion::Consultar
         | CategoriaIntencion::Listar
         | CategoriaIntencion::Buscar
         | CategoriaIntencion::Modificar
         | CategoriaIntencion::Crear
+        | CategoriaIntencion::CrearEvento
         | CategoriaIntencion::Desconocido => router::detectar_intent_modulo(consulta)
             .or_else(|| intent_financiero(consulta))
             .unwrap_or(intencion.categoria.clone()),
+        // Con confianza baja (<0.5), cualquier intent social/genérico también
+        // intenta el router — así no se pierden preguntas reales.
+        otro if conf < 0.5 => router::detectar_intent_modulo(consulta)
+            .or_else(|| intent_financiero(consulta))
+            .unwrap_or(otro.clone()),
         otro => otro.clone(),
     };
 
@@ -113,21 +125,16 @@ pub fn responder(
         CategoriaIntencion::RegistrarIngreso => {
             responder_registrar_gasto(consulta, conf, &mut state.gastos, true)
         }
-        CategoriaIntencion::ConsultarGastos => responder_consultar_gastos(
-            consulta,
-            conf,
-            &state.gastos,
-            &state.asesor.rastreador,
-        ),
+        CategoriaIntencion::ConsultarGastos => {
+            responder_consultar_gastos(consulta, conf, &state.gastos, &state.asesor.rastreador)
+        }
         CategoriaIntencion::PedirSugerenciaPago => {
             responder_sugerencia_pago(conf, &state.asesor.rastreador, &state.gastos)
         }
         CategoriaIntencion::ResumenFinanciero => {
             responder_resumen_financiero(conf, &state.asesor.rastreador, &state.gastos)
         }
-        CategoriaIntencion::AgendarPago => {
-            responder_agendar_pago(consulta, conf, &state.agenda)
-        }
+        CategoriaIntencion::AgendarPago => responder_agendar_pago(consulta, conf, &state.agenda),
         CategoriaIntencion::ConsultarAgenda => {
             responder_consultar_agenda(consulta, conf, &state.agenda)
         }
@@ -160,28 +167,57 @@ pub fn responder(
         CategoriaIntencion::ConsultarDeudas => {
             router::responder_consultar_deudas(conf, &state.asesor.rastreador)
         }
+        CategoriaIntencion::ConsultarFeriados => {
+            router::responder_consultar_feriados(consulta, conf)
+        }
+
+        // ── Empresa / Obras / Cobranzas (Fase 7) ──
+        CategoriaIntencion::ConsultarObras => router::responder_consultar_obras(conf, &state.obras),
+        CategoriaIntencion::SaldoObra => router::responder_saldo_obra(conf, &state.obras),
+        CategoriaIntencion::AlertasObras => router::responder_alertas_obras(conf, &state.obras),
+        CategoriaIntencion::ConsultarCobranzas => {
+            router::responder_consultar_cobranzas(conf, &state.cobranzas)
+        }
+        CategoriaIntencion::ResumenEmpresa => router::responder_resumen_empresa(
+            conf,
+            &state.obras,
+            &state.cobranzas,
+            &state.propuestas,
+            &state.casos,
+        ),
+        CategoriaIntencion::GuiaSiguientePaso => {
+            router::responder_guia_siguiente_paso(conf, &state.obras)
+        }
 
         CategoriaIntencion::Saludo => RespuestaAsistente::solo_texto(
             CategoriaIntencion::Saludo,
             conf,
-            "¡Hola! Soy tu asistente. Puedes pedirme:\n\
-             • Finanzas: \"cuánto llevo gastado este mes\"\n\
-             • Tareas:   \"agregar tarea estudiar mañana\"\n\
-             • Agenda:   \"el cumple de Lucho es el 12 de julio\"\n\
-             • Memoria:  \"recuerda que la wifi es CafeNet123\"\n\
-             • Claves:   \"genera una contraseña segura\"\n\
-             • Fechas:   \"cuántos días entre hoy y el 30 de junio\"",
+            "¡Hola! Soy tu asistente IA. Puedes pedirme en lenguaje natural:\n\
+             💰 Finanzas:  \"cuánto llevo gastado este mes\" / \"resumen financiero\"\n\
+             📋 Tareas:    \"agregar tarea X\" / \"mis pendientes de hoy\"\n\
+             📅 Agenda:    \"el cumple de Lucho es el 12 de julio\"\n\
+             🏗️  Obras:     \"cómo van mis obras\" / \"alertas en proyectos\"\n\
+             💵 Cobranzas: \"qué me deben\" / \"total por cobrar\"\n\
+             🏢 Empresa:   \"cómo va el negocio\" / \"propuestas activas\"\n\
+             🧠 Memoria:   \"recuerda que la wifi es CafeNet123\"\n\
+             🔐 Claves:    \"genera una contraseña segura\"\n\
+             📆 Fechas:    \"cuántos días faltan para Navidad\"",
         ),
         CategoriaIntencion::Ayuda => RespuestaAsistente::solo_texto(
             CategoriaIntencion::Ayuda,
             conf,
-            "Comandos del asistente:\n\
-             💰 Finanzas: \"gasté 25 en gasolina\", \"resumen financiero\", \"qué pago primero\"\n\
-             📋 Tareas:   \"agregar tarea X\", \"mis pendientes\", \"marcar X como hecha\"\n\
-             📅 Agenda:   \"agendar cita con dentista el 15\", \"en cuántos días es el cumple de X\"\n\
-             📆 Calendar: \"cuántos días entre A y B\", \"qué fecha será 30 días después\"\n\
-             🧠 Memoria:  \"recuerda que...\", \"qué sabes de X\"\n\
-             🔐 Claves:   \"genera contraseña\", \"qué tan segura es '...'\"",
+            "Comandos del Asistente IA — escribe en lenguaje natural:\n\
+             💰 \"gasté 25 en gasolina\" / \"resumen financiero\" / \"qué pago primero\"\n\
+             📋 \"agregar tarea X\" / \"mis pendientes\" / \"marcar X como hecha\"\n\
+             📅 \"agendar cita con dentista el 15\" / \"el cumple de X es el 20 de mayo\"\n\
+             🏗️  \"cómo van mis obras\" / \"saldo de la obra\" / \"hay alertas\"\n\
+             💵 \"qué me deben\" / \"cuentas por cobrar\"\n\
+             🏢 \"cómo va la empresa\" / \"propuestas activas\"\n\
+             🗺️  \"cuál es el siguiente paso en la obra\"\n\
+             📆 \"cuántos días entre A y B\" / \"cuánto falta para Navidad\"\n\
+             🎌 \"próximos feriados de Ecuador / USA\"\n\
+             🧠 \"recuerda que...\" / \"qué sabes de X\"\n\
+             🔐 \"genera contraseña\" / \"qué tan segura es '...'\"",
         ),
         _ => {
             // Fallback: detectar agenda por keywords sueltas
@@ -190,7 +226,12 @@ pub fn responder(
                 || norm_q.contains("cita")
                 || norm_q.contains("evento")
                 || norm_q.contains("reunion")
-                || norm_q.contains("recordatorio");
+                || norm_q.contains("recordatorio")
+                || norm_q.contains("cuantos anos tiene")
+                || norm_q.contains("cuantos anios tiene")
+                || norm_q.contains("que edad tiene")
+                || norm_q.contains("cuanta edad tiene")
+                || norm_q.contains("cual es la edad de");
             if es_agenda {
                 return responder_consultar_agenda(consulta, conf, &state.agenda);
             }
@@ -564,31 +605,348 @@ fn responder_consultar_agenda(consulta: &str, conf: f64, agenda: &Agenda) -> Res
     let hoy = Local::now().date_naive();
     let norm = sin_tildes(&consulta.to_lowercase());
 
+    // ── Consulta de edad de una persona ──────────────────────────────────
+    // Detecta: "cuántos años tiene X", "qué edad tiene X", "cual es la edad de X", etc.
+    // Nota: "años" → "anos" (ñ→n), pero muchos escriben "anios" sin ñ
+    {
+        let es_consulta_edad = norm.contains("cuantos anos tiene")
+            || norm.contains("cuantos anios tiene")
+            || norm.contains("cuantos anos cumple")
+            || norm.contains("cuantos anios cumple")
+            || norm.contains("que edad tiene")
+            || norm.contains("cuanta edad tiene")
+            || norm.contains("cual es la edad de")
+            || norm.contains("cual es su edad")
+            || norm.contains("cuantos anos va a cumplir")
+            || norm.contains("cuantos anios va a cumplir")
+            || norm.contains("cuantos anos cumplio")
+            || norm.contains("cuantos anios cumplio")
+            || norm.contains("cuantos anos lleva")
+            || norm.contains("cuantos anios lleva");
+
+        if es_consulta_edad {
+            // Extraer el nombre buscado después del trigger de edad
+            let nombre_raw: Option<String> = {
+                let triggers = [
+                    "cuantos anos tiene ",
+                    "cuantos anios tiene ",
+                    "cuantos anos cumple ",
+                    "cuantos anios cumple ",
+                    "que edad tiene ",
+                    "cuanta edad tiene ",
+                    "cual es la edad de ",
+                    "cual es su edad de ",
+                    "cuantos anos va a cumplir ",
+                    "cuantos anios va a cumplir ",
+                    "cuantos anos cumplio ",
+                    "cuantos anios cumplio ",
+                    "cuantos anos lleva ",
+                    "cuantos anios lleva ",
+                ];
+                let stop_words: &[&str] = &[
+                    "hoy", "manana", "ayer", "el", "la", "los", "las", "un", "una", "que", "es",
+                ];
+                let mut name: Option<String> = None;
+                'edad_outer: for t in &triggers {
+                    if let Some(pos) = norm.find(t) {
+                        let resto = &norm[pos + t.len()..];
+                        let palabras: Vec<&str> = resto
+                            .split_whitespace()
+                            .take(5)
+                            .take_while(|w| !stop_words.contains(w))
+                            .filter(|w| w.len() > 1)
+                            .collect();
+                        if !palabras.is_empty() {
+                            name = Some(palabras.join(" "));
+                            break 'edad_outer;
+                        }
+                    }
+                }
+                name
+            };
+
+            if let Some(nombre) = nombre_raw {
+                // Buscar cumpleaños que coincidan con el nombre
+                let candidatos: Vec<_> = agenda
+                    .eventos
+                    .iter()
+                    .filter(|e| {
+                        if !matches!(e.tipo, crate::agenda::TipoEvento::Cumpleanos) {
+                            return false;
+                        }
+                        let t = sin_tildes(&e.titulo.to_lowercase());
+                        let d = sin_tildes(&e.descripcion.to_lowercase());
+                        let palabras: Vec<&str> =
+                            nombre.split_whitespace().filter(|w| w.len() > 2).collect();
+                        t.contains(nombre.as_str())
+                            || d.contains(nombre.as_str())
+                            || palabras.iter().any(|p| t.contains(p) || d.contains(p))
+                    })
+                    .collect();
+
+                if candidatos.is_empty() {
+                    let mut r = RespuestaAsistente::solo_texto(
+                        CategoriaIntencion::ConsultarAgenda,
+                        conf,
+                        format!(
+                            "🎂 No encontré el cumpleaños de \"{}\" en tu agenda.\n\
+                             Agrégalo en 📅 Agenda → Nuevo evento → tipo \"Cumpleaños\".",
+                            nombre
+                        ),
+                    );
+                    r.seguimientos
+                        .push("Ver todos mis eventos próximos".to_string());
+                    return r;
+                }
+
+                let mut texto = String::new();
+                for e in &candidatos {
+                    let anio_nac = e.fecha.year();
+                    // Si el cumpleaños ya ocurrió este año → edad = año_actual - año_nac
+                    // Si aún no ha ocurrido este año → edad = año_actual - año_nac - 1
+                    let cumple_este_anio =
+                        NaiveDate::from_ymd_opt(hoy.year(), e.fecha.month(), e.fecha.day())
+                            .unwrap_or_else(|| {
+                                // Fallback para 29-feb en año no bisiesto
+                                NaiveDate::from_ymd_opt(hoy.year(), e.fecha.month(), 28).unwrap()
+                            });
+                    let edad_actual = if hoy >= cumple_este_anio {
+                        hoy.year() - anio_nac
+                    } else {
+                        hoy.year() - anio_nac - 1
+                    };
+                    let prox = proxima_ocurrencia_anual(e.fecha, hoy);
+                    let edad_proxima = prox.year() - anio_nac;
+                    let dias = (prox - hoy).num_days();
+                    let frase_proximo = match dias {
+                        0 => format!("¡HOY cumple {} años! 🎉", edad_proxima),
+                        1 => format!("mañana cumple {} años", edad_proxima),
+                        n if n > 0 => format!(
+                            "el {} cumplirá {} años (en {} días)",
+                            prox.format("%d/%m/%Y"),
+                            edad_proxima,
+                            n
+                        ),
+                        _ => String::new(),
+                    };
+                    texto.push_str(&format!(
+                        "🎂 {} tiene {} años\n     Nacido/a el {}{}.\n",
+                        e.titulo,
+                        edad_actual,
+                        e.fecha.format("%d/%m/%Y"),
+                        if frase_proximo.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" — {}", frase_proximo)
+                        },
+                    ));
+                }
+                let mut r = RespuestaAsistente::solo_texto(
+                    CategoriaIntencion::ConsultarAgenda,
+                    conf,
+                    texto,
+                );
+                r.seguimientos.push("Ver todos mis cumpleaños".to_string());
+                return r;
+            }
+        }
+    }
+
+    // ── Consulta de cumpleaños por mes ───────────────────────────────────
+    // Detecta: "quien cumple en julio", "quien cumple el próximo mes",
+    //          "quien cumple este mes", "cumpleaños en agosto", etc.
+    {
+        let nombres_mes = [
+            "enero",
+            "febrero",
+            "marzo",
+            "abril",
+            "mayo",
+            "junio",
+            "julio",
+            "agosto",
+            "septiembre",
+            "octubre",
+            "noviembre",
+            "diciembre",
+        ];
+        let mes_objetivo: Option<u32> = if norm.contains("este mes") {
+            Some(hoy.month())
+        } else if norm.contains("proximo mes") || norm.contains("siguiente mes") {
+            Some(if hoy.month() == 12 {
+                1
+            } else {
+                hoy.month() + 1
+            })
+        } else {
+            nombres_mes
+                .iter()
+                .enumerate()
+                .find(|(_, m)| norm.contains(*m))
+                .map(|(i, _)| i as u32 + 1)
+        };
+
+        let es_consulta_mes = mes_objetivo.is_some()
+            && (norm.contains("quien cumple")
+                || norm.contains("quienes cumplen")
+                || norm.contains("quienes cumplean")
+                || norm.contains("cumplean")
+                || norm.contains("cumple")
+                || norm.contains("cumplen"));
+
+        if es_consulta_mes {
+            let mes = mes_objetivo.unwrap();
+            let nombre_mes_str = nombres_mes[(mes - 1) as usize];
+            let nombre_mes_actual = nombres_mes[(hoy.month() - 1) as usize];
+
+            // Encabezado con la fecha actual para que el usuario sepa dónde estamos
+            let mut texto = format!(
+                "📅 Hoy es {}, {} de {} de {}\n\n",
+                nombre_dia_semana(hoy.weekday()),
+                hoy.day(),
+                nombre_mes_actual,
+                hoy.year(),
+            );
+
+            let cumples: Vec<_> = agenda
+                .eventos
+                .iter()
+                .filter(|e| {
+                    matches!(e.tipo, crate::agenda::TipoEvento::Cumpleanos)
+                        && e.fecha.month() == mes
+                })
+                .collect();
+
+            if cumples.is_empty() {
+                texto.push_str(&format!(
+                    "🎂 No hay cumpleaños registrados en {}.",
+                    nombre_mes_str
+                ));
+            } else {
+                texto.push_str(&format!(
+                    "🎂 Cumpleaños en {} ({}):\n",
+                    nombre_mes_str,
+                    cumples.len()
+                ));
+                let mut lista: Vec<_> = cumples
+                    .iter()
+                    .map(|e| {
+                        let prox = proxima_ocurrencia_anual(e.fecha, hoy);
+                        (e, prox)
+                    })
+                    .collect();
+                lista.sort_by_key(|(_, prox)| *prox);
+                for (e, prox) in &lista {
+                    let dias = (*prox - hoy).num_days();
+                    let frase_dias = match dias {
+                        0 => "¡HOY! 🎉".to_string(),
+                        1 => "(mañana)".to_string(),
+                        n if n > 0 => format!("(en {} días)", n),
+                        n => format!("(hace {} días)", -n),
+                    };
+                    let edad = prox.year() - e.fecha.year();
+                    let etiqueta_edad = if edad > 0 {
+                        format!(" — cumple {} años", edad)
+                    } else {
+                        String::new()
+                    };
+                    texto.push_str(&format!(
+                        "  🎂 {:5} — {}{} {}\n",
+                        e.fecha.format("%d/%m"),
+                        e.titulo,
+                        etiqueta_edad,
+                        frase_dias,
+                    ));
+                }
+            }
+
+            let mut r =
+                RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarAgenda, conf, texto);
+            r.seguimientos
+                .push("Ver todos mis eventos próximos".to_string());
+            return r;
+        }
+    }
+
     // ¿Busca un cumpleaños de alguien?
     let busca_cumple = norm.contains("cumplean");
-    // ¿Busca por nombre?
-    let keyword = {
+
+    // Extrae la frase de búsqueda después del primer trigger, tomando hasta 4
+    // palabras (cubre nombres compuestos como "Reina Amada Garcia").
+    let keyword: Option<String> = {
         let triggers = [
-            "de ",
+            "cumpleanios de ",
+            "cumpleanios del ",
             "cumple de ",
+            "cumple del ",
             "cita con ",
+            "reunion con ",
+            "reunion de ",
             "evento de ",
             "recordatorio de ",
+            "aniversario de ",
+            "para el cumpleanios de ",
+            "para el cumple de ",
+            "para el evento de ",
+            "de ",
         ];
-        let mut kw = None;
-        for t in &triggers {
+        let stop_words: &[&str] = &[
+            "hoy", "manana", "ayer", "el", "la", "los", "las", "un", "una", "que", "es", "para",
+            "en", "con", "del",
+        ];
+        let mut kw: Option<String> = None;
+        'outer: for t in &triggers {
             if let Some(pos) = norm.find(t) {
-                let w = norm[pos + t.len()..]
+                let resto = &norm[pos + t.len()..];
+                // Tomar hasta 4 palabras no-stopword consecutivas
+                let palabras: Vec<&str> = resto
                     .split_whitespace()
-                    .next()
-                    .unwrap_or("");
-                if w.len() > 2 {
-                    kw = Some(w.to_string());
-                    break;
+                    .take(4)
+                    .take_while(|w| !stop_words.contains(w) || w.len() > 4)
+                    .filter(|w| w.len() > 1)
+                    .collect();
+                if !palabras.is_empty() {
+                    kw = Some(palabras.join(" "));
+                    break 'outer;
                 }
             }
         }
         kw
+    };
+
+    // Búsqueda con coincidencia multi-nivel:
+    // Nivel 1 — frase completa (exact substring)
+    // Nivel 2 — cada palabra de la frase (any word match)
+    // Nivel 3 — primera palabra de la frase (broad)
+    let buscar_en_agenda = |kw: &str| -> Vec<&crate::agenda::Evento> {
+        let palabras: Vec<&str> = kw.split_whitespace().filter(|w| w.len() > 2).collect();
+        // Nivel 1
+        let nivel1: Vec<_> = agenda
+            .eventos
+            .iter()
+            .filter(|e| {
+                let t = sin_tildes(&e.titulo.to_lowercase());
+                let d = sin_tildes(&e.descripcion.to_lowercase());
+                t.contains(kw) || d.contains(kw)
+            })
+            .collect();
+        if !nivel1.is_empty() {
+            return nivel1;
+        }
+        if palabras.is_empty() {
+            return vec![];
+        }
+        // Nivel 2 — cualquier palabra
+        let nivel2: Vec<_> = agenda
+            .eventos
+            .iter()
+            .filter(|e| {
+                let t = sin_tildes(&e.titulo.to_lowercase());
+                let d = sin_tildes(&e.descripcion.to_lowercase());
+                palabras.iter().any(|p| t.contains(p) || d.contains(p))
+            })
+            .collect();
+        nivel2
     };
 
     // Filtrar eventos relevantes
@@ -600,18 +958,25 @@ fn responder_consultar_agenda(consulta: &str, conf: f64, agenda: &Agenda) -> Res
         .collect();
     eventos.sort_by_key(|e| e.fecha);
 
-    // Si busca por nombre, filtrar por keyword
+    // Si busca por nombre, filtrar con matching multi-nivel
     if let Some(ref kw) = keyword {
-        let filtrados: Vec<_> = agenda
-            .eventos
-            .iter()
-            .filter(|e| {
-                sin_tildes(&e.titulo.to_lowercase()).contains(kw.as_str())
-                    || sin_tildes(&e.descripcion.to_lowercase()).contains(kw.as_str())
+        let filtrados = buscar_en_agenda(kw.as_str());
+        // Etiqueta de cuántas palabras coincidieron para mostrar al usuario
+        let coincide_exacto = {
+            let kw_s = kw.as_str();
+            agenda.eventos.iter().any(|e| {
+                sin_tildes(&e.titulo.to_lowercase()).contains(kw_s)
+                    || sin_tildes(&e.descripcion.to_lowercase()).contains(kw_s)
             })
-            .collect();
+        };
         if !filtrados.is_empty() {
-            let mut texto = format!("🔍 Eventos relacionados con \"{}\":\n", kw);
+            // Indicar si es coincidencia exacta o parcial
+            let tipo_match = if coincide_exacto {
+                format!("\"{}\":", kw)
+            } else {
+                format!("{} (coincidencia parcial):", kw)
+            };
+            let mut texto = format!("🔍 Eventos relacionados con {}\n", tipo_match);
             for e in &filtrados {
                 let emoji = match &e.tipo {
                     crate::agenda::TipoEvento::Cumpleanos => "🎂",
@@ -671,9 +1036,26 @@ fn responder_consultar_agenda(consulta: &str, conf: f64, agenda: &Agenda) -> Res
             let mut r = RespuestaAsistente::solo_texto(
                 CategoriaIntencion::ConsultarAgenda,
                 conf,
-                format!("🎂 No encontré el cumpleaños de \"{}\" en tu agenda.\nPuedes agregarlo en 📅 Agenda → Nuevo evento → tipo \"Cumpleaños\".", kw),
+                format!(
+                    "🎂 No encontré ningún evento con \"{}\" en tu agenda.\n\
+                     Prueba con otro nombre o agrégalo en 📅 Agenda → Nuevo evento → tipo \"Cumpleaños\".",
+                    kw
+                ),
             );
             r.seguimientos.push("Ver próximos eventos".to_string());
+            return r;
+        } else {
+            let mut r = RespuestaAsistente::solo_texto(
+                CategoriaIntencion::ConsultarAgenda,
+                conf,
+                format!(
+                    "🔍 No encontré eventos con \"{}\" en tu agenda.\n\
+                     Verifica el nombre o intenta \"ver todos mis eventos próximos\".",
+                    kw
+                ),
+            );
+            r.seguimientos
+                .push("Ver todos mis eventos próximos".to_string());
             return r;
         }
     }
@@ -781,6 +1163,19 @@ fn proxima_ocurrencia_anual(fecha_original: NaiveDate, hoy: NaiveDate) -> NaiveD
         NaiveDate::from_ymd_opt(hoy.year() + 1, mes, dia)
             .or_else(|| NaiveDate::from_ymd_opt(hoy.year() + 1, mes, 28))
             .unwrap_or(candidato_actual)
+    }
+}
+
+/// Nombre del día de la semana en español.
+fn nombre_dia_semana(wd: chrono::Weekday) -> &'static str {
+    match wd {
+        chrono::Weekday::Mon => "lunes",
+        chrono::Weekday::Tue => "martes",
+        chrono::Weekday::Wed => "miércoles",
+        chrono::Weekday::Thu => "jueves",
+        chrono::Weekday::Fri => "viernes",
+        chrono::Weekday::Sat => "sábado",
+        chrono::Weekday::Sun => "domingo",
     }
 }
 
@@ -1029,6 +1424,29 @@ fn responder_historial_acreedor(
                         texto.push_str(&format!("       • {} — ${:.2}\n", m.mes, m.pago));
                     }
                 }
+            }
+        }
+        // Cuando hay más de una deuda que coincide (ej. "Renta Amada" + "Celular Amada"),
+        // mostrar el total combinado para que el usuario vea el monto global.
+        if deudas_match.len() > 1 {
+            let total_mensual: f64 = deudas_match.iter().map(|d| d.pago_minimo).sum();
+            let total_historial: f64 = deudas_match
+                .iter()
+                .flat_map(|d| d.historial.iter())
+                .map(|m| m.pago)
+                .sum();
+            texto.push_str(&format!(
+                "\n  ─────────────────────────────────────\n\
+                 💰 TOTAL a \"{}\": ${:.2}/mes  ({} conceptos)\n",
+                keyword,
+                total_mensual,
+                deudas_match.len(),
+            ));
+            if total_historial > 0.0 {
+                texto.push_str(&format!(
+                    "  Total histórico combinado: ${:.2}\n",
+                    total_historial
+                ));
             }
         }
         let mut r =

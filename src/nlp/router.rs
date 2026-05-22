@@ -124,14 +124,116 @@ pub fn detectar_intent_modulo(consulta: &str) -> Option<CategoriaIntencion> {
         || (has_word("tengo") && (has_word("reunion") || has_word("cita")) && has_word("el"))
     {
         // Discriminación: si solo dice "consulta" sin verbo de creación, no es Crear
-        let es_consulta =
-            has("cuando es") || has("en cuantos dias") || has("que tengo") || has("que hay");
+        let es_consulta = has("cuando es")
+            || has("en cuantos dias")
+            || has("que tengo")
+            || has("que hay")
+            || has("cuanto falta")
+            || has("cuantos dias faltan")
+            || has("cuantos dias para")
+            || has("cuantos dias quedan")
+            || has("cuantos anos tiene")
+            || has("cuantos anios tiene")
+            || has("que edad tiene")
+            || has("cual es la edad");
         if !es_consulta {
             return Some(CategoriaIntencion::CrearEvento);
         }
     }
 
     // ── Calendario: cálculos de fechas ──────────────────────────────────
+    // Detectar "cuando es X" / "en qué fecha es X" / "qué día cae X" → CalcularFecha.
+    // Va ANTES que el bloque de "cuánto falta" para no perder estas frases.
+    // Excluir si menciona cumpleaños de alguien (va a ConsultarAgenda)
+    let apunta_cumple_persona = has("cumpleanios")
+        || has("cumpleanos")
+        || has("cumpleano ")
+        || (has("cumple") && (has(" de ") || has(" del ")));
+    let pregunta_cuando = (has("cuando es el")
+        || has("cuando es la")
+        || has("cuando cae el")
+        || has("cuando cae la")
+        || has("que dia es el")
+        || has("que dia es la")
+        || has("que dia cae el")
+        || has("que dia cae la")
+        || has("en que fecha es")
+        || has("en que fecha cae")
+        || has("cuando es fin de")
+        || has("cuando es dia de")
+        || has("cuando es el dia")
+        || has("cuando es la noche"))
+        && !apunta_cumple_persona
+        && !has("mi evento")
+        && !has("mi cita")
+        && !has("mi reunion");
+    if pregunta_cuando {
+        return Some(CategoriaIntencion::CalcularFecha);
+    }
+
+    // "cuando es el cumpleaños de X" → ConsultarAgenda (ya filtrado arriba de CalcularFecha)
+    if apunta_cumple_persona
+        && (has("cuando es") || has("cuando cae") || has("que dia es") || has("en que fecha"))
+    {
+        return Some(CategoriaIntencion::ConsultarAgenda);
+    }
+
+    // Detección de "cuánto falta para <fecha/feriado>" — debe ir
+    // ANTES que cualquier discriminación por "cumple/cita/evento" porque la
+    // pregunta puede mencionar feriados como "navidad" sin ser un evento de
+    // agenda del usuario.
+    let pregunta_falta = has("cuanto falta para")
+        || has("cuanto falta hasta")
+        || has("cuantos dias para")
+        || has("cuantos dias faltan para")
+        || has("cuantos dias faltan hasta")
+        || has("cuantos dias quedan para")
+        || has("cuantos dias quedan hasta")
+        || has("dias para ")
+        || has("que falta para ");
+    if pregunta_falta {
+        // Si menciona el cumpleaños/evento de alguien (con o sin "mi"), va a
+        // ConsultarAgenda para que busque en la agenda con matching fuzzy.
+        let apunta_agenda = has("cumple") && (has(" de ") || has(" del "))
+            || has("cumpleanios de")
+            || has("cumpleanios del")
+            || has("cita de")
+            || has("cita con")
+            || has("reunion de")
+            || has("reunion con")
+            || has("evento de")
+            || has("aniversario de")
+            || has("mi cumple")
+            || has("mi cita")
+            || has("mi reunion")
+            || has("mi evento");
+        if apunta_agenda {
+            return Some(CategoriaIntencion::ConsultarAgenda);
+        }
+        return Some(CategoriaIntencion::CalcularFecha);
+    }
+
+    // ── Listado de feriados ─────────────────────────────────────────────
+    if has("proximos feriados")
+        || has("siguientes feriados")
+        || has("que feriado")
+        || has("que feriados")
+        || has("dias festivos")
+        || has("dia festivo")
+        || has("feriados de ecuador")
+        || has("feriados de usa")
+        || has("feriados de estados unidos")
+        || has("feriados religiosos")
+        || has("dias religiosos")
+        || has("listar feriados")
+        || has("ver feriados")
+        || has("muestrame los feriados")
+        || has("muestrame feriados")
+        || (has_word("feriados") && (has_word("hay") || has_word("vienen") || has_word("quedan")))
+    {
+        return Some(CategoriaIntencion::ConsultarFeriados);
+    }
+
     if has("cuantos dias entre")
         || has("cuantos dias hay entre")
         || has("distancia entre")
@@ -238,6 +340,188 @@ pub fn detectar_intent_modulo(consulta: &str) -> Option<CategoriaIntencion> {
         || has("ver deudas")
     {
         return Some(CategoriaIntencion::ConsultarDeudas);
+    }
+
+    // ── Agenda: consultar cumpleaños por mes ─────────────────────────────
+    // "quien cumple en julio", "quien cumple el proximo mes", "cumpleanos en mayo"
+    let meses = [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ];
+    let menciona_mes = meses.iter().any(|m| has(m));
+    let es_pregunta_cumple = has("quien cumple")
+        || has("quienes cumplen")
+        || has("quienes cumplean")
+        || (has("cumple") && (has("este mes") || has("proximo mes") || has("siguiente mes")))
+        || (has("cumpleano") && (menciona_mes || has("este mes") || has("proximo mes")))
+        || (has("cumple") && menciona_mes);
+    if es_pregunta_cumple {
+        return Some(CategoriaIntencion::ConsultarAgenda);
+    }
+
+    // ── Edad de una persona ──────────────────────────────────────────────
+    // "cuántos años tiene X", "qué edad tiene X", "cuántos años cumple X"
+    // Nota: "años" → "anos" (ñ→n), pero muchos escriben "anios" sin ñ
+    if has("cuantos anos tiene")
+        || has("cuantos anios tiene")
+        || has("cuantos anos cumple")
+        || has("cuantos anios cumple")
+        || has("que edad tiene")
+        || has("cuanta edad tiene")
+        || has("cual es la edad de")
+        || has("cual es su edad")
+        || has("cuantos anos va a cumplir")
+        || has("cuantos anios va a cumplir")
+        || has("cuantos anos cumplio")
+        || has("cuantos anios cumplio")
+        || has("cuantos anos lleva")
+        || has("cuantos anios lleva")
+    {
+        return Some(CategoriaIntencion::ConsultarAgenda);
+    }
+
+    // ── Obras ────────────────────────────────────────────────────────────
+    // GuiaSiguientePaso — va ANTES que ConsultarObras para capturar "qué sigue"
+    let menciona_obra_o_proyecto = has_word("obra")
+        || has("obras")
+        || has("proyecto")
+        || has("construccion")
+        || has("contrato de obra");
+    let pregunta_siguiente = has("siguiente paso")
+        || has("que sigue")
+        || has("que continua")
+        || has("que falta por hacer")
+        || has("proxima actividad")
+        || has("proxima etapa")
+        || has("siguiente etapa")
+        || has("que viene")
+        || has("que hacer ahora")
+        || has("como avanzar")
+        || has("que paso viene")
+        || has("donde quedamos");
+    if pregunta_siguiente && menciona_obra_o_proyecto {
+        return Some(CategoriaIntencion::GuiaSiguientePaso);
+    }
+
+    // AlertasObras — ANTES que ConsultarObras para capturar alertas específicas
+    let palabra_alerta = has_word("alerta")
+        || has("alertas")
+        || has("retraso")
+        || has("retrasada")
+        || has("retrasado")
+        || has("vencido")
+        || has("vencida")
+        || has("en riesgo")
+        || has("problema")
+        || has("problemas")
+        || has("atrasado")
+        || has("atrasada")
+        || has("paso vencido")
+        || has("pasos vencidos");
+    if palabra_alerta && (menciona_obra_o_proyecto || has("proyecto")) {
+        return Some(CategoriaIntencion::AlertasObras);
+    }
+
+    // SaldoObra — saldo / desembolso / presupuesto de obra
+    let palabra_saldo = has_word("saldo")
+        || has("desembolso")
+        || has("desembolsos")
+        || has("cuanto queda")
+        || has("cuanto falta") && !has("para el")
+        || has("cuanto hemos gastado")
+        || has("cuanto llevamos gastado")
+        || has("cuanto se ha ejecutado")
+        || has("ejecucion presupuestal")
+        || has("partidas")
+        || has("presupuesto disponible");
+    if palabra_saldo && (menciona_obra_o_proyecto) {
+        return Some(CategoriaIntencion::SaldoObra);
+    }
+
+    // ConsultarObras — estado general de obras
+    let pregunta_obras = has("mis obras")
+        || has("obras activas")
+        || has("obras en curso")
+        || has("como van las obras")
+        || has("estado de las obras")
+        || has("estado de mis obras")
+        || has("ver obras")
+        || has("listar obras")
+        || has("lista de obras")
+        || has("cuantas obras")
+        || has("proyectos activos")
+        || has("mis proyectos")
+        || has("avance de las obras")
+        || has("porcentaje de avance")
+        || has("obras sin terminar")
+        || has("obras pendientes")
+        || has("progreso de las obras")
+        || has("obras con retraso")
+        || (has_word("obra") && (has_word("estado") || has_word("ver") || has_word("lista")));
+    if pregunta_obras {
+        return Some(CategoriaIntencion::ConsultarObras);
+    }
+
+    // ── Cobranzas ────────────────────────────────────────────────────────
+    let pregunta_cobranzas = has("que me deben")
+        || has("cuanto me deben")
+        || has("cuentas por cobrar")
+        || has("cobrar pendiente")
+        || has("cartera por cobrar")
+        || has("facturas pendientes de cobro")
+        || has("facturas sin pagar")
+        || has("clientes que deben")
+        || has("deudores")
+        || has("cobros pendientes")
+        || has("cuantos clientes deben")
+        || has("total por cobrar")
+        || has("resumen de cobranzas")
+        || has("estado de cobranzas")
+        || has("cuanto tengo por cobrar")
+        || has("quien me debe")
+        || (has("cobrar")
+            && (has_word("pendiente")
+                || has_word("pendientes")
+                || has_word("total")
+                || has_word("cuanto")));
+    if pregunta_cobranzas {
+        return Some(CategoriaIntencion::ConsultarCobranzas);
+    }
+
+    // ── Empresa ──────────────────────────────────────────────────────────
+    let pregunta_empresa = has("como va la empresa")
+        || has("estado del negocio")
+        || has("estado de la empresa")
+        || has("resumen empresarial")
+        || has("resumen de la empresa")
+        || has("dashboard empresa")
+        || has("panorama empresarial")
+        || has("como va el negocio")
+        || has("mis propuestas")
+        || has("propuestas activas")
+        || has("cuantas propuestas")
+        || has("casos abiertos")
+        || has("mis casos")
+        || has("proveedores registrados")
+        || has("contratos activos")
+        || has("negocios en curso")
+        || (has_word("empresa")
+            && (has_word("resumen")
+                || has_word("estado")
+                || has_word("como")
+                || has_word("dashboard")));
+    if pregunta_empresa {
+        return Some(CategoriaIntencion::ResumenEmpresa);
     }
 
     None
@@ -489,8 +773,94 @@ pub fn responder_crear_evento(
 
 pub fn responder_calcular_fecha(consulta: &str, conf: f64) -> RespuestaAsistente {
     let norm = sin_tildes(&consulta.to_lowercase());
+    let hoy = Local::now().date_naive();
 
-    // Avanzar N días desde una fecha
+    // 0) "¿Cuándo es / qué día es el X?" — muestra la fecha del feriado
+    let pregunta_cuando = norm.contains("cuando es")
+        || norm.contains("cuando cae")
+        || norm.contains("que dia es el")
+        || norm.contains("que dia es la")
+        || norm.contains("que dia cae")
+        || norm.contains("en que fecha es")
+        || norm.contains("en que fecha cae");
+    if pregunta_cuando {
+        if let Some((fecha, nombre)) = super::feriados::resolver_nombre_feriado(consulta, hoy) {
+            let semana = nombre_dia(fecha.weekday().num_days_from_monday());
+            let dias = (fecha - hoy).num_days();
+            let cuando = if dias == 0 {
+                "HOY".to_string()
+            } else if dias == 1 {
+                "mañana".to_string()
+            } else if dias > 0 {
+                format!("en {} días", dias)
+            } else {
+                format!("hace {} días (ya pasó)", -dias)
+            };
+            return RespuestaAsistente::solo_texto(
+                CategoriaIntencion::CalcularFecha,
+                conf,
+                format!(
+                    "📅 {} es el {} ({}) — {}.",
+                    nombre,
+                    fecha.format("%d/%m/%Y"),
+                    semana,
+                    cuando
+                ),
+            );
+        }
+        // Intentar fecha textual
+        if let Some(fecha) = super::feriados::extraer_fecha_textual(consulta, hoy)
+            .or_else(|| extraer_fecha(consulta))
+        {
+            let semana = nombre_dia(fecha.weekday().num_days_from_monday());
+            return RespuestaAsistente::solo_texto(
+                CategoriaIntencion::CalcularFecha,
+                conf,
+                format!("📅 Esa fecha es {} ({}).", fecha.format("%d/%m/%Y"), semana),
+            );
+        }
+    }
+
+    // 1) "Cuánto falta para <fecha/feriado>"
+    let pregunta_falta = norm.contains("cuanto falta para")
+        || norm.contains("cuanto falta hasta")
+        || norm.contains("cuantos dias para")
+        || norm.contains("cuantos dias faltan para")
+        || norm.contains("cuantos dias faltan hasta")
+        || norm.contains("cuantos dias quedan para")
+        || norm.contains("cuantos dias quedan hasta")
+        || norm.contains("dias hasta")
+        || norm.contains("en cuantos dias es")
+        || norm.contains("que falta para");
+
+    if pregunta_falta {
+        // 1a) feriado nombrado ("navidad", "thanksgiving", ...)
+        if let Some((fecha, nombre)) = super::feriados::resolver_nombre_feriado(consulta, hoy) {
+            return RespuestaAsistente::solo_texto(
+                CategoriaIntencion::CalcularFecha,
+                conf,
+                formatear_dias_para(nombre.as_str(), fecha, hoy),
+            );
+        }
+        // 1b) "25 de diciembre" / "december 25"
+        if let Some(fecha) = super::feriados::extraer_fecha_textual(consulta, hoy) {
+            return RespuestaAsistente::solo_texto(
+                CategoriaIntencion::CalcularFecha,
+                conf,
+                formatear_dias_para(&fecha.format("%d/%m/%Y").to_string(), fecha, hoy),
+            );
+        }
+        // 1c) fecha numérica "el 25/12" o "25-12-2026"
+        if let Some(fecha) = extraer_fecha(consulta) {
+            return RespuestaAsistente::solo_texto(
+                CategoriaIntencion::CalcularFecha,
+                conf,
+                formatear_dias_para(&fecha.format("%d/%m/%Y").to_string(), fecha, hoy),
+            );
+        }
+    }
+
+    // 2) Avanzar N días desde una fecha
     if norm.contains("avanza")
         || norm.contains("avanzar")
         || norm.contains("dentro de")
@@ -514,7 +884,7 @@ pub fn responder_calcular_fecha(consulta: &str, conf: f64) -> RespuestaAsistente
         }
     }
 
-    // Distancia entre dos fechas
+    // 3) Distancia entre dos fechas
     let fechas = extraer_fechas_multiples(consulta);
     if fechas.len() >= 2 {
         let (a, b) = (fechas[0], fechas[1]);
@@ -532,11 +902,119 @@ pub fn responder_calcular_fecha(consulta: &str, conf: f64) -> RespuestaAsistente
         );
     }
 
+    // 4) Última red: si hay una sola fecha y la pregunta es "cuándo / cuántos días"
+    if let Some(fecha) =
+        super::feriados::extraer_fecha_textual(consulta, hoy).or_else(|| extraer_fecha(consulta))
+    {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::CalcularFecha,
+            conf,
+            formatear_dias_para(&fecha.format("%d/%m/%Y").to_string(), fecha, hoy),
+        );
+    }
+
     RespuestaAsistente::solo_texto(
         CategoriaIntencion::CalcularFecha,
         conf,
-        "No entendí el cálculo. Ejemplos: \"cuántos días entre el 5 de mayo y el 20 de julio\" o \"qué fecha será 90 días después del 1 de junio\".",
+        "No entendí el cálculo. Ejemplos:\n  • \"cuántos días faltan para Navidad\"\n  • \"cuánto falta para el 25 de diciembre\"\n  • \"cuántos días entre el 5 de mayo y el 20 de julio\"\n  • \"qué fecha será 90 días después del 1 de junio\"",
     )
+}
+
+/// Formatea el mensaje "faltan N días para X (DD/MM/YYYY, día de la semana)".
+fn formatear_dias_para(nombre: &str, fecha: NaiveDate, hoy: NaiveDate) -> String {
+    let dias = (fecha - hoy).num_days();
+    let semana = nombre_dia(fecha.weekday().num_days_from_monday());
+    if dias == 0 {
+        format!(
+            "🎉 ¡{} es HOY ({}, {})!",
+            nombre,
+            semana,
+            fecha.format("%d/%m/%Y")
+        )
+    } else if dias == 1 {
+        format!(
+            "⏳ Falta 1 día para {} — mañana ({}, {}).",
+            nombre,
+            semana,
+            fecha.format("%d/%m/%Y")
+        )
+    } else if dias > 0 {
+        format!(
+            "⏳ Faltan {} días para {} ({}, {}).",
+            dias,
+            nombre,
+            semana,
+            fecha.format("%d/%m/%Y")
+        )
+    } else {
+        format!(
+            "📅 {} ya pasó hace {} día{} ({}, {}).",
+            nombre,
+            -dias,
+            if dias == -1 { "" } else { "s" },
+            semana,
+            fecha.format("%d/%m/%Y")
+        )
+    }
+}
+
+/// Lista los próximos feriados (por defecto Ecuador + USA + religiosos).
+pub fn responder_consultar_feriados(consulta: &str, conf: f64) -> RespuestaAsistente {
+    use super::feriados::{proximos_feriados, Pais};
+    let norm = sin_tildes(&consulta.to_lowercase());
+    let hoy = Local::now().date_naive();
+
+    let pais = if norm.contains("ecuador") {
+        Some(Pais::Ecuador)
+    } else if norm.contains("usa") || norm.contains("estados unidos") {
+        Some(Pais::Usa)
+    } else if norm.contains("religios") {
+        Some(Pais::Religioso)
+    } else {
+        None
+    };
+
+    let n = extraer_numero_dias(&norm)
+        .map(|n| n as usize)
+        .unwrap_or(10)
+        .clamp(1, 30);
+    let lista = proximos_feriados(hoy, n, pais);
+    if lista.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::ConsultarFeriados,
+            conf,
+            "No encontré feriados próximos en el catálogo.",
+        );
+    }
+
+    let etiqueta = match pais {
+        Some(Pais::Ecuador) => "Ecuador",
+        Some(Pais::Usa) => "USA",
+        Some(Pais::Religioso) => "religiosos",
+        None => "Ecuador + USA + religiosos",
+    };
+    let mut texto = format!("🎌 Próximos {} feriados ({}):\n", lista.len(), etiqueta);
+    for f in &lista {
+        let dias = (f.fecha - hoy).num_days();
+        let etq_dias = if dias == 0 {
+            "hoy".to_string()
+        } else if dias == 1 {
+            "mañana".to_string()
+        } else {
+            format!("en {} días", dias)
+        };
+        let marca = if f.oficial { "🏛" } else { "✨" };
+        texto.push_str(&format!(
+            "  {} {} — {} ({}, {}) [{}]\n",
+            marca,
+            f.nombre,
+            f.fecha.format("%d/%m/%Y"),
+            nombre_dia(f.fecha.weekday().num_days_from_monday()),
+            etq_dias,
+            f.pais.nombre()
+        ));
+    }
+    RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarFeriados, conf, texto)
 }
 
 // ─── Handlers: Memoria ──────────────────────────────────────────────────────
@@ -1027,4 +1505,308 @@ fn extraer_hora(consulta: &str) -> Option<NaiveTime> {
         h = 0;
     }
     NaiveTime::from_hms_opt(h, m, 0)
+}
+
+// ─── Handlers: Empresa / Obras / Cobranzas (Fase 7) ─────────────────────────
+
+/// Resumen de obras activas con avance y estado.
+pub fn responder_consultar_obras(
+    conf: f64,
+    obras: &crate::obras::AlmacenObras,
+) -> RespuestaAsistente {
+    let activas = obras.activas();
+    if activas.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::ConsultarObras,
+            conf,
+            "📋 No tienes obras activas en este momento. Puedes crear una desde el módulo Empresa → Obras.",
+        );
+    }
+    let mut texto = format!("🏗️  Tienes {} obra(s) activa(s):\n\n", activas.len());
+    for obra in activas.iter().take(8) {
+        let pasos = obra.validar_flujo_completo();
+        let total = pasos.len();
+        let completos = pasos
+            .iter()
+            .filter(|p| matches!(p.estado, crate::obras::EstadoPaso::Completado))
+            .count();
+        let pct = (completos * 100).checked_div(total).unwrap_or(0);
+        let barra = {
+            let llenos = pct / 10;
+            format!(
+                "[{}{}] {}%",
+                "█".repeat(llenos),
+                "░".repeat(10 - llenos),
+                pct
+            )
+        };
+        texto.push_str(&format!(
+            "  🔨 {} — {} {}\n",
+            obra.nombre,
+            barra,
+            if pct == 100 {
+                "✅"
+            } else if pct >= 50 {
+                "🔄"
+            } else {
+                "⏳"
+            }
+        ));
+    }
+    if activas.len() > 8 {
+        texto.push_str(&format!("  … y {} obra(s) más.\n", activas.len() - 8));
+    }
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarObras, conf, texto);
+    r.seguimientos = vec![
+        "¿Cuánto saldo tiene alguna obra?".into(),
+        "¿Hay alertas en mis obras?".into(),
+        "¿Cuál es el siguiente paso?".into(),
+    ];
+    r
+}
+
+/// Saldo / ejecución presupuestal de obras.
+pub fn responder_saldo_obra(conf: f64, obras: &crate::obras::AlmacenObras) -> RespuestaAsistente {
+    let activas = obras.activas();
+    if activas.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::SaldoObra,
+            conf,
+            "📋 No hay obras activas registradas.",
+        );
+    }
+    let mut texto = String::from("💰 Presupuesto de obras activas:\n\n");
+    for obra in activas.iter().take(6) {
+        let partidas = &obra.presupuesto_obra.partidas;
+        if partidas.is_empty() {
+            texto.push_str(&format!(
+                "  🏗️  {} — sin partidas de presupuesto registradas\n",
+                obra.nombre
+            ));
+        } else {
+            let (solicitado, aprobado, ejecutado): (f64, f64, f64) =
+                partidas.iter().fold((0.0, 0.0, 0.0), |(s, a, e), p| {
+                    (
+                        s + p.monto_solicitado,
+                        a + p.monto_aprobado,
+                        e + p.monto_ejecutado,
+                    )
+                });
+            let pct_ejec = if aprobado > 0.0 {
+                ejecutado / aprobado * 100.0
+            } else {
+                0.0
+            };
+            texto.push_str(&format!(
+                "  🏗️  {}\n     Solicitado: ${:.2}  |  Aprobado: ${:.2}  |  Ejecutado: ${:.2} ({:.1}%)\n",
+                obra.nombre, solicitado, aprobado, ejecutado, pct_ejec
+            ));
+        }
+    }
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::SaldoObra, conf, texto);
+    r.seguimientos = vec![
+        "¿Cómo van mis obras en general?".into(),
+        "¿Hay alertas en los proyectos?".into(),
+    ];
+    r
+}
+
+/// Alertas: pasos vencidos, obras con retraso.
+pub fn responder_alertas_obras(
+    conf: f64,
+    obras: &crate::obras::AlmacenObras,
+) -> RespuestaAsistente {
+    let activas = obras.activas();
+    if activas.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::AlertasObras,
+            conf,
+            "✅ No hay obras activas; no hay alertas.",
+        );
+    }
+    let mut alertas: Vec<String> = Vec::new();
+    for obra in &activas {
+        let pasos = obra.validar_flujo_completo();
+        let faltantes: Vec<_> = pasos
+            .iter()
+            .filter(|p| matches!(p.estado, crate::obras::EstadoPaso::Faltante))
+            .collect();
+        if !faltantes.is_empty() {
+            for paso in faltantes.iter().take(2) {
+                alertas.push(format!(
+                    "  🔴 [{}] Paso {} «{}» — {}",
+                    obra.nombre, paso.numero, paso.nombre, paso.riesgo
+                ));
+            }
+        }
+        // Verificar redundancias
+        let redundancias = obra.verificar_redundancias();
+        for r in redundancias.iter().take(2) {
+            alertas.push(format!("  ⚠️  [{}] {}", obra.nombre, r));
+        }
+    }
+    if alertas.is_empty() {
+        let mut r = RespuestaAsistente::solo_texto(
+            CategoriaIntencion::AlertasObras,
+            conf,
+            "✅ Todo en orden. No hay pasos vencidos ni alertas críticas.",
+        );
+        r.seguimientos = vec!["¿Cómo va el avance de las obras?".into()];
+        return r;
+    }
+    let mut texto = format!("🚨 {} alerta(s) encontrada(s):\n\n", alertas.len());
+    for a in alertas.iter().take(10) {
+        texto.push_str(a);
+        texto.push('\n');
+    }
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::AlertasObras, conf, texto);
+    r.seguimientos = vec![
+        "¿Cuál es el siguiente paso en la obra?".into(),
+        "¿Ver el mapa de Marco Lógico?".into(),
+    ];
+    r
+}
+
+/// Resumen de cuentas por cobrar.
+pub fn responder_consultar_cobranzas(
+    conf: f64,
+    cobranzas: &crate::cobranzas::AlmacenCobranzas,
+) -> RespuestaAsistente {
+    use crate::cobranzas::EstadoCuenta;
+    let cuentas = &cobranzas.cuentas;
+    if cuentas.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::ConsultarCobranzas,
+            conf,
+            "📋 No tienes cuentas por cobrar registradas.",
+        );
+    }
+    let pendientes: Vec<_> = cuentas
+        .iter()
+        .filter(|c| !matches!(c.estado, EstadoCuenta::Pagada | EstadoCuenta::Incobrable))
+        .collect();
+    let total_pendiente: f64 = pendientes
+        .iter()
+        .map(|c| c.monto_total - c.monto_cobrado)
+        .sum();
+    let total_cuentas = cuentas.len();
+    let mut texto = format!(
+        "💵 Cobranzas:\n   Total de cuentas: {}\n   Pendientes de cobro: {}\n   Monto total por cobrar: ${:.2}\n\n",
+        total_cuentas, pendientes.len(), total_pendiente
+    );
+    for c in pendientes.iter().take(8) {
+        let saldo = c.monto_total - c.monto_cobrado;
+        texto.push_str(&format!(
+            "  • {} — ${:.2} pendiente (total ${:.2})\n",
+            c.cliente, saldo, c.monto_total
+        ));
+    }
+    if pendientes.len() > 8 {
+        texto.push_str(&format!("  … y {} cuenta(s) más.\n", pendientes.len() - 8));
+    }
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ConsultarCobranzas, conf, texto);
+    r.seguimientos = vec![
+        "¿Cómo va el estado general de la empresa?".into(),
+        "¿Qué deudas tengo yo mismo?".into(),
+    ];
+    r
+}
+
+/// Resumen empresarial: propuestas + obras + cobranzas.
+pub fn responder_resumen_empresa(
+    conf: f64,
+    obras: &crate::obras::AlmacenObras,
+    cobranzas: &crate::cobranzas::AlmacenCobranzas,
+    propuestas: &crate::propuestas::AlmacenPropuestas,
+    casos: &crate::casos::AlmacenCasos,
+) -> RespuestaAsistente {
+    use crate::casos::EstadoCaso;
+    use crate::cobranzas::EstadoCuenta;
+    use crate::propuestas::EstadoPropuesta;
+
+    let obras_activas = obras.activas().len();
+    let cobranzas_pendientes: f64 = cobranzas
+        .cuentas
+        .iter()
+        .filter(|c| !matches!(c.estado, EstadoCuenta::Pagada | EstadoCuenta::Incobrable))
+        .map(|c| c.monto_total - c.monto_cobrado)
+        .sum();
+    let propuestas_activas = propuestas
+        .propuestas
+        .iter()
+        .filter(|p| {
+            !matches!(
+                p.estado,
+                EstadoPropuesta::Ganada | EstadoPropuesta::Perdida | EstadoPropuesta::Cancelada
+            )
+        })
+        .count();
+    let casos_abiertos = casos
+        .casos
+        .iter()
+        .filter(|c| !matches!(c.estado, EstadoCaso::Cerrado | EstadoCaso::Cancelado))
+        .count();
+
+    let texto = format!(
+        "🏢 Resumen Empresarial:\n\n\
+         🏗️  Obras activas:        {}\n\
+         📄  Propuestas vigentes:  {}\n\
+         📁  Casos abiertos:       {}\n\
+         💵  Por cobrar (total):   ${:.2}\n\n\
+         Usa el módulo Empresa para gestionar cada área en detalle.",
+        obras_activas, propuestas_activas, casos_abiertos, cobranzas_pendientes
+    );
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::ResumenEmpresa, conf, texto);
+    r.seguimientos = vec![
+        "¿Cómo van mis obras?".into(),
+        "¿Cuánto me deben mis clientes?".into(),
+        "¿Mis propuestas activas?".into(),
+    ];
+    r
+}
+
+/// Guía del siguiente paso en obras (resumen rápido).
+pub fn responder_guia_siguiente_paso(
+    conf: f64,
+    obras: &crate::obras::AlmacenObras,
+) -> RespuestaAsistente {
+    let activas = obras.activas();
+    if activas.is_empty() {
+        return RespuestaAsistente::solo_texto(
+            CategoriaIntencion::GuiaSiguientePaso,
+            conf,
+            "📋 No hay obras activas. Créa una desde Empresa → Obras.",
+        );
+    }
+    let mut texto = String::from("🗺️  Siguiente paso por obra:\n\n");
+    for obra in activas.iter().take(5) {
+        // Buscar el primer paso pendiente o en progreso
+        let pasos = obra.validar_flujo_completo();
+        let siguiente = pasos.iter().find(|p| {
+            matches!(
+                p.estado,
+                crate::obras::EstadoPaso::Faltante | crate::obras::EstadoPaso::Pendiente
+            )
+        });
+        match siguiente {
+            Some(p) => {
+                texto.push_str(&format!(
+                    "  🔨 {} → Paso {} «{}»\n     {}\n",
+                    obra.nombre, p.numero, p.nombre, p.detalle
+                ));
+            }
+            None => {
+                texto.push_str(&format!(
+                    "  ✅ {} — todos los pasos completados.\n",
+                    obra.nombre
+                ));
+            }
+        }
+    }
+    let mut r = RespuestaAsistente::solo_texto(CategoriaIntencion::GuiaSiguientePaso, conf, texto);
+    r.seguimientos = vec![
+        "¿Hay alertas en mis obras?".into(),
+        "¿Ver el mapa Marco Lógico completo?".into(),
+    ];
+    r
 }

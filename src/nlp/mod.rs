@@ -7,6 +7,7 @@ pub mod asistente;
 pub mod conversation;
 pub mod engine;
 pub mod feedback;
+pub mod feriados;
 pub mod intent;
 pub mod knowledge;
 pub mod router;

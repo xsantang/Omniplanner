@@ -1350,7 +1350,11 @@ impl DeudaRastreada {
             nota,
         });
 
-        self.activa = saldo_final >= 0.01;
+        // Gastos corrientes (obligatoria, tasa=0, saldo≤mínimo) son recurrentes —
+        // no se desactivan al registrar un pago aunque el saldo quede en cero.
+        if !self.es_pago_corriente() {
+            self.activa = saldo_final >= 0.01;
+        }
     }
 
     /// Simula qué hubiera pasado si se hubiera pagado un monto diferente.
@@ -1573,6 +1577,145 @@ impl DeudaRastreada {
         }
 
         EstadoDeudaUi::AlDia
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Cálculo de mora y período de atraso
+// ══════════════════════════════════════════════════════════════
+
+/// Detalle por cada mes no pagado dentro de un período de atraso.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DetalleMesAtraso {
+    /// Mes en formato YYYY-MM.
+    pub mes: String,
+    /// Saldo al inicio del mes (antes de acumular intereses de ese mes).
+    pub saldo_inicio: f64,
+    /// Intereses acumulados en este mes por no pagar.
+    pub intereses: f64,
+    /// Mora aplicada (porcentaje sobre el pago mínimo).
+    pub mora: f64,
+    /// Mínimo requerido por contrato para este mes.
+    pub minimo_requerido: f64,
+    /// Saldo al cierre del mes (saldo_inicio + intereses, mora no capitaliza).
+    pub saldo_fin: f64,
+}
+
+/// Resultado completo del cálculo de mora para un período de no-pago.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResumenAtraso {
+    /// Cuántos meses no se pagó.
+    pub meses_sin_pagar: usize,
+    /// Saldo al inicio del primer mes de atraso.
+    pub saldo_al_inicio: f64,
+    /// Saldo al final del último mes de atraso (creció por intereses).
+    pub saldo_al_final: f64,
+    /// Suma de todos los pagos mínimos acumulados (lo que "debió" pagarse).
+    pub total_minimos_acumulados: f64,
+    /// Suma de todas las moras generadas.
+    pub total_mora: f64,
+    /// Intereses adicionales acumulados por no pagar durante el período.
+    pub total_intereses_extra: f64,
+    /// Pago total necesario para reanudar: minimos + mora + cuota regular.
+    pub pago_para_reanudar: f64,
+    /// Desglose mes a mes.
+    pub detalle: Vec<DetalleMesAtraso>,
+}
+
+impl DeudaRastreada {
+    /// Calcula la mora y el saldo actualizado para un período de no-pago.
+    ///
+    /// * `mes_inicio`: primer mes sin pagar (YYYY-MM, inclusive).
+    /// * `mes_fin`: último mes sin pagar (YYYY-MM, inclusive).
+    /// * `tasa_mora_anual`: tasa de mora anual en porcentaje (ej. 12.0 = 12%).
+    ///   Se aplica mensualmente sobre el pago mínimo vencido, no se capitaliza
+    ///   en el principal.
+    pub fn calcular_atraso(
+        &self,
+        mes_inicio: &str,
+        mes_fin: &str,
+        tasa_mora_anual: f64,
+    ) -> ResumenAtraso {
+        // Helper: YYYY-MM → total de meses absolutos
+        let a_meses = |s: &str| -> i32 {
+            let mut it = s.splitn(2, '-');
+            let y: i32 = it.next().unwrap_or("2026").parse().unwrap_or(2026);
+            let m: i32 = it.next().unwrap_or("01").parse().unwrap_or(1);
+            y * 12 + (m - 1)
+        };
+        let meses_a_str = |total: i32| -> String {
+            let y = total / 12;
+            let m = total % 12 + 1;
+            format!("{:04}-{:02}", y, m)
+        };
+
+        let ini = a_meses(mes_inicio);
+        let fin = a_meses(mes_fin);
+        if fin < ini {
+            return ResumenAtraso {
+                meses_sin_pagar: 0,
+                saldo_al_inicio: 0.0,
+                saldo_al_final: 0.0,
+                total_minimos_acumulados: 0.0,
+                total_mora: 0.0,
+                total_intereses_extra: 0.0,
+                pago_para_reanudar: 0.0,
+                detalle: vec![],
+            };
+        }
+
+        // Saldo al inicio del período: último historial ≤ mes anterior al inicio
+        let mes_previo = meses_a_str(ini - 1);
+        let saldo_inicio = self
+            .historial
+            .iter()
+            .rev()
+            .find(|m| m.mes <= mes_previo)
+            .map(|m| m.saldo_final)
+            .unwrap_or_else(|| self.saldo_actual());
+
+        let tasa_m = self.tasa_anual / 12.0 / 100.0;
+        let mora_m = tasa_mora_anual / 12.0 / 100.0; // mora mensual sobre el mínimo
+        let pago_min = self.pago_minimo.max(self.principal_interes_mensual);
+
+        let mut saldo = saldo_inicio;
+        let mut total_minimos = 0.0;
+        let mut total_mora = 0.0;
+        let mut total_intereses = 0.0;
+        let mut detalle: Vec<DetalleMesAtraso> = Vec::new();
+
+        for abs_m in ini..=fin {
+            let mes_str = meses_a_str(abs_m);
+            let saldo_antes = saldo;
+            let intereses = saldo * tasa_m;
+            saldo += intereses; // intereses se capitalizan (no se pagaron)
+            let mora = pago_min * mora_m; // mora sobre el mínimo, no sobre el saldo
+            total_minimos += pago_min;
+            total_mora += mora;
+            total_intereses += intereses;
+            detalle.push(DetalleMesAtraso {
+                mes: mes_str,
+                saldo_inicio: saldo_antes,
+                intereses,
+                mora,
+                minimo_requerido: pago_min,
+                saldo_fin: saldo,
+            });
+        }
+
+        // Pago para reanudar = todos los mínimos vencidos + moras + cuota del mes actual
+        let pago_para_reanudar = total_minimos + total_mora + pago_min;
+
+        ResumenAtraso {
+            meses_sin_pagar: detalle.len(),
+            saldo_al_inicio: saldo_inicio,
+            saldo_al_final: saldo,
+            total_minimos_acumulados: total_minimos,
+            total_mora,
+            total_intereses_extra: total_intereses,
+            pago_para_reanudar,
+            detalle,
+        }
     }
 }
 
@@ -2628,8 +2771,21 @@ impl RastreadorDeudas {
                     // nunca pre-pago de meses futuros. Sin meses_cubiertos explícitos
                     // no tocamos ningún mes futuro de una deuda obligatoria.
                     if d.obligatoria {
-                        // Nada que anular: el usuario debe usar meses_cubiertos o
-                        // pago_programado para declarar meses que cubre.
+                        // Aunque no sabemos qué meses cubre, registramos el pago real
+                        // del mes actual y lo insertamos en meses_ya_pagados_historial.
+                        // Así Paso 2 no dispara pagado_anticipado (que zerearÃ­a el mes
+                        // siguiente del pago programado).
+                        if !meses_ya_pagados_historial.contains(&(m.mes.clone(), d.nombre.clone()))
+                        {
+                            ajustes_efectivos
+                                .retain(|x| !(x.mes == m.mes && x.nombre_deuda == d.nombre));
+                            ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                                m.mes.clone(),
+                                d.nombre.clone(),
+                                m.pago,
+                            ));
+                            meses_ya_pagados_historial.insert((m.mes.clone(), d.nombre.clone()));
+                        }
                     } else {
                         meses_a_anular.insert(m.mes.clone());
                         // Pago real de deuda no-obligatoria que se zeroa: descontarlo.
@@ -2829,6 +2985,40 @@ impl RastreadorDeudas {
                     ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
                         cubierto.clone(),
                         pp.nombre_deuda.clone(),
+                        0.0,
+                    ));
+                }
+            }
+        }
+
+        // ── Paso 2b: meses futuros con pago programado → zerear deudas sin
+        // programación explícita en ese mes.
+        // Semántica: si el usuario anotó pagos específicos para un mes futuro,
+        // asumimos que NO tiene presupuesto para las demás deudas ese mes.
+        // Esto refleja fielmente el plan del usuario sin que el simulador
+        // distribuya "dinero libre" a deudas no programadas.
+        {
+            let meses_con_pago_futuro: std::collections::HashSet<String> = ajustes_efectivos
+                .iter()
+                .filter(|a| {
+                    mes_a_indice(&a.mes).map(|n| n >= 2).unwrap_or(false) && a.pago_forzado > 0.01
+                })
+                .map(|a| a.mes.clone())
+                .collect();
+            for mes_futuro in &meses_con_pago_futuro {
+                for d in &self.deudas {
+                    if !d.activa || d.es_pago_corriente() {
+                        continue;
+                    }
+                    if ajustes_efectivos
+                        .iter()
+                        .any(|a| a.mes == *mes_futuro && a.nombre_deuda == d.nombre)
+                    {
+                        continue; // ya tiene ajuste explícito — no tocar
+                    }
+                    ajustes_efectivos.push(AjusteMensualLibertad::nuevo(
+                        mes_futuro.clone(),
+                        d.nombre.clone(),
                         0.0,
                     ));
                 }

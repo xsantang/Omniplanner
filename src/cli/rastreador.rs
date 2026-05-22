@@ -246,13 +246,16 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             "📅  Registrar mes de pago (a una deuda)",
             "🗓️   Programar pago futuro",
             "🔍  Revisar deuda individual (análisis predatorio + pagos sugeridos)",
-            "📊  Diagnóstico completo (errores + recomendaciones)",
+            "🧮  Seleccionar deudas → calcular total / simular liquidar",
+            "�  Consolidación de deudas (¿me conviene este préstamo?)",
+            "�📊  Diagnóstico completo (errores + recomendaciones)",
             "📈  Simulación: ¿qué hubiera pasado si...?",
             "🗺️   Simulación: camino a la libertad financiera",
             &opcion_seguimiento,
             "🧮  Proyección de pagos y liquidez",
             "📋  Tabla de aporte mínimo (¿cuánto necesito para salir en X meses?)",
-            "🚨  Ver deudas vencidas (priorizar atrasos)",
+            "🚨  Período de atraso / mora  (calcular lo que debes al reanudar)",
+            "🔴  Ver deudas vencidas (priorizar atrasos)",
             "✏️   Editar pago de un mes",
             "⚙️   Ajustar tasa de interés",
             "💵  Configurar ingresos",
@@ -272,24 +275,27 @@ pub fn menu_asesor_rastreador(state: &mut AppState) {
             Some(1) => rastreador_registrar_mes(state),
             Some(2) => rastreador_programar_pago(state),
             Some(3) => rastreador_revisar_deuda_individual(state),
-            Some(4) => rastreador_diagnostico(state),
-            Some(5) => rastreador_simulacion(state),
-            Some(6) => rastreador_simulacion_libertad(state),
-            Some(7) => rastreador_seguimiento_plan(state),
-            Some(8) => rastreador_proyeccion_pagos_liquidez(state),
-            Some(9) => rastreador_tabla_aporte_minimo(state),
-            Some(10) => rastreador_ver_deudas_vencidas(state),
-            Some(11) => rastreador_editar_pago(state),
-            Some(12) => rastreador_ajustar_tasa(state),
-            Some(13) => rastreador_ingreso(state),
-            Some(14) => rastreador_actualizar_saldo(state),
-            Some(15) => rastreador_exportar(state),
-            Some(16) => rastreador_importar_csv(state),
-            Some(17) => rastreador_gestionar_deudas(state),
-            Some(18) => rastreador_gestionar_vinculos(state),
-            Some(19) => rastreador_eliminar(state),
-            Some(20) => rastreador_bitacora(state),
-            Some(21) => crate::cli::io_modulos::menu_io_pagos(state),
+            Some(4) => rastreador_seleccionar_calcular(state),
+            Some(5) => rastreador_consolidar_deudas(state),
+            Some(6) => rastreador_diagnostico(state),
+            Some(7) => rastreador_simulacion(state),
+            Some(8) => rastreador_simulacion_libertad(state),
+            Some(9) => rastreador_seguimiento_plan(state),
+            Some(10) => rastreador_proyeccion_pagos_liquidez(state),
+            Some(11) => rastreador_tabla_aporte_minimo(state),
+            Some(12) => rastreador_calcular_mora(state),
+            Some(13) => rastreador_ver_deudas_vencidas(state),
+            Some(14) => rastreador_editar_pago(state),
+            Some(15) => rastreador_ajustar_tasa(state),
+            Some(16) => rastreador_ingreso(state),
+            Some(17) => rastreador_actualizar_saldo(state),
+            Some(18) => rastreador_exportar(state),
+            Some(19) => rastreador_importar_csv(state),
+            Some(20) => rastreador_gestionar_deudas(state),
+            Some(21) => rastreador_gestionar_vinculos(state),
+            Some(22) => rastreador_eliminar(state),
+            Some(23) => rastreador_bitacora(state),
+            Some(24) => crate::cli::io_modulos::menu_io_pagos(state),
             _ => return,
         }
     }
@@ -431,11 +437,14 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
         let mes_sugerido = d.mes_de_pago_para(Local::now().date_naive());
         let prompt_mes = if let Some(corte) = d.dia_corte {
             format!(
-                "Mes (YYYY-MM, vacío={} — corte día {})",
+                "Mes en que se realizó el pago (YYYY-MM, vacío={} — corte día {})",
                 mes_sugerido, corte
             )
         } else {
-            format!("Mes (YYYY-MM, vacío={})", mes_sugerido)
+            format!(
+                "Mes en que se realizó el pago (YYYY-MM, vacío={})",
+                mes_sugerido
+            )
         };
         let mes = pedir_texto_opcional(&prompt_mes);
         let mes = if mes.is_empty() { mes_sugerido } else { mes };
@@ -454,13 +463,20 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
                 println!("  Puedes registrar el monto completo del período o el parcial mensual.");
                 println!();
             }
-            let pago = pedir_f64(
+            let pago = match crate::pedir_f64_opt(
                 &format!(
                     "Pago realizado (${:.2} exigible)",
                     pago_exigible_total.max(pago_min)
                 ),
                 pago_exigible_total.max(pago_min),
-            );
+            ) {
+                Some(v) => v,
+                None => {
+                    println!("  Cancelado.");
+                    pausa();
+                    return;
+                }
+            };
             state.asesor.rastreador.deudas[idx].registrar_mes(&mes, pago_min, pago, 0.0);
             println!();
             if (pago - pago_min).abs() < 0.01 {
@@ -481,10 +497,17 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
                     pago_exigible_total
                 );
             }
-            let saldo_inicio = pedir_f64(
+            let saldo_inicio = match crate::pedir_f64_opt(
                 &format!("Saldo al inicio (${:.2} sugerido)", saldo_act),
                 saldo_act,
-            );
+            ) {
+                Some(v) => v,
+                None => {
+                    println!("  Cancelado.");
+                    pausa();
+                    return;
+                }
+            };
             let pago_pi_ref = d.pago_pi_mensual();
             let tiene_escrow = d.tiene_escrow_configurado();
             let escrow_ref = d.escrow_mensual;
@@ -503,9 +526,18 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
                 "  Ej: '{0}' (un mes), '{0},2026-06' (dos meses), Enter = solo {0}.",
                 mes
             );
-            let cubiertos_raw = pedir_texto_opcional(&format!("Meses cubiertos (vacío={})", mes));
+            let cubiertos_raw =
+                pedir_texto_opcional(&format!("Meses cubiertos por este pago (vacío={})", mes));
             let meses_cubiertos: Vec<String> = if cubiertos_raw.is_empty() {
-                vec![mes.clone()]
+                // Auto-copia desde `mes`; si contiene comas (ej. "2026-03, 2026-04"), separa
+                if mes.contains(',') {
+                    mes.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                } else {
+                    vec![mes.clone()]
+                }
             } else {
                 let mut v: Vec<String> = cubiertos_raw
                     .split(',')
@@ -523,30 +555,51 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
             let escrow_sugerido = (pago_exigible_escrow.max(escrow_ref)) * n_meses;
 
             let pago = if tiene_escrow {
-                pedir_f64(
+                match crate::pedir_f64_opt(
                     &format!(
-                        "Pago P&I realizado (${:.2} sugerido = {} × ${:.2})",
+                        "Pago P&I realizado (${:.2} exigible, default={}×${:.2})",
                         pi_sugerido, n_meses as u32, pago_pi_ref
                     ),
-                    pi_sugerido,
-                )
+                    pago_pi_ref * n_meses,
+                ) {
+                    Some(v) => v,
+                    None => {
+                        println!("  Cancelado.");
+                        pausa();
+                        return;
+                    }
+                }
             } else {
-                pedir_f64(
+                match crate::pedir_f64_opt(
                     &format!(
-                        "Pago realizado (${:.2} sugerido = {} × ${:.2})",
+                        "Pago realizado (${:.2} exigible, default={}×${:.2})",
                         pi_sugerido, n_meses as u32, pago_pi_ref
                     ),
-                    pi_sugerido,
-                )
+                    pago_pi_ref * n_meses,
+                ) {
+                    Some(v) => v,
+                    None => {
+                        println!("  Cancelado.");
+                        pausa();
+                        return;
+                    }
+                }
             };
             let pago_escrow = if tiene_escrow {
-                pedir_f64(
+                match crate::pedir_f64_opt(
                     &format!(
-                        "Pago Escrow realizado (${:.2} sugerido = {} × ${:.2})",
+                        "Pago Escrow realizado (${:.2} exigible, default={}×${:.2})",
                         escrow_sugerido, n_meses as u32, escrow_ref
                     ),
-                    escrow_sugerido,
-                )
+                    escrow_ref * n_meses,
+                ) {
+                    Some(v) => v,
+                    None => {
+                        println!("  Cancelado.");
+                        pausa();
+                        return;
+                    }
+                }
             } else {
                 0.0
             };
@@ -687,6 +740,332 @@ pub fn rastreador_registrar_mes(state: &mut AppState) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  Helpers de entrada flexible de fechas (YYYY-MM)
+// ══════════════════════════════════════════════════════════════
+
+fn nombre_mes_a_numero(s: &str) -> Option<u32> {
+    match s.to_lowercase().trim() {
+        "1" | "01" | "ene" | "enero" | "jan" | "january" => Some(1),
+        "2" | "02" | "feb" | "febrero" | "february" => Some(2),
+        "3" | "03" | "mar" | "marzo" | "march" => Some(3),
+        "4" | "04" | "abr" | "abril" | "apr" | "april" => Some(4),
+        "5" | "05" | "may" | "mayo" => Some(5),
+        "6" | "06" | "jun" | "junio" | "june" => Some(6),
+        "7" | "07" | "jul" | "julio" | "july" => Some(7),
+        "8" | "08" | "ago" | "agosto" | "aug" | "august" => Some(8),
+        "9" | "09" | "sep" | "sept" | "septiembre" | "september" => Some(9),
+        "10" | "oct" | "octubre" | "october" => Some(10),
+        "11" | "nov" | "noviembre" | "november" => Some(11),
+        "12" | "dic" | "diciembre" | "dec" | "december" => Some(12),
+        _ => None,
+    }
+}
+
+fn nombre_mes_espanol(m: u32) -> &'static str {
+    match m {
+        1 => "enero",
+        2 => "febrero",
+        3 => "marzo",
+        4 => "abril",
+        5 => "mayo",
+        6 => "junio",
+        7 => "julio",
+        8 => "agosto",
+        9 => "septiembre",
+        10 => "octubre",
+        11 => "noviembre",
+        12 => "diciembre",
+        _ => "?",
+    }
+}
+
+fn anio_corto_a_largo(yy: i32) -> i32 {
+    if yy <= 30 {
+        2000 + yy
+    } else {
+        1900 + yy
+    }
+}
+
+fn push_candidato_mes(results: &mut Vec<(String, String)>, y: i32, m: u32) {
+    if (1..=12).contains(&m) {
+        let key = format!("{:04}-{:02}", y, m);
+        if !results.iter().any(|(k, _)| k == &key) {
+            results.push((key, format!("{} de {:04}", nombre_mes_espanol(m), y)));
+        }
+    }
+}
+
+/// Avanza (o retrocede) una cadena "YYYY-MM" en `delta` meses calendario.
+fn avanzar_mes(yyyy_mm: &str, delta: i32) -> String {
+    let mut it = yyyy_mm.splitn(2, '-');
+    let y: i32 = it.next().unwrap_or("2026").trim().parse().unwrap_or(2026);
+    let m: i32 = it.next().unwrap_or("01").trim().parse().unwrap_or(1);
+    let total = y * 12 + (m - 1) + delta;
+    let ny = total / 12;
+    let nm = total % 12 + 1;
+    format!("{:04}-{:02}", ny, nm)
+}
+
+/// Intenta parsear texto libre como uno o más candidatos YYYY-MM.
+/// Devuelve lista de `(yyyy_mm, descripcion_humana)`.
+fn candidatos_mes(raw: &str, anio_actual: i32) -> Vec<(String, String)> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return vec![];
+    }
+
+    let mut results: Vec<(String, String)> = Vec::new();
+
+    let sl = s.to_lowercase();
+
+    // 1. YYYY-MM exacto
+    if sl.len() == 7 && sl.as_bytes().get(4) == Some(&b'-') {
+        if let (Ok(y), Ok(m)) = (sl[..4].parse::<i32>(), sl[5..].parse::<u32>()) {
+            if (1..=12).contains(&m) {
+                push_candidato_mes(&mut results, y, m);
+                return results;
+            }
+        }
+    }
+
+    // 2. Con separador: "06/2026", "junio 2026", "06-2026", "jun-26"
+    for sep in &['/', '-', '.', ' '] {
+        if let Some(pos) = sl.find(*sep) {
+            let a = sl[..pos].trim();
+            let b = sl[pos + 1..].trim();
+            if a.is_empty() || b.is_empty() {
+                continue;
+            }
+            if let Some(m) = nombre_mes_a_numero(a) {
+                if let Ok(y) = b.parse::<i32>() {
+                    match b.len() {
+                        4 => push_candidato_mes(&mut results, y, m),
+                        2 => push_candidato_mes(&mut results, anio_corto_a_largo(y), m),
+                        _ => {}
+                    }
+                }
+            }
+            if let (Ok(y), Some(m)) = (a.parse::<i32>(), nombre_mes_a_numero(b)) {
+                if a.len() == 4 {
+                    push_candidato_mes(&mut results, y, m);
+                }
+            }
+            break;
+        }
+    }
+    if !results.is_empty() {
+        return results;
+    }
+
+    // 3. Solo texto: "junio" o "junio 2026"
+    let partes: Vec<&str> = sl.split_whitespace().collect();
+    match partes.as_slice() {
+        [mes_s, anio_s] => {
+            if let Some(m) = nombre_mes_a_numero(mes_s) {
+                if let Ok(y) = anio_s.parse::<i32>() {
+                    match anio_s.len() {
+                        4 => push_candidato_mes(&mut results, y, m),
+                        2 => push_candidato_mes(&mut results, anio_corto_a_largo(y), m),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        [mes_s] => {
+            if let Some(m) = nombre_mes_a_numero(mes_s) {
+                push_candidato_mes(&mut results, anio_actual, m);
+            }
+        }
+        _ => {}
+    }
+    if !results.is_empty() {
+        return results;
+    }
+
+    // 4. Letra+dígito concatenado: "jun26", "junio2026"
+    let alpha: String = sl.chars().filter(|c| c.is_alphabetic()).collect();
+    let digs_concat: String = sl.chars().filter(|c| c.is_ascii_digit()).collect();
+    if !alpha.is_empty() && !digs_concat.is_empty() && alpha.len() + digs_concat.len() == sl.len() {
+        if let Some(m) = nombre_mes_a_numero(&alpha) {
+            if let Ok(y) = digs_concat.parse::<i32>() {
+                match digs_concat.len() {
+                    4 => push_candidato_mes(&mut results, y, m),
+                    2 => push_candidato_mes(&mut results, anio_corto_a_largo(y), m),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if !results.is_empty() {
+        return results;
+    }
+
+    // 5. Solo dígitos
+    let digits: String = sl.chars().filter(|c| c.is_ascii_digit()).collect();
+    match digits.len() {
+        1 | 2 => {
+            if let Ok(m) = digits.parse::<u32>() {
+                push_candidato_mes(&mut results, anio_actual, m);
+            }
+        }
+        4 => {
+            // MMYY
+            let mm = digits[..2].parse::<u32>().unwrap_or(0);
+            let yy_m = digits[2..].parse::<i32>().unwrap_or(0);
+            if (1..=12).contains(&mm) {
+                push_candidato_mes(&mut results, anio_corto_a_largo(yy_m), mm);
+            }
+            // YYMM
+            let yy_y = digits[..2].parse::<i32>().unwrap_or(0);
+            let mm2 = digits[2..].parse::<u32>().unwrap_or(0);
+            if (1..=12).contains(&mm2) {
+                push_candidato_mes(&mut results, anio_corto_a_largo(yy_y), mm2);
+            }
+        }
+        6 => {
+            // YYYYMM
+            if let (Ok(y), Ok(m)) = (digits[..4].parse::<i32>(), digits[4..].parse::<u32>()) {
+                if (1..=12).contains(&m) {
+                    push_candidato_mes(&mut results, y, m);
+                }
+            }
+            // MMYYYY
+            if let (Ok(m), Ok(y)) = (digits[..2].parse::<u32>(), digits[2..].parse::<i32>()) {
+                if (1..=12).contains(&m) {
+                    push_candidato_mes(&mut results, y, m);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    results
+}
+
+/// Pide un mes en formato libre. Muestra la interpretación y pide confirmación.
+/// Si el usuario escribe vacío, retorna `default` sin preguntar.
+/// `require_input`: si true y `default` está vacío, no acepta entrada vacía.
+fn pedir_mes_flexible(prompt: &str, default: &str, require_input: bool) -> String {
+    let anio_actual = chrono::Local::now().year();
+    loop {
+        let raw = pedir_texto_opcional(prompt);
+        if raw.trim().is_empty() {
+            if !default.is_empty() {
+                println!("  {} Conservando: {}", "↩".dimmed(), default.cyan());
+                return default.to_string();
+            }
+            if !require_input {
+                return String::new();
+            }
+            println!(
+                "  ⚠️  Se requiere una fecha. Intenta con: junio, jun 2026, 06, 062026, 2026-06."
+            );
+            continue;
+        }
+
+        let candidatos = candidatos_mes(&raw, anio_actual);
+        match candidatos.len() {
+            0 => {
+                println!(
+                    "  {} No entendí «{}». Prueba: junio, jun 2026, 06, 062026, 2026-06.",
+                    "⚠️".yellow(),
+                    raw.trim()
+                );
+            }
+            1 => {
+                let (ym, desc) = &candidatos[0];
+                println!("  → {} ({})", ym.cyan().bold(), desc.dimmed());
+                if confirmar("¿Es la fecha correcta?", true) {
+                    return ym.clone();
+                }
+            }
+            _ => {
+                println!("  «{}» tiene varias interpretaciones posibles:", raw.trim());
+                let opts: Vec<String> = candidatos
+                    .iter()
+                    .map(|(ym, desc)| format!("{} — {}", ym, desc))
+                    .collect();
+                let refs: Vec<&str> = opts.iter().map(|s| s.as_str()).collect();
+                if let Some(idx) = menu("¿Cuál es la fecha correcta?", &refs) {
+                    return candidatos[idx].0.clone();
+                }
+            }
+        }
+    }
+}
+
+/// Pide una lista de meses en formato libre separados por coma.
+/// Cada token se parsea individualmente con confirmación.
+/// Si el usuario escribe vacío, retorna `default`.
+fn pedir_meses_flexibles(prompt: &str, default: &[String]) -> Vec<String> {
+    let anio_actual = chrono::Local::now().year();
+    loop {
+        let raw = pedir_texto_opcional(prompt);
+        if raw.trim().is_empty() {
+            if !default.is_empty() {
+                println!(
+                    "  {} Conservando: {}",
+                    "↩".dimmed(),
+                    default.join(", ").cyan()
+                );
+                return default.to_vec();
+            }
+            return vec![];
+        }
+
+        let tokens: Vec<&str> = raw
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut resueltos: Vec<String> = Vec::new();
+        let mut error = false;
+
+        for token in &tokens {
+            let cands = candidatos_mes(token, anio_actual);
+            match cands.len() {
+                0 => {
+                    println!(
+                        "  {} No entendí «{}». Intenta de nuevo.",
+                        "⚠️".yellow(),
+                        token
+                    );
+                    error = true;
+                    break;
+                }
+                1 => {
+                    resueltos.push(cands[0].0.clone());
+                }
+                _ => {
+                    println!("  «{}» tiene varias interpretaciones:", token);
+                    let opts: Vec<String> = cands
+                        .iter()
+                        .map(|(ym, desc)| format!("{} — {}", ym, desc))
+                        .collect();
+                    let refs: Vec<&str> = opts.iter().map(|s| s.as_str()).collect();
+                    if let Some(idx) = menu("¿Cuál es?", &refs) {
+                        resueltos.push(cands[idx].0.clone());
+                    } else {
+                        error = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if error {
+            continue;
+        }
+
+        println!("  → Meses: {}", resueltos.join(", ").cyan().bold());
+        if confirmar("¿Son correctos?", true) {
+            return resueltos;
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
 //  Programar pago futuro — plan de pagos pendientes
 // ══════════════════════════════════════════════════════════════
 
@@ -714,6 +1093,56 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
             .collect();
 
         let hay_algo = !programados.is_empty() || !sin_programar.is_empty();
+
+        // ── Fondos disponibles este mes ─────────────────────────────────────
+        {
+            let mes_hoy = Local::now().format("%Y-%m").to_string();
+            let rast = &state.asesor.rastreador;
+            let saldo_banco = rast.saldo_disponible;
+            let mut total_fondos = 0.0f64;
+
+            println!("  {}", "💰 Fondos disponibles este mes:".green().bold());
+            for ing in rast.ingresos.iter().filter(|i| i.confirmado) {
+                if ing.frecuencia == FrecuenciaPago::UnaVez {
+                    let aplica = match &ing.mes_aplicable {
+                        Some(m) => *m == mes_hoy,
+                        None => true,
+                    };
+                    if !aplica {
+                        continue;
+                    }
+                    println!(
+                        "     • {} — {} (una vez)",
+                        ing.concepto,
+                        format!("${:.2}", ing.monto).green()
+                    );
+                    total_fondos += ing.monto;
+                } else {
+                    let mensual = ing.monto_mensual();
+                    println!(
+                        "     • {} — {} ({})",
+                        ing.concepto,
+                        format!("${:.2}", mensual).green(),
+                        ing.frecuencia.nombre()
+                    );
+                    total_fondos += mensual;
+                }
+            }
+            if saldo_banco > 0.01 {
+                println!(
+                    "     • {} — {}",
+                    "Colchón (saldo anterior)".dimmed(),
+                    format!("${:.2}", saldo_banco).green()
+                );
+                total_fondos += saldo_banco;
+            }
+            println!(
+                "   {} {}",
+                "Total disponible:".green(),
+                format!("${:.2}", total_fondos).green().bold()
+            );
+            println!();
+        }
 
         if !hay_algo {
             println!("  {} No hay deudas activas registradas.", "ℹ️".cyan());
@@ -745,14 +1174,15 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                 } else {
                     "—".dimmed().to_string()
                 };
-                // Mínimo sugerido = buscar la deuda en rastreador
+                // Mínimo sugerido = mensual × número de meses cubiertos
+                let n_meses_min = p.meses_cubiertos.len().max(1) as f64;
                 let minimo = state
                     .asesor
                     .rastreador
                     .deudas
                     .iter()
                     .find(|d| d.nombre == p.nombre_deuda)
-                    .map(|d| d.pago_pi_mensual() + d.escrow_mensual)
+                    .map(|d| (d.pago_pi_mensual() + d.escrow_mensual) * n_meses_min)
                     .unwrap_or(p.monto_pi + p.monto_escrow);
                 println!(
                     "  {:>2}. {:<24} {:>10} {:>9}  {:>10}  {:<20}  {}",
@@ -813,8 +1243,43 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                 .iter()
                 .map(|(_, d)| d.pago_pi_mensual() + d.escrow_mensual)
                 .sum();
+
+            // Comprometido: desglose línea a línea por pago programado
+            println!("  {}", "Comprometido programado:".blue().bold());
+            for p in programados.iter() {
+                let nombre_corto = if p.nombre_deuda.len() > 28 {
+                    format!("{}…", &p.nombre_deuda[..27])
+                } else {
+                    p.nombre_deuda.clone()
+                };
+                let n_meses = p.meses_cubiertos.len().max(1);
+                let meses_tag = if n_meses > 1 {
+                    format!("  ({} meses)", n_meses)
+                } else {
+                    String::new()
+                };
+                if p.monto_escrow > 0.01 {
+                    println!(
+                        "    {:<28}  {} + {} escrow = {}{}",
+                        nombre_corto,
+                        format!("${:.2}", p.monto_pi).blue(),
+                        format!("${:.2}", p.monto_escrow).blue(),
+                        format!("${:.2}", p.monto_pi + p.monto_escrow).blue().bold(),
+                        meses_tag.dimmed()
+                    );
+                } else {
+                    println!(
+                        "    {:<28}  {}{}",
+                        nombre_corto,
+                        format!("${:.2}", p.monto_pi).blue(),
+                        meses_tag.dimmed()
+                    );
+                }
+            }
+            println!("    {}", "─".repeat(54).dimmed());
             println!(
-                "  Comprometido: {} P&I + {} Escrow = {}",
+                "    {:<28}  {} + {} escrow = {}",
+                "Total programado:",
                 format!("${:.2}", total_pi).blue(),
                 format!("${:.2}", total_esc).blue(),
                 format!("${:.2}", total_pi + total_esc).blue().bold()
@@ -834,12 +1299,109 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                         .bold()
                 );
             }
-        }
+
+            // ── Flujo paso a paso ──────────────────────────────────────────
+            {
+                let mes_hoy = Local::now().format("%Y-%m").to_string();
+                let rast = &state.asesor.rastreador;
+                let saldo_banco = rast.saldo_disponible;
+                let mut total_fondos = 0.0f64;
+                for ing in rast.ingresos.iter().filter(|i| i.confirmado) {
+                    if ing.frecuencia == FrecuenciaPago::UnaVez {
+                        let aplica = match &ing.mes_aplicable {
+                            Some(m) => *m == mes_hoy,
+                            None => true,
+                        };
+                        if aplica {
+                            total_fondos += ing.monto;
+                        }
+                    } else {
+                        total_fondos += ing.monto_mensual();
+                    }
+                }
+                if saldo_banco > 0.01 {
+                    total_fondos += saldo_banco;
+                }
+
+                if total_fondos > 0.01 {
+                    println!();
+                    println!(
+                        "  {}",
+                        "── Flujo del mes ─────────────────────────────────────────"
+                            .truecolor(100, 140, 200)
+                    );
+                    let mut saldo = total_fondos;
+                    println!(
+                        "  {:42} {}",
+                        "Inicio:",
+                        format!("${:.2}", saldo).green().bold()
+                    );
+
+                    for p in programados.iter() {
+                        let costo = p.monto_pi + p.monto_escrow;
+                        saldo -= costo;
+                        let nombre_corto = if p.nombre_deuda.len() > 27 {
+                            format!("{}…", &p.nombre_deuda[..26])
+                        } else {
+                            p.nombre_deuda.clone()
+                        };
+                        let saldo_str = if saldo >= 0.0 {
+                            format!("${:.2}", saldo).green().to_string()
+                        } else {
+                            format!("-${:.2}", saldo.abs())
+                                .truecolor(220, 60, 60)
+                                .to_string()
+                        };
+                        println!(
+                            "  (-) {:<27}  {:>10}   → {}",
+                            nombre_corto,
+                            format!("${:.2}", costo).blue(),
+                            saldo_str
+                        );
+                    }
+
+                    let saldo_tras_prog = saldo;
+                    let color_prog = if saldo_tras_prog >= 0.0 {
+                        format!("${:.2}", saldo_tras_prog)
+                            .green()
+                            .bold()
+                            .to_string()
+                    } else {
+                        format!("-${:.2}", saldo_tras_prog.abs())
+                            .truecolor(220, 60, 60)
+                            .bold()
+                            .to_string()
+                    };
+                    println!(
+                        "  {:42} {} tras programados",
+                        "─────────────────────────────────────────", color_prog
+                    );
+
+                    if total_min_pend > 0.01 {
+                        let saldo_min = saldo - total_min_pend;
+                        let color_min = if saldo_min >= 0.0 {
+                            format!("${:.2}", saldo_min).green().to_string()
+                        } else {
+                            format!("-${:.2}", saldo_min.abs())
+                                .truecolor(220, 60, 60)
+                                .to_string()
+                        };
+                        println!(
+                            "  Si paga mínimos pendientes ({}):{:>8}   → {}",
+                            format!("${:.2}", total_min_pend).truecolor(220, 60, 60),
+                            "",
+                            color_min
+                        );
+                    }
+                }
+            }
+        } // fin else hay_algo
 
         println!();
         let opciones = &[
             "➕  Agregar pago programado",
             "✅  Convertir a pago registrado (ya lo pagué)",
+            "✏️   Editar pago programado",
             "🗑️   Eliminar programado",
             "🔙  Volver",
         ];
@@ -894,14 +1456,9 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                 };
 
                 println!();
-                println!("  Meses que cubre este pago, separados por coma.");
-                println!("  Ej: 2026-05,2026-06  para cubrir mayo y junio.");
-                let cubiertos_raw = pedir_texto_opcional("Meses cubiertos");
-                let meses_cubiertos: Vec<String> = cubiertos_raw
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                println!("  Meses que cubre este pago (Enter=ninguno).");
+                println!("  Acepta: junio, jun 2026, 06, 062026, 2026-06, separados por coma.");
+                let meses_cubiertos = pedir_meses_flexibles("Meses cubiertos", &[]);
 
                 let hoy_sig = {
                     let h = chrono::Local::now();
@@ -912,108 +1469,393 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                     };
                     format!("{}-{:02}", y, m)
                 };
-                let fecha_pago = loop {
-                    let raw = pedir_texto_opcional(&format!(
-                        "¿En qué mes harás el pago? (vacío={})",
-                        hoy_sig
-                    ));
-                    let candidate = if raw.is_empty() { hoy_sig.clone() } else { raw };
-                    let partes: Vec<&str> = candidate.splitn(2, '-').collect();
-                    let ok = partes.len() == 2
-                        && partes[0].len() == 4
-                        && partes[0].chars().all(|c| c.is_ascii_digit())
-                        && partes[1]
-                            .parse::<u32>()
-                            .is_ok_and(|m| (1..=12).contains(&m));
-                    if ok {
-                        break candidate;
-                    }
-                    println!("  ⚠️  Formato inválido. Usa YYYY-MM (ej: 2026-06).");
-                    println!("     Si cubre varios meses, anótalos en 'Meses cubiertos'.");
-                };
+                let fecha_pago = pedir_mes_flexible(
+                    &format!("¿En qué mes harás el pago? (Enter={})", hoy_sig),
+                    &hoy_sig,
+                    false,
+                );
                 let nota = pedir_texto_opcional("Nota (vacío=ninguna)");
 
-                // ── Resumen y confirmación ──────────────────────────────
+                // ── Frecuencia de pago ──────────────────────────────────
                 println!();
-                println!("  ── Resumen del pago programado ──────────────────");
-                println!(
-                    "  Deuda:         {}",
-                    state.asesor.rastreador.deudas[idx].nombre.cyan().bold()
-                );
-                println!("  Monto P&I:     ${:.2}", monto_pi);
-                if monto_escrow > 0.01 {
-                    println!("  Escrow:        ${:.2}", monto_escrow);
+                let (intervalo, n_total): (usize, usize) = {
+                    let opciones_frec = &[
+                        "Pago único (sin repetir)",
+                        "Mensual (cada mes)",
+                        "Bimestral (cada 2 meses)",
+                        "Trimestral (cada 3 meses)",
+                        "Personalizado (cada N meses)",
+                    ];
+                    let iv = match menu("Frecuencia de pago:", opciones_frec) {
+                        Some(0) | None => 0usize,
+                        Some(1) => 1,
+                        Some(2) => 2,
+                        Some(3) => 3,
+                        Some(4) => (pedir_f64("Cada ¿cuántos meses?", 2.0) as usize).max(1),
+                        _ => 0,
+                    };
+                    if iv == 0 {
+                        (0, 1)
+                    } else {
+                        // Sugerido hasta fin de año
+                        let mut fp_it = fecha_pago.splitn(2, '-');
+                        let _fp_y: i32 = fp_it.next().unwrap_or("2026").parse().unwrap_or(2026);
+                        let fp_m: i32 = fp_it.next().unwrap_or("01").parse().unwrap_or(1);
+                        let hasta_dic = (((12 - fp_m).max(0) as f64) / iv as f64).ceil() as usize;
+                        let hasta_dic = hasta_dic.max(1);
+
+                        // Estimado hasta extinción de la deuda
+                        let deuda_ref = &state.asesor.rastreador.deudas[idx];
+                        let saldo = deuda_ref
+                            .historial
+                            .last()
+                            .map(|m| m.saldo_final)
+                            .unwrap_or(0.0);
+                        let tasa_m = deuda_ref.tasa_anual / 12.0 / 100.0;
+                        let pago_m = if monto_pi > 0.01 {
+                            monto_pi
+                        } else {
+                            deuda_ref.pago_minimo
+                        };
+                        let meses_ext = if saldo <= 0.01 || pago_m <= 0.01 {
+                            hasta_dic * iv
+                        } else if tasa_m < 0.0001 {
+                            (saldo / pago_m).ceil() as usize
+                        } else {
+                            let ratio = 1.0 - tasa_m * saldo / pago_m;
+                            if ratio <= 0.0 {
+                                0 // pago insuficiente
+                            } else {
+                                (-ratio.ln() / (1.0 + tasa_m).ln()).ceil() as usize
+                            }
+                        };
+                        let pagos_ext = if meses_ext == 0 {
+                            0 // indica que el pago no cubre intereses
+                        } else {
+                            ((meses_ext as f64) / (iv as f64)).ceil() as usize
+                        };
+
+                        // Menú "¿hasta cuándo?"
+                        println!();
+                        let etiq_ext = if pagos_ext == 0 {
+                            format!(
+                                "Hasta extinción de la deuda  \
+                                 (⚠️  pago P&I ${:.2} no cubre intereses)",
+                                monto_pi
+                            )
+                        } else {
+                            format!(
+                                "Hasta extinción de la deuda  \
+                                 (~{} pagos / ~{} meses)",
+                                pagos_ext,
+                                pagos_ext * iv
+                            )
+                        };
+                        let opc_fin = [
+                            "Número específico de veces",
+                            &format!("Hasta fin de año  ({} pagos)", hasta_dic),
+                            etiq_ext.as_str(),
+                        ];
+                        let nt = match menu("¿Hasta cuándo repetir?", &opc_fin) {
+                            Some(0) | None => {
+                                let n = pedir_f64(
+                                    &format!(
+                                        "¿Cuántas veces en total? \
+                                         (fin de año ≈ {})",
+                                        hasta_dic
+                                    ),
+                                    hasta_dic as f64,
+                                ) as usize;
+                                n.max(1)
+                            }
+                            Some(1) => hasta_dic,
+                            Some(2) => {
+                                if pagos_ext == 0 {
+                                    println!(
+                                        "  ⚠️  El pago no cubre los intereses; \
+                                         usa un monto mayor."
+                                    );
+                                    hasta_dic
+                                } else {
+                                    pagos_ext
+                                }
+                            }
+                            _ => 1,
+                        };
+                        (iv, nt.max(1))
+                    }
+                };
+
+                // ── Advertencia para lotes grandes ──────────────────────
+                {
+                    let meses_tot = n_total * intervalo.max(1);
+                    if meses_tot > 24 {
+                        println!();
+                        println!(
+                            "  {}  Esto generará {} pagos ({} meses ≈ {} años).",
+                            "⚠️".yellow(),
+                            n_total,
+                            meses_tot,
+                            meses_tot / 12
+                        );
+                        if meses_tot > 60 {
+                            println!(
+                                "     Son más de 5 años — la tabla no cabrá en \
+                                 pantalla. Considera un ciclo más corto."
+                            );
+                        }
+                        if !confirmar("¿Continuar de todas formas?", false) {
+                            println!("  Cancelado.");
+                            pausa();
+                            continue;
+                        }
+                    }
                 }
-                println!("  Mes del pago:  {}", fecha_pago.cyan());
-                if !meses_cubiertos.is_empty() {
-                    println!("  Meses cubiertos: {}", meses_cubiertos.join(", "));
+
+                // ── Generar lote de pagos ───────────────────────────────
+                let mut lote: Vec<(String, Vec<String>, String)> = (0..n_total)
+                    .map(|i| {
+                        let offset = if intervalo == 0 {
+                            0i32
+                        } else {
+                            (i * intervalo) as i32
+                        };
+                        let fecha_i = avanzar_mes(&fecha_pago, offset);
+                        let meses_i: Vec<String> = meses_cubiertos
+                            .iter()
+                            .map(|m| avanzar_mes(m, offset))
+                            .collect();
+                        let nota_i = if n_total > 1 && i > 0 {
+                            if nota.is_empty() {
+                                format!("#{}/{}", i + 1, n_total)
+                            } else {
+                                format!("{} #{}/{}", nota, i + 1, n_total)
+                            }
+                        } else {
+                            nota.clone()
+                        };
+                        (fecha_i, meses_i, nota_i)
+                    })
+                    .collect();
+
+                // ── Revisar / editar / confirmar ────────────────────────
+                let mut confirmado = false;
+                loop {
+                    separador("─");
+                    let frec_str = match intervalo {
+                        0 => "pago único".to_string(),
+                        1 => "mensual".to_string(),
+                        2 => "bimestral".to_string(),
+                        3 => "trimestral".to_string(),
+                        n => format!("cada {} meses", n),
+                    };
+                    if n_total == 1 {
+                        println!("  ── Resumen del pago programado ──────────────────");
+                    } else {
+                        println!(
+                            "  ── {} pagos  [frecuencia: {}] ───────────────────",
+                            n_total, frec_str
+                        );
+                    }
+                    println!(
+                        "  Deuda:     {}",
+                        state.asesor.rastreador.deudas[idx].nombre.cyan().bold()
+                    );
+                    println!("  Monto P&I: ${:.2}", monto_pi);
+                    if monto_escrow > 0.01 {
+                        println!("  Escrow:    ${:.2}", monto_escrow);
+                    }
+                    println!();
+                    for (num, (fecha_i, meses_i, nota_i)) in lote.iter().enumerate() {
+                        let meses_str = if meses_i.is_empty() {
+                            String::new()
+                        } else {
+                            format!("  (cubre: {})", meses_i.join(", "))
+                        };
+                        let nota_str = if nota_i.is_empty() {
+                            String::new()
+                        } else {
+                            format!("  [{}]", nota_i)
+                        };
+                        if n_total == 1 {
+                            println!("  Fecha pago:  {}", fecha_i.cyan());
+                            if !meses_i.is_empty() {
+                                println!("  Meses cubr:  {}", meses_i.join(", "));
+                            }
+                            if !nota_i.is_empty() {
+                                println!("  Nota:        {}", nota_i);
+                            }
+                        } else {
+                            println!(
+                                "    {:>2}. {}{}{}",
+                                num + 1,
+                                fecha_i.cyan(),
+                                meses_str.dimmed(),
+                                nota_str.dimmed()
+                            );
+                        }
+                    }
+                    println!();
+                    let opc_rev: &[&str] = if n_total == 1 {
+                        &["Confirmar", "Editar este pago", "Cancelar"]
+                    } else {
+                        &[
+                            "Confirmar todos",
+                            "Editar un pago del lote",
+                            "Cortar lote (eliminar pagos desde el #N en adelante)",
+                            "Cancelar",
+                        ]
+                    };
+                    match menu("¿Qué deseas hacer?", opc_rev) {
+                        Some(0) => {
+                            confirmado = true;
+                            break;
+                        }
+                        Some(1) => {
+                            let num_editar = if n_total == 1 {
+                                1usize
+                            } else {
+                                let n = pedir_f64(
+                                    &format!("¿Qué número editar? (1-{})", lote.len()),
+                                    1.0,
+                                ) as usize;
+                                n.clamp(1, lote.len())
+                            };
+                            if let Some(entry) = lote.get_mut(num_editar - 1) {
+                                println!(
+                                    "  Editando pago #{}: fecha={}, nota='{}'",
+                                    num_editar, entry.0, entry.2
+                                );
+                                let nueva_fecha = pedir_mes_flexible(
+                                    &format!("Nueva fecha (Enter = {})", entry.0),
+                                    &entry.0,
+                                    false,
+                                );
+                                if !nueva_fecha.is_empty() && nueva_fecha != entry.0 {
+                                    entry.0 = nueva_fecha;
+                                }
+                                let nueva_nota = pedir_texto_opcional(&format!(
+                                    "Nueva nota (Enter = sin cambio, actual: '{}')",
+                                    entry.2
+                                ));
+                                if !nueva_nota.is_empty() {
+                                    entry.2 = nueva_nota;
+                                }
+                            }
+                        }
+                        Some(2) if n_total > 1 => {
+                            // Cortar lote desde el pago #N en adelante
+                            println!();
+                            println!(
+                                "  El lote tiene {} pagos ({} → {}).",
+                                lote.len(),
+                                lote.first()
+                                    .map(|e| e.0.as_str())
+                                    .unwrap_or("?")
+                                    .cyan()
+                                    .to_string(),
+                                lote.last()
+                                    .map(|e| e.0.as_str())
+                                    .unwrap_or("?")
+                                    .cyan()
+                                    .to_string()
+                            );
+                            let desde = pedir_f64(
+                                "Mantener solo hasta el pago # (los siguientes se eliminan):",
+                                lote.len() as f64,
+                            ) as usize;
+                            let desde = desde.clamp(1, lote.len());
+                            let eliminados = lote.len() - desde;
+                            if eliminados > 0 {
+                                lote.truncate(desde);
+                                println!(
+                                    "  {} Se eliminaron {} pagos. Quedan {}.",
+                                    "✂️".yellow(),
+                                    eliminados,
+                                    lote.len()
+                                );
+                            } else {
+                                println!("  Sin cambios (no se eliminó ningún pago).");
+                            }
+                        }
+                        _ => break, // cancelado (Some(3) o None cuando n_total==1 es Some(2))
+                    }
                 }
-                if !nota.is_empty() {
-                    println!("  Nota:          {}", nota);
-                }
-                println!();
-                if !confirmar("¿Confirmar este pago programado?", true) {
+                if !confirmado {
                     println!("  Cancelado.");
                     pausa();
                     continue;
                 }
 
                 let nombre_deuda = state.asesor.rastreador.deudas[idx].nombre.clone();
-                let meses_clon = meses_cubiertos.clone();
-                let nota_clon = nota.clone();
-                state
-                    .asesor
-                    .rastreador
-                    .pagos_programados
-                    .push(omniplanner::ml::PagoProgramado {
-                        nombre_deuda: nombre_deuda.clone(),
-                        monto_pi,
-                        monto_escrow,
-                        meses_cubiertos,
-                        fecha_pago_prevista: fecha_pago.clone(),
-                        nota,
-                    });
-                // ── Emitir evento ───────────────────────────────────────
-                {
-                    use omniplanner::eventos::{
-                        EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
-                    };
-                    let fecha_evt = chrono::NaiveDate::parse_from_str(
-                        &format!("{}-01", fecha_pago),
-                        "%Y-%m-%d",
-                    )
-                    .unwrap_or_else(|_| chrono::Local::now().date_naive());
-                    let etiq_meses = if meses_clon.is_empty() {
-                        fecha_pago.clone()
-                    } else {
-                        meses_clon.join(" + ")
-                    };
-                    let mut ev = EventoSistema::nuevo(
-                        Modulo::Rastreador,
-                        TipoEvento::PagoProgramado,
-                        format!("Programado: {} ({})", nombre_deuda, etiq_meses),
-                    )
-                    .con_fecha(fecha_evt)
-                    .con_monto(monto_pi + monto_escrow)
-                    .con_contraparte(nombre_deuda.clone())
-                    .con_estado(EstadoEvento::Pendiente)
-                    .con_referencia(Referencia::nueva(
-                        "rastreador",
-                        "deuda",
-                        &nombre_deuda,
-                        &nombre_deuda,
-                    ))
-                    .con_etiqueta("programado");
-                    if !nota_clon.is_empty() {
-                        ev = ev.con_nota(nota_clon);
+                let fecha_primera = lote.first().map(|(f, _, _)| f.clone()).unwrap_or_default();
+                let fecha_ultima = lote.last().map(|(f, _, _)| f.clone()).unwrap_or_default();
+
+                for (fecha_i, meses_i, nota_i) in lote {
+                    let meses_clon = meses_i.clone();
+                    let nota_clon = nota_i.clone();
+                    state.asesor.rastreador.pagos_programados.push(
+                        omniplanner::ml::PagoProgramado {
+                            nombre_deuda: nombre_deuda.clone(),
+                            monto_pi,
+                            monto_escrow,
+                            meses_cubiertos: meses_i,
+                            fecha_pago_prevista: fecha_i.clone(),
+                            nota: nota_i,
+                        },
+                    );
+                    // ── Emitir evento ───────────────────────────────────────
+                    {
+                        use omniplanner::eventos::{
+                            EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
+                        };
+                        let fecha_evt = chrono::NaiveDate::parse_from_str(
+                            &format!("{}-01", fecha_i),
+                            "%Y-%m-%d",
+                        )
+                        .unwrap_or_else(|_| chrono::Local::now().date_naive());
+                        let etiq_meses = if meses_clon.is_empty() {
+                            fecha_i.clone()
+                        } else {
+                            meses_clon.join(" + ")
+                        };
+                        let mut ev = EventoSistema::nuevo(
+                            Modulo::Rastreador,
+                            TipoEvento::PagoProgramado,
+                            format!("Programado: {} ({})", nombre_deuda, etiq_meses),
+                        )
+                        .con_fecha(fecha_evt)
+                        .con_monto(monto_pi + monto_escrow)
+                        .con_contraparte(nombre_deuda.clone())
+                        .con_estado(EstadoEvento::Pendiente)
+                        .con_referencia(Referencia::nueva(
+                            "rastreador",
+                            "deuda",
+                            &nombre_deuda,
+                            &nombre_deuda,
+                        ))
+                        .con_etiqueta("programado");
+                        if !nota_clon.is_empty() {
+                            ev = ev.con_nota(nota_clon);
+                        }
+                        state.bus.emitir(ev);
                     }
-                    state.bus.emitir(ev);
                 }
-                println!(
-                    "  {} Pago programado para {}.",
-                    "✅".green(),
-                    fecha_pago.cyan().bold()
-                );
+                if n_total == 1 {
+                    println!(
+                        "  {} Pago programado para {}.",
+                        "✅".green(),
+                        fecha_primera.cyan().bold()
+                    );
+                } else {
+                    println!(
+                        "  {} {} pagos programados ({} → {}).",
+                        "✅".green(),
+                        n_total,
+                        fecha_primera.cyan().bold(),
+                        fecha_ultima.cyan().bold()
+                    );
+                }
                 pausa();
             }
             Some(1) => {
@@ -1138,6 +1980,131 @@ pub fn rastreador_programar_pago(state: &mut AppState) {
                 pausa();
             }
             Some(2) => {
+                // Editar programado
+                if state.asesor.rastreador.pagos_programados.is_empty() {
+                    println!("  No hay pagos programados.");
+                    pausa();
+                    continue;
+                }
+                let etiquetas: Vec<String> = state
+                    .asesor
+                    .rastreador
+                    .pagos_programados
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "{} — {} — ${:.2}",
+                            p.nombre_deuda,
+                            p.fecha_pago_prevista,
+                            p.monto_total()
+                        )
+                    })
+                    .collect();
+                let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+                let Some(pidx) = menu("¿Cuál editar?", &refs) else {
+                    continue;
+                };
+
+                let prog = state.asesor.rastreador.pagos_programados[pidx].clone();
+
+                // ¿La deuda tiene escrow?
+                let tiene_escrow = state
+                    .asesor
+                    .rastreador
+                    .deudas
+                    .iter()
+                    .find(|d| d.nombre == prog.nombre_deuda)
+                    .map(|d| d.tiene_escrow_configurado())
+                    .unwrap_or(false);
+
+                println!();
+                println!(
+                    "  Editando pago programado — {}",
+                    prog.nombre_deuda.cyan().bold()
+                );
+                println!("    Fecha:          {}", prog.fecha_pago_prevista);
+                println!("    Monto P&I:      ${:.2}", prog.monto_pi);
+                if prog.monto_escrow > 0.01 {
+                    println!("    Monto Escrow:   ${:.2}", prog.monto_escrow);
+                }
+                if !prog.meses_cubiertos.is_empty() {
+                    println!("    Meses cubiertos: {}", prog.meses_cubiertos.join(", "));
+                }
+                if !prog.nota.is_empty() {
+                    println!("    Nota:           {}", prog.nota);
+                }
+                println!();
+                println!(
+                    "  {} Deja vacío (Enter) para mantener el valor actual.",
+                    "ℹ".cyan()
+                );
+                println!();
+
+                // ── Monto P&I ────────────────────────────────────────────
+                let nuevo_pi = pedir_f64(
+                    &format!("Monto P&I (actual ${:.2})", prog.monto_pi),
+                    prog.monto_pi,
+                );
+
+                // ── Monto Escrow ─────────────────────────────────────────
+                let nuevo_escrow = if tiene_escrow || prog.monto_escrow > 0.01 {
+                    pedir_f64(
+                        &format!("Monto Escrow (actual ${:.2})", prog.monto_escrow),
+                        prog.monto_escrow,
+                    )
+                } else {
+                    0.0
+                };
+
+                // ── Meses cubiertos ──────────────────────────────────────
+                println!();
+                println!("  Acepta: junio, jun 2026, 06, 062026, 2026-06, separados por coma.");
+                let nuevos_meses = pedir_meses_flexibles(
+                    &format!(
+                        "Meses cubiertos (actual: \"{}\")",
+                        prog.meses_cubiertos.join(",")
+                    ),
+                    &prog.meses_cubiertos,
+                );
+
+                // ── Fecha de pago prevista ───────────────────────────────
+                println!();
+                let nueva_fecha = pedir_mes_flexible(
+                    &format!(
+                        "Mes en que harás el pago (actual: {})",
+                        prog.fecha_pago_prevista
+                    ),
+                    &prog.fecha_pago_prevista,
+                    true,
+                );
+
+                // ── Nota ─────────────────────────────────────────────────
+                let nueva_nota = {
+                    let input = pedir_texto_opcional(&format!("Nota (actual: \"{}\")", prog.nota));
+                    if input.trim().is_empty() {
+                        prog.nota.clone()
+                    } else {
+                        input
+                    }
+                };
+
+                // ── Aplicar cambios ──────────────────────────────────────
+                let p = &mut state.asesor.rastreador.pagos_programados[pidx];
+                p.monto_pi = nuevo_pi;
+                p.monto_escrow = nuevo_escrow;
+                p.meses_cubiertos = nuevos_meses;
+                p.fecha_pago_prevista = nueva_fecha.clone();
+                p.nota = nueva_nota;
+
+                println!();
+                println!(
+                    "  {} Pago programado actualizado para {}.",
+                    "✓".green(),
+                    nueva_fecha.cyan().bold()
+                );
+                pausa();
+            }
+            Some(3) => {
                 // Eliminar programado
                 if state.asesor.rastreador.pagos_programados.is_empty() {
                     println!("  No hay pagos programados.");
@@ -2195,6 +3162,233 @@ pub fn mostrar_proyeccion_individual(
     }
 
     println!();
+    pausa();
+}
+
+/// Calcula mora e intereses acumulados por un período de no-pago,
+/// y muestra cuánto debe pagar el usuario para reanudar normalmente.
+pub fn rastreador_calcular_mora(state: &mut AppState) {
+    limpiar();
+    separador("⚠️  PERÍODO DE ATRASO / MORA");
+
+    if state.asesor.rastreador.deudas.is_empty() {
+        println!("  No hay deudas registradas.");
+        pausa();
+        return;
+    }
+
+    // ── Seleccionar deuda ─────────────────────────────────────
+    let etiquetas: Vec<String> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .map(|d| {
+            let saldo = d.saldo_actual();
+            format!(
+                "{} — saldo: ${:.2}  tasa: {:.1}%  mín: ${:.2}",
+                d.nombre, saldo, d.tasa_anual, d.pago_minimo
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = etiquetas.iter().map(String::as_str).collect();
+    let idx = match menu("Selecciona la deuda en atraso:", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+    let nombre_deuda = state.asesor.rastreador.deudas[idx].nombre.clone();
+
+    // ── Período de no-pago ────────────────────────────────────
+    println!();
+    println!("  Ingresa el rango de meses que NO se pagaron.");
+    let hoy = chrono::Local::now();
+    let default_ini = format!("{}-01", chrono::Local::now().format("%Y-%m"));
+    let _ = default_ini;
+    let default_ini = format!(
+        "{:04}-{:02}",
+        hoy.year(),
+        hoy.month().saturating_sub(2).max(1)
+    );
+    let default_fin = format!("{:04}-{:02}", hoy.year(), hoy.month());
+
+    let mes_ini = pedir_mes_flexible(
+        "Primer mes sin pagar (YYYY-MM o 'mayo 2026'):",
+        &default_ini,
+        true,
+    );
+    if mes_ini.is_empty() {
+        return;
+    }
+    let mes_fin = pedir_mes_flexible(
+        "Último mes sin pagar (YYYY-MM o 'julio 2026'):",
+        &default_fin,
+        true,
+    );
+    if mes_fin.is_empty() {
+        return;
+    }
+
+    // ── Tasa de mora ──────────────────────────────────────────
+    println!();
+    println!("  La mora se calcula como % mensual sobre el pago mínimo vencido.");
+    println!("  (Típico: 5%–15% anual. Revisa tu contrato.)");
+    let tasa_mora = pedir_f64("Tasa de mora anual % (Enter = 12.0):", 12.0);
+
+    // ── Calcular ──────────────────────────────────────────────
+    let resumen =
+        state.asesor.rastreador.deudas[idx].calcular_atraso(&mes_ini, &mes_fin, tasa_mora);
+
+    if resumen.meses_sin_pagar == 0 {
+        println!("  No se encontraron meses en ese rango.");
+        pausa();
+        return;
+    }
+
+    // ── Mostrar resultado ─────────────────────────────────────
+    limpiar();
+    separador("📊 RESUMEN DE MORA");
+    println!("  Deuda:   {}", nombre_deuda.cyan().bold());
+    println!(
+        "  Período: {} → {}  ({} meses sin pagar)",
+        mes_ini.cyan(),
+        mes_fin.cyan(),
+        resumen.meses_sin_pagar
+    );
+    println!(
+        "  Saldo al inicio del atraso: {}",
+        format!("${:.2}", resumen.saldo_al_inicio).yellow()
+    );
+    println!(
+        "  Saldo al cierre del atraso: {}  (creció por intereses capitalizados)",
+        format!("${:.2}", resumen.saldo_al_final).red().bold()
+    );
+    println!();
+    println!("  ── Desglose mes a mes ───────────────────────────────");
+    println!(
+        "  {:<9}  {:>12}  {:>10}  {:>8}  {:>12}",
+        "Mes", "Saldo inicio", "Intereses", "Mora", "Saldo fin"
+    );
+    println!("  {}", "─".repeat(60));
+    for det in &resumen.detalle {
+        println!(
+            "  {:<9}  {:>12}  {:>10}  {:>8}  {:>12}",
+            det.mes,
+            format!("${:.2}", det.saldo_inicio),
+            format!("${:.2}", det.intereses).yellow().to_string(),
+            format!("${:.2}", det.mora).red().to_string(),
+            format!("${:.2}", det.saldo_fin)
+        );
+    }
+    println!("  {}", "─".repeat(60));
+    println!(
+        "  {:>40}  {:>10}  {:>8}",
+        "TOTALES:",
+        format!("${:.2}", resumen.total_intereses_extra)
+            .yellow()
+            .to_string(),
+        format!("${:.2}", resumen.total_mora).red().to_string()
+    );
+    println!();
+    println!("  ── Lo que debes pagar para reanudar ─────────────────");
+    println!(
+        "    Mínimos acumulados ({} × mín):  {}",
+        resumen.meses_sin_pagar,
+        format!("${:.2}", resumen.total_minimos_acumulados).yellow()
+    );
+    println!(
+        "    Mora acumulada:                {}",
+        format!("${:.2}", resumen.total_mora).red()
+    );
+    let pago_mes_actual = state.asesor.rastreador.deudas[idx]
+        .pago_minimo
+        .max(state.asesor.rastreador.deudas[idx].principal_interes_mensual);
+    println!(
+        "    Cuota regular del mes actual:  {}",
+        format!("${:.2}", pago_mes_actual).green()
+    );
+    println!("    {}", "─".repeat(46));
+    println!(
+        "    TOTAL A PAGAR PARA REANUDAR:   {}",
+        format!("${:.2}", resumen.pago_para_reanudar).green().bold()
+    );
+    println!();
+    println!(
+        "  ⚠️  El saldo de la deuda quedará en {} después del pago de reanudación.",
+        format!("${:.2}", resumen.saldo_al_final).red().bold()
+    );
+    println!("     Ese saldo continuará amortizándose con los pagos regulares siguientes.");
+    println!();
+
+    // ── Opción: crear pago programado de reanudación ──────────
+    let opciones_post = &[
+        "Programar el pago de reanudación como pago futuro",
+        "Solo consultar (no crear nada)",
+    ];
+    if let Some(0) = menu("¿Qué deseas hacer con este cálculo?", opciones_post) {
+        let mes_reanudar = {
+            // Mes siguiente al fin del atraso
+            let mut it = mes_fin.splitn(2, '-');
+            let y: i32 = it.next().unwrap_or("2026").parse().unwrap_or(2026);
+            let m: i32 = it.next().unwrap_or("01").parse().unwrap_or(1);
+            let total = y * 12 + m; // mes_fin en absoluto, +1
+            let ny = total / 12;
+            let nm = total % 12 + 1;
+            format!("{:04}-{:02}", ny, nm)
+        };
+        let nota_reanudacion = format!(
+            "Reanudación tras atraso {}-{}: mín×{}+mora",
+            mes_ini, mes_fin, resumen.meses_sin_pagar
+        );
+        state
+            .asesor
+            .rastreador
+            .pagos_programados
+            .push(omniplanner::ml::PagoProgramado {
+                nombre_deuda: nombre_deuda.clone(),
+                monto_pi: resumen.pago_para_reanudar,
+                monto_escrow: 0.0,
+                meses_cubiertos: resumen.detalle.iter().map(|d| d.mes.clone()).collect(),
+                fecha_pago_prevista: mes_reanudar.clone(),
+                nota: nota_reanudacion,
+            });
+        // Emitir evento
+        {
+            use omniplanner::eventos::{
+                EstadoEvento, EventoSistema, Modulo, Referencia, TipoEvento,
+            };
+            let fecha_evt =
+                chrono::NaiveDate::parse_from_str(&format!("{}-01", mes_reanudar), "%Y-%m-%d")
+                    .unwrap_or_else(|_| chrono::Local::now().date_naive());
+            let ev = EventoSistema::nuevo(
+                Modulo::Rastreador,
+                TipoEvento::PagoProgramado,
+                format!("Reanudación mora: {} ({})", nombre_deuda, mes_reanudar),
+            )
+            .con_fecha(fecha_evt)
+            .con_monto(resumen.pago_para_reanudar)
+            .con_contraparte(nombre_deuda.clone())
+            .con_estado(EstadoEvento::Pendiente)
+            .con_referencia(Referencia::nueva(
+                "rastreador",
+                "deuda",
+                &nombre_deuda,
+                &nombre_deuda,
+            ))
+            .con_etiqueta("mora")
+            .con_nota(format!(
+                "Incluye {} meses de atraso + mora ${:.2}",
+                resumen.meses_sin_pagar, resumen.total_mora
+            ));
+            state.bus.emitir(ev);
+        }
+        let _ = state.guardar();
+        println!(
+            "  {} Pago de reanudación programado para {}  (${:.2}).",
+            "✅".green(),
+            mes_reanudar.cyan().bold(),
+            resumen.pago_para_reanudar
+        );
+    }
     pausa();
 }
 
@@ -4312,34 +5506,78 @@ pub fn rastreador_editar_pago(state: &mut AppState) {
 
         if let Some(midx) = menu("¿Cuál mes editar?", &refs_m) {
             let actual = &d.historial[midx];
-            println!();
-            println!("  Datos actuales: {}", actual.mes);
-            println!("    Saldo inicio: ${:.2}", actual.saldo_inicio);
             let (pago_exigible_pi, pago_exigible_escrow) = d.pago_exigible_componentes_en_mes(midx);
             let pago_exigible_total = d.pago_exigible_total_en_mes(midx);
-            println!("    Pago P&I: ${:.2}", actual.pago);
-            if d.tiene_escrow_configurado() {
-                println!("    Pago Escrow: ${:.2}", actual.pago_escrow);
+            let tiene_escrow = d.tiene_escrow_configurado();
+
+            println!();
+            println!("  Datos actuales — {}", actual.mes.cyan().bold());
+            println!("    Fecha (mes):            {}", actual.mes);
+            println!("    Saldo inicio:           ${:.2}", actual.saldo_inicio);
+            println!("    Pago P&I:               ${:.2}", actual.pago);
+            if tiene_escrow {
+                println!("    Pago Escrow:            ${:.2}", actual.pago_escrow);
             }
-            println!("    Pago total: ${:.2}", actual.pago + actual.pago_escrow);
-            println!("    Pago exigible acumulado: ${:.2}", pago_exigible_total);
-            println!("    Nuevos cargos: ${:.2}", actual.nuevos_cargos);
+            println!(
+                "    Pago total:             ${:.2}",
+                actual.pago + actual.pago_escrow
+            );
+            println!("    Pago exigible acumulado:${:.2}", pago_exigible_total);
+            println!("    Nuevos cargos:          ${:.2}", actual.nuevos_cargos);
+            if !actual.nota.is_empty() {
+                println!("    Nota:                   {}", actual.nota);
+            }
+            println!();
+            println!(
+                "  {} Deja vacío (Enter) cualquier campo para mantener el valor actual.",
+                "ℹ".cyan()
+            );
             println!();
 
+            // ── Fecha (mes) ──────────────────────────────────────────────────
+            let mes_actual = actual.mes.clone();
+            println!(
+                "  {}",
+                "── Fecha ─────────────────────────────────────────".dimmed()
+            );
+            println!("  Acepta: junio, jun 2026, 06, 062026, 2026-06. Enter = conservar actual.");
+            let nueva_fecha = pedir_mes_flexible(
+                &format!("Fecha del mes (actual: {})", mes_actual),
+                &mes_actual,
+                true,
+            );
+
+            // ── Saldo de inicio ──────────────────────────────────────────────
+            println!();
+            println!(
+                "  {}",
+                "── Saldo de inicio ───────────────────────────────".dimmed()
+            );
+            let nuevo_saldo_inicio = pedir_f64(
+                &format!("Saldo de inicio (actual ${:.2})", actual.saldo_inicio),
+                actual.saldo_inicio,
+            );
+
+            // ── Pagos ────────────────────────────────────────────────────────
+            println!();
+            println!(
+                "  {}",
+                "── Montos pagados ────────────────────────────────".dimmed()
+            );
             let nuevo_pago = pedir_f64(
                 &format!(
-                    "Nuevo pago P&I (actual ${:.2}, exigible ${:.2})",
+                    "Pago P&I (actual ${:.2}, exigible ${:.2})",
                     actual.pago, pago_exigible_pi
                 ),
-                pago_exigible_pi.max(actual.pago),
+                actual.pago,
             );
-            let nuevo_pago_escrow = if d.tiene_escrow_configurado() {
+            let nuevo_pago_escrow = if tiene_escrow {
                 pedir_f64(
                     &format!(
-                        "Nuevo pago Escrow (actual ${:.2}, exigible ${:.2})",
+                        "Pago Escrow (actual ${:.2}, exigible ${:.2})",
                         actual.pago_escrow, pago_exigible_escrow
                     ),
-                    pago_exigible_escrow.max(actual.pago_escrow),
+                    actual.pago_escrow,
                 )
             } else {
                 0.0
@@ -4349,9 +5587,25 @@ pub fn rastreador_editar_pago(state: &mut AppState) {
                 actual.nuevos_cargos,
             );
 
-            // Recalcular desde este mes en adelante
+            // ── Nota libre ───────────────────────────────────────────────────
+            println!();
+            println!(
+                "  {}",
+                "── Nota ──────────────────────────────────────────".dimmed()
+            );
+            let nota_actual = actual.nota.clone();
+            let nueva_nota = {
+                let input = pedir_texto_opcional(&format!("Nota (actual: \"{}\")", nota_actual));
+                if input.trim().is_empty() {
+                    nota_actual
+                } else {
+                    input
+                }
+            };
+
+            // ── Recalcular ───────────────────────────────────────────────────
             let tasa_anual = state.asesor.rastreador.deudas[idx].tasa_anual;
-            let saldo_inicio = state.asesor.rastreador.deudas[idx].historial[midx].saldo_inicio;
+            let saldo_inicio = nuevo_saldo_inicio;
 
             // Actualizar este mes
             let tasa_mensual = tasa_anual / 100.0 / 12.0;
@@ -4359,12 +5613,15 @@ pub fn rastreador_editar_pago(state: &mut AppState) {
             let intereses = saldo_despues * tasa_mensual;
             let saldo_final = saldo_despues + intereses + nuevos_cargos;
 
+            state.asesor.rastreador.deudas[idx].historial[midx].mes = nueva_fecha.clone();
+            state.asesor.rastreador.deudas[idx].historial[midx].saldo_inicio = saldo_inicio;
             state.asesor.rastreador.deudas[idx].historial[midx].pago = nuevo_pago;
             state.asesor.rastreador.deudas[idx].historial[midx].pago_escrow = nuevo_pago_escrow;
             state.asesor.rastreador.deudas[idx].historial[midx].nuevos_cargos = nuevos_cargos;
             state.asesor.rastreador.deudas[idx].historial[midx].intereses = intereses;
             state.asesor.rastreador.deudas[idx].historial[midx].saldo_final =
                 if saldo_final < 0.01 { 0.0 } else { saldo_final };
+            state.asesor.rastreador.deudas[idx].historial[midx].nota = nueva_nota;
 
             // Recalcular meses siguientes
             let mut saldo = if saldo_final < 0.01 { 0.0 } else { saldo_final };
@@ -4382,9 +5639,11 @@ pub fn rastreador_editar_pago(state: &mut AppState) {
                 saldo = if sf < 0.01 { 0.0 } else { sf };
             }
 
+            println!();
             println!(
-                "  {} Mes actualizado y saldos recalculados. Nuevo saldo final: ${:.2}",
+                "  {} Pago actualizado para el mes {}. Saldos recalculados. Nuevo saldo final: ${:.2}",
                 "✓".green(),
+                nueva_fecha.cyan().bold(),
                 state.asesor.rastreador.deudas[idx].saldo_actual()
             );
             if nuevo_pago + nuevo_pago_escrow + 0.01 < pago_exigible_total {
@@ -5278,6 +6537,1018 @@ pub fn rastreador_eliminar_ingreso(state: &mut AppState) {
         eliminado.concepto
     );
     pausa();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Selección múltiple de deudas → calcular total / simular liquidar
+// ══════════════════════════════════════════════════════════════════════════════
+
+pub fn rastreador_seleccionar_calcular(state: &mut AppState) {
+    limpiar();
+    separador("🧮 SELECCIONAR DEUDAS — CALCULAR / LIQUIDAR");
+
+    let deudas = &state.asesor.rastreador.deudas;
+    if deudas.is_empty() {
+        println!("  Sin deudas registradas.");
+        pausa();
+        return;
+    }
+
+    // Construir etiquetas con saldo y pago mensual
+    let etiquetas: Vec<String> = deudas
+        .iter()
+        .map(|d| {
+            let saldo = d.saldo_actual();
+            let pago = d.pago_total_mensual();
+            let estado = if d.activa { "" } else { " [liquidada]" };
+            format!(
+                "{:<25}  Saldo: {:>11}  Pago/mes: {:>9}{}",
+                if d.nombre.len() > 24 {
+                    format!("{}…", &d.nombre[..23])
+                } else {
+                    d.nombre.clone()
+                },
+                format!("${:.2}", saldo),
+                format!("${:.2}", pago),
+                estado
+            )
+        })
+        .collect();
+
+    println!();
+    println!("  Usa ESPACIO para marcar/desmarcar, Enter para confirmar.");
+    println!("  Puedes seleccionar las deudas que tienes dinero para liquidar");
+    println!("  y ver el total exacto que necesitarías.");
+    println!();
+
+    // Multi-selección
+    let seleccionados: Vec<usize> = if crate::es_termux() {
+        // En Termux no hay dialoguer interactivo — entrada por números
+        for (i, etq) in etiquetas.iter().enumerate() {
+            println!("  {}. {}", i + 1, etq);
+        }
+        println!();
+        match pedir_texto("Ingresa los números separados por coma (ej: 1,3,5)") {
+            Some(entrada) => entrada
+                .split(',')
+                .filter_map(|s| s.trim().parse::<usize>().ok())
+                .filter(|&n| n >= 1 && n <= deudas.len())
+                .map(|n| n - 1)
+                .collect(),
+            None => return,
+        }
+    } else {
+        use dialoguer::MultiSelect;
+        let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+        match MultiSelect::new()
+            .with_prompt("  Selecciona las deudas")
+            .items(&refs)
+            .interact_opt()
+            .unwrap_or(None)
+        {
+            Some(sel) => sel,
+            None => return,
+        }
+    };
+
+    if seleccionados.is_empty() {
+        println!();
+        println!("  ℹ️  No seleccionaste ninguna deuda.");
+        pausa();
+        return;
+    }
+
+    // ── Calcular totales de la selección ──────────────────────────────────
+    limpiar();
+    separador("🧮 RESUMEN DE DEUDAS SELECCIONADAS");
+
+    let mes_hoy = chrono::Local::now().format("%Y-%m").to_string();
+
+    let mut total_saldo: f64 = 0.0;
+    let mut total_pago_mensual: f64 = 0.0;
+    let mut total_interes_mensual: f64 = 0.0;
+
+    println!(
+        "  {:<26} {:>12} {:>10} {:>10}",
+        "Cuenta", "Saldo actual", "Int/mes", "Pago/mes"
+    );
+    println!("  {}", "─".repeat(64));
+
+    for &idx in &seleccionados {
+        let d = &deudas[idx];
+        let saldo = d.saldo_actual();
+        let tasa_mensual = d.tasa_anual / 100.0 / 12.0;
+        let interes_mes = saldo * tasa_mensual;
+        let pago_mes = d.pago_total_mensual();
+
+        total_saldo += saldo;
+        total_pago_mensual += pago_mes;
+        total_interes_mensual += interes_mes;
+
+        let nombre_corto = if d.nombre.len() > 25 {
+            format!("{}…", &d.nombre[..24])
+        } else {
+            d.nombre.clone()
+        };
+        println!(
+            "  {:<26} {:>12} {:>10} {:>10}",
+            nombre_corto,
+            format!("${:.2}", saldo),
+            format!("${:.2}", interes_mes),
+            format!("${:.2}", pago_mes),
+        );
+    }
+
+    println!("  {}", "─".repeat(64));
+    println!(
+        "  {:<26} {:>12} {:>10} {:>10}",
+        format!("TOTAL ({} deudas)", seleccionados.len()),
+        format!("${:.2}", total_saldo).green().bold().to_string(),
+        format!("${:.2}", total_interes_mensual)
+            .yellow()
+            .to_string(),
+        format!("${:.2}", total_pago_mensual).cyan().to_string(),
+    );
+    println!();
+
+    // Cuántos meses para liquidar al ritmo actual
+    if total_pago_mensual > total_interes_mensual + 0.01 {
+        let meses_est = (total_saldo / (total_pago_mensual - total_interes_mensual)).ceil() as u64;
+        println!(
+            "  ⏱️  Al ritmo actual (~${:.2}/mes netos a capital), quedan ~{} meses ({:.1} años)",
+            total_pago_mensual - total_interes_mensual,
+            meses_est,
+            meses_est as f64 / 12.0
+        );
+    }
+
+    // Ahorro de intereses si se liquidan hoy
+    if total_pago_mensual > total_interes_mensual + 0.01 {
+        let meses_est = (total_saldo / (total_pago_mensual - total_interes_mensual)).ceil();
+        let intereses_totales = total_interes_mensual * meses_est;
+        println!(
+            "  💰 Si liquidas hoy: ahorras ~{} en intereses futuros",
+            format!("${:.2}", intereses_totales).green().bold()
+        );
+    }
+
+    println!();
+    println!(
+        "  📌 Para liquidar estas {} deuda(s) necesitas tener disponibles:",
+        seleccionados.len()
+    );
+    println!("     {}", format!("${:.2}", total_saldo).green().bold());
+    println!();
+
+    // ── Opciones de acción ────────────────────────────────────────────────
+    let opciones_accion = &[
+        "📄  Exportar esta selección como CSV",
+        "✅  Registrar pago completo (liquidar) de las deudas seleccionadas",
+        "🔙  Solo ver y volver",
+    ];
+
+    match menu("¿Qué deseas hacer?", opciones_accion) {
+        Some(0) => {
+            // Exportar CSV de la selección
+            let mut csv = String::new();
+            csv.push_str(
+                "Nombre,Saldo_actual,Tasa_anual_%,Pago_mensual,Interes_mensual,A_capital_mensual\n",
+            );
+            for &idx in &seleccionados {
+                let d = &state.asesor.rastreador.deudas[idx];
+                let saldo = d.saldo_actual();
+                let tasa_mensual = d.tasa_anual / 100.0 / 12.0;
+                let interes_mes = saldo * tasa_mensual;
+                let pago_mes = d.pago_total_mensual();
+                let a_capital = (pago_mes - interes_mes).max(0.0);
+                csv.push_str(&format!(
+                    "{},{:.2},{:.4},{:.2},{:.2},{:.2}\n",
+                    d.nombre.replace(',', ";"),
+                    saldo,
+                    d.tasa_anual,
+                    pago_mes,
+                    interes_mes,
+                    a_capital,
+                ));
+            }
+            // Línea de totales
+            csv.push_str(&format!(
+                "TOTAL,{:.2},,{:.2},{:.2},{:.2}\n",
+                total_saldo,
+                total_pago_mensual,
+                total_interes_mensual,
+                (total_pago_mensual - total_interes_mensual).max(0.0),
+            ));
+
+            let dir = omniplanner::ml::advisor::AlmacenAsesor::dir_exportacion();
+            let ruta = dir.join("seleccion_deudas.csv");
+            match std::fs::write(&ruta, &csv) {
+                Ok(()) => println!(
+                    "\n  ✅ CSV exportado: {}",
+                    ruta.display().to_string().green()
+                ),
+                Err(e) => println!("  ❌ Error al exportar: {}", e),
+            }
+            pausa();
+        }
+        Some(1) => {
+            // Liquidar: registrar pago igual al saldo actual para cada deuda seleccionada
+            println!();
+            println!(
+                "  ⚠️  Esto registrará un pago por el SALDO COMPLETO en el mes {}.",
+                mes_hoy.cyan()
+            );
+            println!("  Las deudas quedarán marcadas como liquidadas (saldo = 0).");
+            println!();
+            if confirmar("¿Confirmas liquidar las deudas seleccionadas?", false) {
+                let mut liquidadas = 0usize;
+                for &idx in &seleccionados {
+                    let saldo = state.asesor.rastreador.deudas[idx].saldo_actual();
+                    if saldo < 0.01 {
+                        continue; // ya liquidada
+                    }
+                    // Registrar pago por el saldo completo con escrow 0
+                    state.asesor.rastreador.deudas[idx]
+                        .registrar_mes_con_escrow(&mes_hoy, saldo, saldo, 0.0, 0.0);
+                    state.asesor.rastreador.deudas[idx].activa = false;
+                    liquidadas += 1;
+                }
+                // Persistir
+                let _ = state.guardar();
+                println!();
+                println!(
+                    "  ✅ {} deuda(s) marcadas como liquidadas.",
+                    liquidadas.to_string().green().bold()
+                );
+                println!(
+                    "  💰 Total liquidado: {}",
+                    format!("${:.2}", total_saldo).green().bold()
+                );
+            }
+            pausa();
+        }
+        _ => {}
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Consolidación de deudas — ¿me conviene este préstamo?
+//
+//  Colores de las filas:
+//    🔵 cyan   = deuda seleccionada AUTOMÁTICAMENTE por el sistema
+//    🟡 yellow = deuda movida MANUALMENTE por el usuario (override)
+//    🟢 green  = se va (cubierta por el préstamo)   ← solapados con ↑
+//    🔴 red    = se queda (no cubierta)
+// ══════════════════════════════════════════════════════════════════════════════
+
+pub fn rastreador_consolidar_deudas(state: &mut AppState) {
+    limpiar();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║  🔄 CONSOLIDACIÓN DE DEUDAS                                    ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "║  Evalúa si un préstamo de consolidación te conviene            ║".cyan()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+
+    let deudas_activas: Vec<(usize, &DeudaRastreada)> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.activa && d.saldo_actual() > 0.01)
+        .collect();
+
+    if deudas_activas.is_empty() {
+        println!("  Sin deudas activas registradas.");
+        pausa();
+        return;
+    }
+
+    // ── PASO 1: Datos del préstamo ofrecido ───────────────────────────────
+    separador("📋 PASO 1 — Datos del préstamo de consolidación");
+    println!("  (El banco o cooperativa te ofrece un préstamo para saldar deudas.)");
+    println!();
+
+    let monto_prestamo = pedir_f64("Monto del préstamo que te ofrecen ($)", 0.0);
+    if monto_prestamo < 0.01 {
+        return;
+    }
+    let tasa_anual_prest = pedir_f64("Tasa anual del préstamo (APR %, ej: 5.99)", 0.0);
+    let meses_prest = pedir_f64("Plazo en meses (ej: 60 para 5 años)", 60.0) as u32;
+    if meses_prest == 0 {
+        return;
+    }
+
+    // Calcular pago mensual con fórmula de amortización
+    let tasa_mensual_prest = tasa_anual_prest / 100.0 / 12.0;
+    let pago_mensual_calc = if tasa_mensual_prest < 0.0001 {
+        monto_prestamo / meses_prest as f64
+    } else {
+        let r = tasa_mensual_prest;
+        let n = meses_prest as f64;
+        let factor = r * (1.0 + r).powf(n) / ((1.0 + r).powf(n) - 1.0);
+        monto_prestamo * factor
+    };
+    let total_a_pagar_prest = pago_mensual_calc * meses_prest as f64;
+    let interes_total_prest = total_a_pagar_prest - monto_prestamo;
+
+    println!();
+    println!(
+        "  💡 Pago mensual calculado: {}",
+        format!("${:.2}", pago_mensual_calc).cyan().bold()
+    );
+    println!(
+        "     Total a pagar en {} meses: {}  (intereses: {})",
+        meses_prest,
+        format!("${:.2}", total_a_pagar_prest).yellow(),
+        format!("${:.2}", interes_total_prest).red()
+    );
+
+    // El usuario puede confirmar o corregir con la cifra que el banco le cotizó
+    let pago_mensual_real = {
+        println!();
+        let cotizado = pedir_f64(
+            "Pago mensual que te cotizó el banco (Enter = usar el calculado)",
+            pago_mensual_calc,
+        );
+        if (cotizado - pago_mensual_calc).abs() > 1.0 {
+            println!(
+                "  ℹ️  Diferencia vs calculado: ${:.2} — se usará la cifra cotizada.",
+                (cotizado - pago_mensual_calc).abs()
+            );
+        }
+        cotizado
+    };
+    let total_real = pago_mensual_real * meses_prest as f64;
+    let interes_real = total_real - monto_prestamo;
+
+    // ── PASO 2: Selección automática por estrategia ───────────────────────
+    limpiar();
+    separador("🤖 PASO 2 — Selección automática de deudas");
+    println!(
+        "  El préstamo es de {}. El sistema elige qué deudas cubrir.",
+        format!("${:.2}", monto_prestamo).cyan().bold()
+    );
+    println!();
+
+    let estrategias = &[
+        "🏆  Avalancha — paga primero las de mayor tasa (ahorra más intereses)",
+        "⛄  Bola de nieve — elimina primero las más pequeñas (más cuentas cerradas)",
+        "💰  Maximizar monto — llenar al máximo el préstamo (cubre más saldo)",
+        "✋  Sin auto-selección — yo elijo manualmente todas",
+    ];
+    let estrategia_idx = match menu("Estrategia de selección automática", estrategias) {
+        Some(i) => i,
+        None => return,
+    };
+
+    // Ordenar índices según estrategia
+    let mut orden_auto: Vec<usize> = (0..deudas_activas.len()).collect();
+    match estrategia_idx {
+        0 => {
+            // Avalancha: mayor tasa primero
+            orden_auto.sort_by(|&a, &b| {
+                deudas_activas[b]
+                    .1
+                    .tasa_anual
+                    .partial_cmp(&deudas_activas[a].1.tasa_anual)
+                    .unwrap()
+            });
+        }
+        1 => {
+            // Bola de nieve: menor saldo primero
+            orden_auto.sort_by(|&a, &b| {
+                deudas_activas[a]
+                    .1
+                    .saldo_actual()
+                    .partial_cmp(&deudas_activas[b].1.saldo_actual())
+                    .unwrap()
+            });
+        }
+        2 => {
+            // Maximizar: mayor saldo primero (llenar el préstamo)
+            orden_auto.sort_by(|&a, &b| {
+                deudas_activas[b]
+                    .1
+                    .saldo_actual()
+                    .partial_cmp(&deudas_activas[a].1.saldo_actual())
+                    .unwrap()
+            });
+        }
+        _ => {
+            orden_auto.clear(); // sin auto-selección
+        }
+    }
+
+    // Seleccionar automáticamente hasta cubrir el monto del préstamo
+    // auto_sel[i] = true si el sistema la marcó, false si no
+    let mut auto_sel = vec![false; deudas_activas.len()];
+    let mut monto_cubierto = 0.0f64;
+    for &i in &orden_auto {
+        let saldo = deudas_activas[i].1.saldo_actual();
+        if monto_cubierto + saldo <= monto_prestamo + 0.01 {
+            auto_sel[i] = true;
+            monto_cubierto += saldo;
+        }
+    }
+
+    // ── PASO 3: Mostrar tabla y permitir ajuste manual ────────────────────
+    // manual_override[i]: Some(true) = user forzó incluir, Some(false) = user forzó excluir, None = sigue auto
+    let mut manual_override: Vec<Option<bool>> = vec![None; deudas_activas.len()];
+
+    loop {
+        limpiar();
+        separador("🎨 PASO 3 — Revisar y ajustar selección");
+
+        // Estado final de cada deuda (va o se queda)
+        let va: Vec<bool> = (0..deudas_activas.len())
+            .map(|i| manual_override[i].unwrap_or(auto_sel[i]))
+            .collect();
+
+        let saldo_cubierto: f64 = deudas_activas
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| va[*i])
+            .map(|(_, (_, d))| d.saldo_actual())
+            .sum();
+
+        let saldo_restante: f64 = deudas_activas
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !va[*i])
+            .map(|(_, (_, d))| d.saldo_actual())
+            .sum();
+
+        // Encabezado de tabla
+        println!("  LEYENDA:");
+        println!(
+            "   {}  = sistema elige  |  {}  = tú lo ajustaste  |  {}  = se va (verde)  |  {}  = se queda (rojo)",
+            "[AUTO]".cyan().bold(),
+            "[MANUAL]".yellow().bold(),
+            "●".green().bold(),
+            "●".red().bold()
+        );
+        println!();
+        println!(
+            "  {:<3} {:<24} {:>10} {:>7} {:>10} {:>10}  {}",
+            "#", "Cuenta", "Saldo", "Tasa%", "Pago/mes", "Int/mes", "Estado"
+        );
+        println!("  {}", "─".repeat(85));
+
+        let mut opciones_toggle: Vec<String> = Vec::new();
+
+        for (i, (_, d)) in deudas_activas.iter().enumerate() {
+            let saldo = d.saldo_actual();
+            let int_mes = saldo * d.tasa_anual / 100.0 / 12.0;
+            let esta_incluida = va[i];
+            let es_auto = manual_override[i].is_none() && auto_sel[i];
+            let es_manual = manual_override[i].is_some();
+
+            let badge = if es_manual {
+                "[MANUAL]".yellow().bold().to_string()
+            } else if es_auto {
+                "[AUTO]  ".cyan().bold().to_string()
+            } else {
+                "        ".to_string()
+            };
+
+            let nombre_corto = if d.nombre.len() > 23 {
+                format!("{}…", &d.nombre[..22])
+            } else {
+                d.nombre.clone()
+            };
+
+            let estado_str = if esta_incluida {
+                "🟢 SE VA".green().bold().to_string()
+            } else {
+                "🔴 QUEDA".red().bold().to_string()
+            };
+
+            // La línea completa coloreada según si va o queda
+            let linea = format!(
+                "  {:>2}. {:<24} {:>10} {:>6.1}% {:>10} {:>10}  {}  {}",
+                i + 1,
+                nombre_corto,
+                format!("${:.2}", saldo),
+                d.tasa_anual,
+                format!("${:.2}", d.pago_total_mensual()),
+                format!("${:.2}", int_mes),
+                badge,
+                estado_str
+            );
+            if esta_incluida {
+                println!("{}", linea.green());
+            } else {
+                println!("{}", linea.red());
+            }
+
+            let tag = if esta_incluida {
+                "✅ SE VA"
+            } else {
+                "❌ QUEDA"
+            };
+            opciones_toggle.push(format!(
+                "{}  {} — ${:.2}  ({:.1}%)",
+                tag, d.nombre, saldo, d.tasa_anual
+            ));
+        }
+
+        println!("  {}", "─".repeat(85));
+
+        // Resumen de uso del préstamo
+        let excede = saldo_cubierto > monto_prestamo + 0.01;
+        let uso_pct = (saldo_cubierto / monto_prestamo * 100.0).min(999.0);
+        let disponible_restante = (monto_prestamo - saldo_cubierto).max(0.0);
+
+        if excede {
+            println!(
+                "  ⚠️  Saldo cubierto {} EXCEDE el préstamo de {} — ajusta la selección.",
+                format!("${:.2}", saldo_cubierto).red().bold(),
+                format!("${:.2}", monto_prestamo).cyan()
+            );
+        } else {
+            println!(
+                "  💳 Uso del préstamo: {} / {} ({:.1}%)   Disponible: {}",
+                format!("${:.2}", saldo_cubierto).green().bold(),
+                format!("${:.2}", monto_prestamo).cyan(),
+                uso_pct,
+                format!("${:.2}", disponible_restante).yellow()
+            );
+        }
+        println!(
+            "  Deuda que queda fuera: {}",
+            format!("${:.2}", saldo_restante).red()
+        );
+        println!();
+
+        // Acciones disponibles
+        let accion_opciones = &[
+            "🔀  Mover una deuda (verde↔rojo)",
+            "📊  Ver análisis comparativo completo",
+            "✅  Aceptar y agregar préstamo al rastreador",
+            "🔙  Cancelar",
+        ];
+
+        match menu("¿Qué deseas hacer?", accion_opciones) {
+            Some(0) => {
+                // Toggle de una deuda
+                opciones_toggle.push("🔙 Cancelar".to_string());
+                let refs: Vec<&str> = opciones_toggle.iter().map(|s| s.as_str()).collect();
+                if let Some(idx) = menu("¿Cuál deuda mover?", &refs) {
+                    if idx < deudas_activas.len() {
+                        let actual = va[idx];
+                        // Si iba a ir → forzar que se quede; si se quedaba → forzar que vaya
+                        let nuevo_estado = !actual;
+                        // Verificar que al incluirla no exceda el monto
+                        if nuevo_estado {
+                            let nuevo_total: f64 = deudas_activas
+                                .iter()
+                                .enumerate()
+                                .filter(|(i2, _)| {
+                                    if *i2 == idx {
+                                        true
+                                    } else {
+                                        manual_override[*i2].unwrap_or(auto_sel[*i2])
+                                    }
+                                })
+                                .map(|(_, (_, d))| d.saldo_actual())
+                                .sum();
+                            if nuevo_total > monto_prestamo + 0.01 {
+                                println!();
+                                println!(
+                                    "  ⚠️  Agregar '{}' excedería el préstamo en ${}.",
+                                    deudas_activas[idx].1.nombre,
+                                    format!("{:.2}", nuevo_total - monto_prestamo).red()
+                                );
+                                println!("  Para incluirla debes excluir otra deuda primero.");
+                                pausa();
+                                continue;
+                            }
+                        }
+                        manual_override[idx] = if Some(nuevo_estado) == Some(auto_sel[idx])
+                            && manual_override[idx].is_some()
+                        {
+                            None // volver al estado automático
+                        } else {
+                            Some(nuevo_estado)
+                        };
+                    }
+                }
+            }
+            Some(1) => {
+                // Análisis comparativo completo
+                mostrar_analisis_consolidacion(
+                    &deudas_activas,
+                    &va,
+                    monto_prestamo,
+                    pago_mensual_real,
+                    meses_prest,
+                    tasa_anual_prest,
+                    total_real,
+                    interes_real,
+                );
+                pausa();
+            }
+            Some(2) => {
+                // Aceptar: agregar el préstamo al rastreador y marcar las cubiertas como pagadas
+                let saldo_final: f64 = deudas_activas
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| va[*i])
+                    .map(|(_, (_, d))| d.saldo_actual())
+                    .sum();
+
+                if saldo_final > monto_prestamo + 0.01 {
+                    println!();
+                    println!(
+                        "  ⚠️  La selección excede el monto del préstamo. Ajusta antes de aceptar."
+                    );
+                    pausa();
+                    continue;
+                }
+
+                // Nombre del préstamo
+                let nombre_prest =
+                    pedir_texto("Nombre del préstamo de consolidación (ej: Personal Loan BOFA)")
+                        .unwrap_or_else(|| "Préstamo Consolidación".to_string());
+
+                let mes_hoy = chrono::Local::now().format("%Y-%m").to_string();
+
+                // Recolectar los datos necesarios ANTES de mutar (evitar borrow conflict)
+                let a_liquidar: Vec<(usize, f64, String)> = deudas_activas
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| va[*i])
+                    .map(|(_, (idx_real, d))| (*idx_real, d.saldo_actual(), d.nombre.clone()))
+                    .filter(|(_, saldo, _)| *saldo >= 0.01)
+                    .collect();
+
+                // Registrar pago de liquidación en las deudas cubiertas
+                for (idx_real, saldo, nombre) in &a_liquidar {
+                    state.asesor.rastreador.deudas[*idx_real]
+                        .registrar_mes_con_escrow(&mes_hoy, *saldo, *saldo, 0.0, 0.0);
+                    state.asesor.rastreador.deudas[*idx_real].activa = false;
+                    println!(
+                        "  {} '{}' marcada como liquidada (${:.2})",
+                        "✓".green(),
+                        nombre,
+                        saldo
+                    );
+                }
+
+                // Agregar el nuevo préstamo de consolidación
+                let mut nueva_deuda =
+                    DeudaRastreada::nueva(&nombre_prest, tasa_anual_prest, pago_mensual_real);
+                nueva_deuda.obligatoria = true;
+                nueva_deuda.principal_interes_mensual = pago_mensual_real;
+                nueva_deuda.saldo_inicial = monto_prestamo;
+                nueva_deuda.registrar_mes(&mes_hoy, monto_prestamo, 0.0, 0.0);
+
+                state.asesor.rastreador.agregar_deuda(nueva_deuda);
+                let _ = state.guardar();
+
+                println!();
+                println!(
+                    "  {} Préstamo '{}' agregado al rastreador.",
+                    "✅".green(),
+                    nombre_prest.cyan().bold()
+                );
+                println!(
+                    "     ${:.2} al {:.2}% APR — ${:.2}/mes × {} meses",
+                    monto_prestamo, tasa_anual_prest, pago_mensual_real, meses_prest
+                );
+                pausa();
+                return;
+            }
+            _ => return,
+        }
+    }
+}
+
+/// Muestra el análisis financiero completo de la consolidación.
+#[allow(clippy::too_many_arguments)]
+fn mostrar_analisis_consolidacion(
+    deudas_activas: &[(usize, &DeudaRastreada)],
+    va: &[bool],
+    monto_prestamo: f64,
+    pago_mensual_prest: f64,
+    meses_prest: u32,
+    tasa_anual_prest: f64,
+    total_real: f64,
+    interes_real: f64,
+) {
+    let _ = total_real; // presente en firma para contexto futuro
+    limpiar();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║  📊 ANÁLISIS COMPARATIVO — ¿Conviene consolidar?               ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+
+    // ── Deudas que SE VAN ─────────────────────────────────────────────────
+    println!(
+        "  {}",
+        "🟢 DEUDAS QUE SE LIQUIDARÍAN (cubiertas por el préstamo):"
+            .green()
+            .bold()
+    );
+    println!(
+        "  {:<24} {:>10} {:>7} {:>10} {:>10}",
+        "Cuenta", "Saldo", "Tasa%", "Pago/mes", "Int/mes"
+    );
+    println!("  {}", "─".repeat(67));
+
+    let mut saldo_cubierto = 0.0f64;
+    let mut pago_mensual_actual_cubierto = 0.0f64;
+    let mut interes_mensual_cubierto = 0.0f64;
+    let mut interes_total_actual_cubierto = 0.0f64;
+    let mut meses_max_cubierto = 0u32;
+
+    for (i, (_, d)) in deudas_activas.iter().enumerate() {
+        if !va[i] {
+            continue;
+        }
+        let saldo = d.saldo_actual();
+        let tasa_m = d.tasa_anual / 100.0 / 12.0;
+        let int_mes = saldo * tasa_m;
+        let pago_mes = d.pago_total_mensual();
+        let (meses_d, int_total_d, _) = simular_pagos_simple(saldo, tasa_m, pago_mes);
+
+        saldo_cubierto += saldo;
+        pago_mensual_actual_cubierto += pago_mes;
+        interes_mensual_cubierto += int_mes;
+        interes_total_actual_cubierto += int_total_d;
+        meses_max_cubierto = meses_max_cubierto.max(meses_d);
+
+        println!(
+            "  {:<24} {:>10} {:>6.1}% {:>10} {:>10}",
+            if d.nombre.len() > 23 {
+                format!("{}…", &d.nombre[..22])
+            } else {
+                d.nombre.clone()
+            },
+            format!("${:.2}", saldo).green(),
+            d.tasa_anual,
+            format!("${:.2}", pago_mes),
+            format!("${:.2}", int_mes).red()
+        );
+    }
+    println!("  {}", "─".repeat(67));
+    println!(
+        "  {:<24} {:>10} {:>7} {:>10} {:>10}",
+        "SUBTOTAL",
+        format!("${:.2}", saldo_cubierto).green().bold(),
+        "",
+        format!("${:.2}", pago_mensual_actual_cubierto)
+            .yellow()
+            .bold(),
+        format!("${:.2}", interes_mensual_cubierto).red()
+    );
+    println!();
+
+    // ── Deudas que SE QUEDAN ──────────────────────────────────────────────
+    let deudas_quedan: Vec<_> = deudas_activas
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !va[*i])
+        .collect();
+
+    if !deudas_quedan.is_empty() {
+        println!(
+            "  {}",
+            "🔴 DEUDAS QUE PERMANECEN (no cubiertas):".red().bold()
+        );
+        println!(
+            "  {:<24} {:>10} {:>7} {:>10}",
+            "Cuenta", "Saldo", "Tasa%", "Pago/mes"
+        );
+        println!("  {}", "─".repeat(55));
+        let mut saldo_queda = 0.0f64;
+        let mut pago_queda = 0.0f64;
+        for (_, (_, d)) in &deudas_quedan {
+            let saldo = d.saldo_actual();
+            saldo_queda += saldo;
+            pago_queda += d.pago_total_mensual();
+            println!(
+                "  {:<24} {:>10} {:>6.1}% {:>10}",
+                if d.nombre.len() > 23 {
+                    format!("{}…", &d.nombre[..22])
+                } else {
+                    d.nombre.clone()
+                },
+                format!("${:.2}", saldo).red(),
+                d.tasa_anual,
+                format!("${:.2}", d.pago_total_mensual())
+            );
+        }
+        println!("  {}", "─".repeat(55));
+        println!(
+            "  {:<24} {:>10} {:>7} {:>10}",
+            "SUBTOTAL QUEDA",
+            format!("${:.2}", saldo_queda).red().bold(),
+            "",
+            format!("${:.2}", pago_queda).yellow()
+        );
+        println!();
+    }
+
+    // ── Comparativa SIN vs CON consolidación ─────────────────────────────
+    println!("  {}", "═".repeat(70));
+    println!(
+        "  {}",
+        "⚖️  COMPARATIVA: SIN consolidación  vs  CON consolidación".bold()
+    );
+    println!("  {}", "═".repeat(70));
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "", "SIN consolid.", "CON consolid."
+    );
+    println!("  {}", "─".repeat(70));
+
+    let tasa_prom_actual = if saldo_cubierto > 0.01 {
+        deudas_activas
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| va[*i])
+            .map(|(_, (_, d))| d.tasa_anual * d.saldo_actual())
+            .sum::<f64>()
+            / saldo_cubierto
+    } else {
+        0.0
+    };
+
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "Tasa promedio ponderada:",
+        format!("{:.2}%", tasa_prom_actual).red(),
+        format!("{:.2}%", tasa_anual_prest).green()
+    );
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "Saldo total cubierto:",
+        format!("${:.2}", saldo_cubierto),
+        format!("${:.2}", monto_prestamo)
+    );
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "Pago mensual (deudas cubiertas):",
+        format!("${:.2}", pago_mensual_actual_cubierto).yellow(),
+        format!("${:.2}", pago_mensual_prest).cyan().bold()
+    );
+
+    let flujo_liberado = pago_mensual_actual_cubierto - pago_mensual_prest;
+    let flujo_str = if flujo_liberado >= 0.0 {
+        format!("+${:.2}", flujo_liberado)
+            .green()
+            .bold()
+            .to_string()
+    } else {
+        format!("-${:.2}", flujo_liberado.abs())
+            .red()
+            .bold()
+            .to_string()
+    };
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "Flujo mensual liberado/extra:", "", flujo_str
+    );
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "Meses para liquidar (deudas cub.):",
+        format!("{}", meses_max_cubierto).yellow(),
+        format!("{}", meses_prest).cyan()
+    );
+    println!(
+        "  {:<38} {:>14} {:>14}",
+        "Total intereses pagados:",
+        format!("${:.2}", interes_total_actual_cubierto)
+            .red()
+            .bold(),
+        format!("${:.2}", interes_real).yellow()
+    );
+    println!("  {}", "─".repeat(70));
+
+    let ahorro_intereses = interes_total_actual_cubierto - interes_real;
+    let (ahorro_str, veredicto) = if ahorro_intereses > 0.0 {
+        (
+            format!("+${:.2} ahorras en intereses", ahorro_intereses)
+                .green()
+                .bold()
+                .to_string(),
+            true,
+        )
+    } else {
+        (
+            format!("-${:.2} pagas más en intereses", ahorro_intereses.abs())
+                .red()
+                .bold()
+                .to_string(),
+            false,
+        )
+    };
+    println!(
+        "  {:<38} {:>29}",
+        "Diferencia neta en intereses:", ahorro_str
+    );
+    println!();
+
+    // ── Veredicto final ───────────────────────────────────────────────────
+    println!("  {}", "═".repeat(70));
+    if veredicto && flujo_liberado >= 0.0 {
+        println!("  {}", "✅ CONVIENE CONSOLIDAR".green().bold());
+        println!(
+            "     Ahorras {} en intereses totales y liberas {} /mes en flujo.",
+            format!("${:.2}", ahorro_intereses).green().bold(),
+            format!("${:.2}", flujo_liberado).green()
+        );
+    } else if veredicto && flujo_liberado < 0.0 {
+        println!(
+            "  {}",
+            "⚠️  CONVIENE EN INTERESES, PERO PAGO MENSUAL SUBE"
+                .yellow()
+                .bold()
+        );
+        println!(
+            "     Ahorras {} en intereses pero pagas {} más por mes.",
+            format!("${:.2}", ahorro_intereses).green(),
+            format!("${:.2}", flujo_liberado.abs()).red()
+        );
+        println!(
+            "     Asegúrate de que tu presupuesto aguante ${:.2}/mes extra.",
+            flujo_liberado.abs()
+        );
+    } else if !veredicto && flujo_liberado >= 0.0 {
+        println!(
+            "  {}",
+            "⚠️  LIBERA FLUJO PERO PAGAS MÁS INTERESES EN TOTAL"
+                .yellow()
+                .bold()
+        );
+        println!(
+            "     Pagas {} más en intereses pero tu pago mensual baja ${:.2}.",
+            format!("${:.2}", ahorro_intereses.abs()).red(),
+            flujo_liberado
+        );
+        println!("     Considera solo si el flujo mensual es tu prioridad urgente.");
+    } else {
+        println!("  {}", "❌ NO CONVIENE CONSOLIDAR".red().bold());
+        println!(
+            "     Pagarías {} más en intereses Y tu pago mensual sube.",
+            format!("${:.2}", ahorro_intereses.abs()).red().bold()
+        );
+        println!("     Busca una tasa más baja o un plazo más corto.");
+    }
+    println!("  {}", "═".repeat(70));
+    println!();
+
+    // Tip: qué hacer con el dinero liberado
+    if flujo_liberado > 10.0 {
+        println!(
+            "  💡 Con ${:.2}/mes liberados, si los aplicas a deudas que quedan:",
+            flujo_liberado
+        );
+        for (_, (_, d)) in &deudas_quedan {
+            let saldo = d.saldo_actual();
+            let tasa_m = d.tasa_anual / 100.0 / 12.0;
+            let pago_extra = d.pago_total_mensual() + flujo_liberado;
+            let (meses_sin, _, _) = simular_pagos_simple(saldo, tasa_m, d.pago_total_mensual());
+            let (meses_con, _, _) = simular_pagos_simple(saldo, tasa_m, pago_extra);
+            if meses_sin > meses_con {
+                println!(
+                    "     '{}': {} → {} meses (−{} meses)",
+                    d.nombre,
+                    meses_sin,
+                    meses_con,
+                    meses_sin - meses_con
+                );
+            }
+        }
+        println!();
+    }
 }
 
 pub fn rastreador_exportar(state: &AppState) {

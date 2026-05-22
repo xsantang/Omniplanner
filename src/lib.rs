@@ -20,6 +20,8 @@
 
 pub mod agenda;
 pub mod canvas;
+pub mod casos;
+pub mod cobranzas;
 pub mod contrasenias;
 pub mod cripto;
 pub mod diagrams;
@@ -29,6 +31,9 @@ pub mod mapper;
 pub mod memoria;
 pub mod ml;
 pub mod nlp;
+pub mod obras;
+pub mod propuestas;
+pub mod proveedores;
 pub mod seguridad;
 pub mod storage;
 pub mod sync;

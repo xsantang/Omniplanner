@@ -5,12 +5,20 @@
 //! Incluye redes neuronales (ANN, DNN, CNN, RNN/LSTM), clasificadores
 //! (SVM, árboles, bosques), RL (Q-Learning, bandits), optimizadores
 //! (Adam, LR scheduling), y utilidades (k-fold CV, datasets sintéticos).
+//!
+//! Módulos financieros adicionales:
+//! - [`conciliacion_bancaria`] — reconciliación de cuentas, tarjetas y préstamos.
+//! - [`balance_general`]      — balance general con ratios de liquidez y solvencia.
+//! - [`estado_resultados`]    — estado de resultados con ratios de rentabilidad.
 
 pub mod advisor;
 pub mod ann;
+pub mod balance_general;
 pub mod cnn;
+pub mod conciliacion_bancaria;
 pub mod decision_tree;
 pub mod dnn;
+pub mod estado_resultados;
 pub mod gastos;
 pub mod linalg;
 pub mod optimizer;
@@ -25,12 +33,12 @@ pub mod svm;
 pub use advisor::{
     AhorroPagoExtra, AjusteMensualLibertad, AlmacenAsesor, AnalisisDeuda, BorradorPlanLibertad,
     CategoriaEscenario, ComparacionPlanes, ComparacionRapida, CorteBancario, CriterioDecision,
-    DecisionPago, DeudaRastreada, DiagnosticoGlobal, DiagnosticoMes, DiccionarioAcciones,
-    ErrorPago, Escenario, EstadoDeudaUi, EstrategiaLibertad, FrecuenciaPago, ImpactoAccion,
-    IngresoExtraMes, IngresoRastreado, MatrizDecision, MesPago, MesSimulado, MetaAhorro,
-    Movimiento, PagoProgramado, Presupuesto, RastreadorDeudas, RecomendacionPagoExtra,
-    RegistroAsesor, ResumenDeuda, SimulacionLibertad, SimulacionLiquidacion, TipoRegistro,
-    VinculoDeudas,
+    DecisionPago, DetalleMesAtraso, DeudaRastreada, DiagnosticoGlobal, DiagnosticoMes,
+    DiccionarioAcciones, ErrorPago, Escenario, EstadoDeudaUi, EstrategiaLibertad, FrecuenciaPago,
+    ImpactoAccion, IngresoExtraMes, IngresoRastreado, MatrizDecision, MesPago, MesSimulado,
+    MetaAhorro, Movimiento, PagoProgramado, Presupuesto, RastreadorDeudas, RecomendacionPagoExtra,
+    RegistroAsesor, ResumenAtraso, ResumenDeuda, SimulacionLibertad, SimulacionLiquidacion,
+    TipoRegistro, VinculoDeudas,
 };
 pub use ann::ANN;
 pub use cnn::CNN;
@@ -48,6 +56,21 @@ pub use reinforcement::{GridWorld, MultiBandit, QTable};
 pub use rnn::{TipoRNN, RNN};
 pub use sugerencias::{PlanPagosMes, SugerenciaPago, TipoSugerencia};
 pub use svm::{SVMMulticlase, SVM};
+
+// ── Re-exports: módulos financieros contables ────────────────────────────────
+pub use balance_general::{
+    AlmacenBalances, BalanceGeneral, ClaseActivo, ClasePasivo, ClasePatrimonio, PartidaActivo,
+    PartidaPasivo, PartidaPatrimonio, RatiosBalance,
+};
+pub use conciliacion_bancaria::{
+    AlmacenConciliacion, ConciliacionMes, CuentaBancaria, CuotaAmortizacion, MovimientoContable,
+    MovimientoExtracto, PartidaTransito, PrestamoRegistrado, RatiosBancarios, TarjetaCredito,
+    TipoCuenta,
+};
+pub use estado_resultados::{
+    AlmacenResultados, ClaseCosto, ClaseGasto, ClaseIngreso, EstadoResultados, PartidaCosto,
+    PartidaGasto, PartidaIngreso, RatiosResultados,
+};
 
 use serde::{Deserialize, Serialize};
 

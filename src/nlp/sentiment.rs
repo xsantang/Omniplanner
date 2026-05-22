@@ -542,6 +542,68 @@ impl AnalizadorSentimiento {
         emociones
     }
 
+    /// Versión silenciosa de entrenar_ml (sin println) — usada en auto-entrenamiento
+    pub fn entrenar_ml_silencioso(&mut self, datos: &[(&str, f64)], epocas: usize, lr: f64) {
+        for (texto, _) in datos {
+            let tokens = Tokenizer::tokenizar_limpio(texto);
+            for t in tokens {
+                self.pesos_ml.entry(t).or_insert(0.0);
+            }
+        }
+        for _ in 0..epocas {
+            for &(texto, target) in datos {
+                let tokens = Tokenizer::tokenizar_limpio(texto);
+                let mut pred = self.sesgo_ml;
+                for t in &tokens {
+                    pred += self.pesos_ml.get(t.as_str()).copied().unwrap_or(0.0);
+                }
+                pred = pred.tanh();
+                let error = pred - target;
+                let dtanh = 1.0 - pred * pred;
+                let grad = 2.0 * error * dtanh;
+                for t in &tokens {
+                    if let Some(peso) = self.pesos_ml.get_mut(t.as_str()) {
+                        *peso -= lr * grad;
+                    }
+                }
+                self.sesgo_ml -= lr * grad;
+            }
+        }
+        self.entrenado_ml = true;
+    }
+
+    /// Reentrenamiento incremental con nuevos ejemplos del historial
+    pub fn reentrenar_incremental(&mut self, datos: &[(&str, f64)], epocas: usize, lr: f64) {
+        if datos.is_empty() || !self.entrenado_ml {
+            return;
+        }
+        for (texto, _) in datos {
+            let tokens = Tokenizer::tokenizar_limpio(texto);
+            for t in tokens {
+                self.pesos_ml.entry(t).or_insert(0.0);
+            }
+        }
+        for _ in 0..epocas {
+            for &(texto, target) in datos {
+                let tokens = Tokenizer::tokenizar_limpio(texto);
+                let mut pred = self.sesgo_ml;
+                for t in &tokens {
+                    pred += self.pesos_ml.get(t.as_str()).copied().unwrap_or(0.0);
+                }
+                pred = pred.tanh();
+                let error = pred - target;
+                let dtanh = 1.0 - pred * pred;
+                let grad = 2.0 * error * dtanh;
+                for t in &tokens {
+                    if let Some(peso) = self.pesos_ml.get_mut(t.as_str()) {
+                        *peso -= lr * grad;
+                    }
+                }
+                self.sesgo_ml -= lr * grad;
+            }
+        }
+    }
+
     /// Entrenar modelo ML con datos etiquetados (texto, score -1 a 1)
     pub fn entrenar_ml(&mut self, datos: &[(&str, f64)], epocas: usize, lr: f64) {
         // Construir vocabulario de entrenamiento

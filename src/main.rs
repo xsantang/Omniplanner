@@ -15,7 +15,7 @@
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use colored::Colorize;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, FuzzySelect, Input, Select};
 use std::io::{self, BufRead, Write};
 
 use omniplanner::agenda::{
@@ -494,6 +494,44 @@ pub(crate) fn pedir_fecha(prompt: &str) -> Option<NaiveDate> {
     }
 }
 
+/// Pide una fecha obligatoria usando el parser flexible. No acepta cancelar.
+/// Acepta cualquier formato: 20260605, 5 jun 2026, 05/06/2026, june 5 2026, etc.
+/// Siempre muestra la fecha interpretada para que el usuario confirme visualmente.
+pub(crate) fn leer_fecha(prompt: &str) -> NaiveDate {
+    loop {
+        if let Some(f) = pedir_fecha(prompt) {
+            return f;
+        }
+    }
+}
+
+/// Pide fecha + hora de forma flexible. La fecha acepta cualquier formato conocido.
+/// La hora espera HH:MM (Enter = 09:00). Siempre confirma la fecha interpretada.
+pub(crate) fn leer_fecha_hora(prompt_fecha: &str, prompt_hora: &str) -> chrono::NaiveDateTime {
+    use chrono::NaiveDateTime;
+    loop {
+        let fecha = leer_fecha(prompt_fecha);
+        print!("  {} (HH:MM, Enter=09:00): ", prompt_hora);
+        let h_str = leer_linea();
+        let hora_str = if h_str.trim().is_empty() {
+            "09:00".to_string()
+        } else {
+            h_str.trim().to_string()
+        };
+        let dt_str = format!("{} {}", fecha.format("%Y-%m-%d"), hora_str);
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M") {
+            println!(
+                "    {} Fecha y hora: {} {}",
+                "✓".green(),
+                formatear_fecha_es(fecha),
+                hora_str
+            );
+            return dt;
+        }
+        println!("  Hora inválida, usa formato HH:MM (ej: 14:30)");
+    }
+}
+
 /// Devuelve todas las interpretaciones válidas de una fecha (sin duplicados).
 /// Si no hay ambigüedad devuelve 0 o 1 candidato; si la hay, 2+.
 pub(crate) fn parsear_fecha_candidatos(input: &str) -> Vec<NaiveDate> {
@@ -855,6 +893,263 @@ pub(crate) fn menu(titulo: &str, opciones: &[&str]) -> Option<usize> {
             .interact_opt()
             .unwrap_or(None)
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Búsqueda interactiva con autocompletado
+//  Escribir para filtrar → Tab / Enter para confirmar → retorna el ID
+// ══════════════════════════════════════════════════════════════════════════════
+
+fn truncar_label(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncado: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", truncado)
+    }
+}
+
+/// Muestra lista filtrable. Escribir filtra en tiempo real, Tab/Enter confirma.
+/// Retorna el ID del elemento seleccionado, o None si se cancela (Esc).
+pub(crate) fn buscar_en_lista(titulo: &str, items: Vec<(String, String)>) -> Option<String> {
+    if items.is_empty() {
+        println!("  {}", "No hay elementos registrados.".yellow());
+        return None;
+    }
+    if es_termux() {
+        println!();
+        println!("  {}", titulo.bold());
+        for (i, (label, _)) in items.iter().enumerate() {
+            println!("  {}. {}", i + 1, label);
+        }
+        println!("  0. Cancelar");
+        print!("  Opción: ");
+        let input = leer_linea();
+        match input.trim().parse::<usize>() {
+            Ok(0) => None,
+            Ok(n) if n <= items.len() => Some(items[n - 1].1.clone()),
+            _ => None,
+        }
+    } else {
+        let labels: Vec<&str> = items.iter().map(|(l, _)| l.as_str()).collect();
+        println!(
+            "  {} — escribir filtra, Tab/Enter confirma, Esc cancela",
+            titulo.bold()
+        );
+        let sel = FuzzySelect::new()
+            .with_prompt("  >")
+            .items(&labels)
+            .default(0)
+            .interact_opt()
+            .unwrap_or(None)?;
+        Some(items[sel].1.clone())
+    }
+}
+
+/// Búsqueda fuzzy sobre obras activas. Retorna el ID de la obra seleccionada.
+pub(crate) fn buscar_obra_id(state: &AppState) -> Option<String> {
+    let items: Vec<(String, String)> = state
+        .obras
+        .activas()
+        .into_iter()
+        .map(|o| {
+            (
+                format!(
+                    "{:<28} | {:<18} | {:<16} | ${:.0}",
+                    truncar_label(&o.nombre, 28),
+                    truncar_label(&o.cliente, 18),
+                    o.estado.nombre(),
+                    o.contrato.valor_total
+                ),
+                o.id.clone(),
+            )
+        })
+        .collect();
+    buscar_en_lista("Seleccionar obra", items)
+}
+
+/// Búsqueda fuzzy sobre casos activos.
+pub(crate) fn buscar_caso_id(state: &AppState) -> Option<String> {
+    let hoy = Local::now().date_naive();
+    let items: Vec<(String, String)> = state
+        .casos
+        .cola_trabajo(hoy)
+        .into_iter()
+        .map(|c| {
+            (
+                format!(
+                    "{:<12} | {:<24} | {}",
+                    c.numero_caso,
+                    truncar_label(&c.paciente.nombre_completo(), 24),
+                    c.estado.nombre()
+                ),
+                c.id.clone(),
+            )
+        })
+        .collect();
+    buscar_en_lista("Seleccionar caso", items)
+}
+
+/// Búsqueda fuzzy sobre proveedores registrados.
+pub(crate) fn buscar_proveedor_id(state: &AppState) -> Option<String> {
+    let items: Vec<(String, String)> = state
+        .proveedores
+        .proveedores
+        .iter()
+        .map(|p| {
+            (
+                format!(
+                    "{:<28} | {:<20} | {}",
+                    truncar_label(&p.nombre, 28),
+                    truncar_label(&p.especialidad, 20),
+                    p.nivel_engagement.nombre()
+                ),
+                p.id.clone(),
+            )
+        })
+        .collect();
+    buscar_en_lista("Seleccionar proveedor", items)
+}
+
+/// Búsqueda fuzzy sobre alertas activas de cobranza.
+pub(crate) fn buscar_alerta_id(state: &AppState) -> Option<String> {
+    let items: Vec<(String, String)> = state
+        .cobranzas
+        .alertas_activas()
+        .into_iter()
+        .map(|a| {
+            (
+                format!(
+                    "{:<24} | {:<22} | {} | ${:.0}",
+                    truncar_label(&a.cliente, 24),
+                    truncar_label(&a.titulo, 22),
+                    a.prioridad.nombre(),
+                    a.monto_relacionado
+                ),
+                a.id.clone(),
+            )
+        })
+        .collect();
+    buscar_en_lista("Seleccionar alerta de cobranza", items)
+}
+
+/// Búsqueda fuzzy sobre cuentas por cobrar activas.
+pub(crate) fn buscar_cuenta_id(state: &AppState) -> Option<String> {
+    let hoy = Local::now().date_naive();
+    let items: Vec<(String, String)> = state
+        .cobranzas
+        .cuentas_activas()
+        .into_iter()
+        .map(|c| {
+            (
+                format!(
+                    "{:<24} | {:<22} | ${:.0} | {}",
+                    truncar_label(&c.cliente, 24),
+                    truncar_label(&c.descripcion, 22),
+                    c.monto_pendiente(),
+                    c.estado.nombre()
+                ),
+                c.id.clone(),
+            )
+        })
+        .collect();
+    let _ = hoy; // usado en monto_pendiente indirectamente
+    buscar_en_lista("Seleccionar cuenta por cobrar", items)
+}
+
+/// Búsqueda fuzzy sobre perfiles de cobranza.
+pub(crate) fn buscar_perfil_cobranza_id(state: &AppState) -> Option<String> {
+    let items: Vec<(String, String)> = state
+        .cobranzas
+        .perfiles
+        .iter()
+        .map(|p| {
+            (
+                format!(
+                    "{:<28} | Tel: {}",
+                    truncar_label(&p.nombre, 28),
+                    p.telefono_principal
+                ),
+                p.id.clone(),
+            )
+        })
+        .collect();
+    buscar_en_lista("Seleccionar perfil de cliente", items)
+}
+
+/// Búsqueda fuzzy sobre propuestas registradas.
+pub(crate) fn buscar_propuesta_id(state: &AppState) -> Option<String> {
+    let items: Vec<(String, String)> = state
+        .propuestas
+        .propuestas
+        .iter()
+        .map(|p| {
+            (
+                format!(
+                    "{:<28} | {:<20} | {}",
+                    truncar_label(&p.nombre, 28),
+                    truncar_label(&p.cliente, 20),
+                    p.estado.nombre()
+                ),
+                p.id.clone(),
+            )
+        })
+        .collect();
+    buscar_en_lista("Seleccionar propuesta", items)
+}
+
+// ── Helpers de contexto: muestran el item activo o invocan búsqueda ────────
+
+/// Usa ctx si está definido (y existe), si no lanza FuzzySelect y actualiza ctx.
+fn resolver_obra_ctx(state: &AppState, ctx: &mut Option<String>) -> Option<String> {
+    if let Some(ref id) = ctx.clone() {
+        if let Some(o) = state.obras.obra(id) {
+            println!(
+                "  📍 Obra activa: {}  |  {}  |  {:.0}%",
+                o.nombre.cyan().bold(),
+                o.estado.nombre(),
+                o.pct_avance()
+            );
+            return Some(id.clone());
+        }
+    }
+    let id = buscar_obra_id(state)?;
+    *ctx = Some(id.clone());
+    Some(id)
+}
+
+fn resolver_caso_ctx(state: &AppState, ctx: &mut Option<String>) -> Option<String> {
+    if let Some(ref id) = ctx.clone() {
+        if let Some(c) = state.casos.caso(id) {
+            println!(
+                "  📍 Caso activo: {}  |  {}  |  {}",
+                c.numero_caso.cyan().bold(),
+                c.paciente.nombre_completo(),
+                c.estado.nombre()
+            );
+            return Some(id.clone());
+        }
+    }
+    let id = buscar_caso_id(state)?;
+    *ctx = Some(id.clone());
+    Some(id)
+}
+
+fn resolver_propuesta_ctx(state: &AppState, ctx: &mut Option<String>) -> Option<String> {
+    if let Some(ref id) = ctx.clone() {
+        if let Some(p) = state.propuestas.propuesta(id) {
+            println!(
+                "  📍 Propuesta activa: {}  |  {}  |  {}",
+                p.nombre.cyan().bold(),
+                p.cliente,
+                p.estado.nombre()
+            );
+            return Some(id.clone());
+        }
+    }
+    let id = buscar_propuesta_id(state)?;
+    *ctx = Some(id.clone());
+    Some(id)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -8143,6 +8438,45 @@ pub(crate) fn ml_elegir_dataset(state: &AppState) -> Option<usize> {
     menu("Selecciona un dataset:", &refs)
 }
 
+/// Como `pedir_f64` pero devuelve `None` si el usuario cancela con Esc.
+pub(crate) fn pedir_f64_opt(prompt: &str, default: f64) -> Option<f64> {
+    let s: String = match Input::new()
+        .with_prompt(format!(
+            "  {} (default: {:.2}) [Esc=cancelar, expresiones: 2*1283.54, 50%…]",
+            prompt, default
+        ))
+        .default(default.to_string())
+        .interact_text()
+    {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    let txt = s.trim();
+    if txt.is_empty() {
+        return Some(default);
+    }
+    match evaluar_expresion(txt) {
+        Ok(v) => {
+            if !txt
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+            {
+                println!("    = {:.2}", v);
+            }
+            Some(v)
+        }
+        Err(e) => {
+            println!(
+                "    {} Expresión inválida ({}). Se usa default {:.2}.",
+                "⚠".yellow(),
+                e,
+                default
+            );
+            Some(default)
+        }
+    }
+}
+
 pub(crate) fn pedir_f64(prompt: &str, default: f64) -> f64 {
     let s: String = Input::new()
         .with_prompt(format!(
@@ -9292,6 +9626,7 @@ pub(crate) fn menu_nlp(state: &mut AppState) {
 }
 
 pub(crate) fn menu_nlp_chat(state: &mut AppState) {
+    use omniplanner::nlp::asistente;
     limpiar();
     println!("{}", "  💬 Chat Interactivo — NLP".cyan().bold());
     println!("  Escribe mensajes naturales. Escribe 'salir' para volver.\n");
@@ -9317,15 +9652,44 @@ pub(crate) fn menu_nlp_chat(state: &mut AppState) {
 
         let resultado = state.nlp.motor.procesar(&input);
 
-        // Mostrar respuesta
-        println!("\n  🤖 {}", resultado.respuesta.green());
+        // Enrutar al asistente completo (finanzas + multi-módulo + calendario…)
+        // para que intents como CalcularFecha, CrearTarea, etc. se resuelvan
+        // aunque el clasificador genérico haya dado una categoría distinta.
+        let intencion_obj = state.nlp.motor.intencion.clasificar(&input);
+        let respuesta_asistente = asistente::responder(&input, &intencion_obj, state);
 
-        // Info adicional
+        // Usar la respuesta del asistente como texto principal cuando sea más
+        // específica que la del motor genérico.
+        let texto_mostrar = if !matches!(
+            respuesta_asistente.intent,
+            omniplanner::nlp::intent::CategoriaIntencion::Desconocido
+                | omniplanner::nlp::intent::CategoriaIntencion::Saludo
+                | omniplanner::nlp::intent::CategoriaIntencion::Despedida
+                | omniplanner::nlp::intent::CategoriaIntencion::Agradecimiento
+        ) || respuesta_asistente.modifico_estado
+        {
+            respuesta_asistente.texto.clone()
+        } else {
+            resultado.respuesta.clone()
+        };
+
+        // Mostrar respuesta
+        println!("\n  🤖 {}", texto_mostrar.green());
+
+        if respuesta_asistente.modifico_estado {
+            if let Err(e) = state.guardar() {
+                println!("  ⚠ No se pudo guardar: {}", e);
+            }
+        }
+
+        // Info adicional — mostrar el intent efectivo del asistente (más preciso)
+        let intent_mostrar = respuesta_asistente.intent.nombre().to_string();
+        let conf_mostrar = respuesta_asistente.confianza;
         println!(
             "  {} Intención: {} (confianza: {:.0}%)",
             "→".dimmed(),
-            resultado.intencion.yellow(),
-            resultado.confianza_intencion * 100.0
+            intent_mostrar.yellow(),
+            conf_mostrar * 100.0
         );
         println!(
             "  {} Sentimiento: {} (score: {:.2})",
@@ -9370,7 +9734,7 @@ pub(crate) fn menu_nlp_chat(state: &mut AppState) {
                 0 => {
                     state.nlp.motor.registrar_feedback(
                         &input,
-                        &resultado.respuesta,
+                        &texto_mostrar,
                         Valoracion::Buena,
                         None,
                     );
@@ -9379,7 +9743,7 @@ pub(crate) fn menu_nlp_chat(state: &mut AppState) {
                 1 => {
                     state.nlp.motor.registrar_feedback(
                         &input,
-                        &resultado.respuesta,
+                        &texto_mostrar,
                         Valoracion::Mala,
                         None,
                     );
@@ -15929,31 +16293,234 @@ pub(crate) fn historial_eliminar(state: &mut AppState) {
 //  Menú compacto ML/NLP avanzado (las herramientas técnicas)
 // ══════════════════════════════════════════════════════════════
 
-pub(crate) fn menu_ml_nlp_avanzado(state: &mut AppState) {
+/// Asistente IA unificado — fusiona NLP en lenguaje natural con herramientas ML.
+/// El usuario habla directamente; los comandos especiales dan acceso a las
+/// herramientas técnicas de Machine Learning y NLP.
+pub(crate) fn menu_asistente_ia(state: &mut AppState) {
+    use omniplanner::nlp::asistente;
+    use omniplanner::nlp::intent::{CategoriaIntencion, Intencion};
+
+    // Limpiar pantalla una sola vez al entrar — no dentro del loop
+    // para que el historial de la conversación permanezca visible.
+    limpiar();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║  🧠  A S I S T E N T E   I A   —   O m n i p l a n n e r        ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+    println!(
+        "  {}",
+        "Habla en lenguaje natural — te entiendo sin comandos exactos:".dimmed()
+    );
+    println!(
+        "    {}",
+        "💰  \"gasté 80 en gasolina hoy\" / \"resumen financiero\"".dimmed()
+    );
+    println!(
+        "    {}",
+        "🏗️   \"cómo van mis obras\" / \"alertas en proyectos\"".dimmed()
+    );
+    println!(
+        "    {}",
+        "💵  \"qué me deben\" / \"total por cobrar\"".dimmed()
+    );
+    println!(
+        "    {}",
+        "🏢  \"cómo va la empresa\" / \"propuestas activas\"".dimmed()
+    );
+    println!(
+        "    {}",
+        "📋  \"mis pendientes\" / \"agregar tarea revisar contrato\"".dimmed()
+    );
+    println!(
+        "    {}",
+        "📅  \"el cumple de Lucho es el 12 de julio\"".dimmed()
+    );
+    println!(
+        "    {}",
+        "🔐  \"genera contraseña segura\" / \"cuántos días falta para Navidad\"".dimmed()
+    );
+    println!();
+    println!(
+        "  Comandos especiales: {} {} {} {} {}",
+        "ayuda".yellow(),
+        "debug <msg>".yellow(),
+        "herramientas".yellow(),
+        "optimizar".yellow(),
+        "salir".yellow()
+    );
+    println!();
+
     loop {
-        limpiar();
-        separador("🤖 ML / NLP AVANZADO");
-        println!(
-            "  {}",
-            "Herramientas técnicas de Machine Learning y NLP".dimmed()
+        let input: String = match Input::new().with_prompt("  🧠 Tú").interact_text() {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let input = input.trim().to_string();
+        if input.is_empty() {
+            continue;
+        }
+        if input == "salir" || input == "exit" || input == "quit" || input == "volver" {
+            return;
+        }
+
+        // ── Comandos especiales ──────────────────────────────────────────
+        if input == "ayuda" || input == "help" || input == "?" || input == "comandos" {
+            af_ayuda();
+            pausa();
+            continue;
+        }
+        if input == "herramientas" || input == "ml" || input == "nlp" || input == "tecnico" {
+            // Submenú de herramientas técnicas ML/NLP
+            loop {
+                limpiar();
+                separador("🔬 HERRAMIENTAS TÉCNICAS ML/NLP");
+                let sub = &[
+                    "🤖  Machine Learning (modelos, datasets, algoritmos)",
+                    "🗣️   Procesamiento de Lenguaje Natural (diagnóstico)",
+                    "🔙  Volver al asistente",
+                ];
+                match menu("Selecciona herramienta:", sub) {
+                    Some(0) => menu_ml(state),
+                    Some(1) => menu_nlp(state),
+                    _ => break,
+                }
+            }
+            continue;
+        }
+        if input.to_lowercase().starts_with("buscar ") {
+            let query = input["buscar ".len()..].trim();
+            af_buscar(state, query);
+            pausa();
+            continue;
+        }
+        if input == "validar" || input == "validar datos" {
+            af_validar(state);
+            pausa();
+            continue;
+        }
+        if input.to_lowercase().starts_with("debug") {
+            let texto_debug = if input.len() > 5 {
+                input["debug".len()..].trim()
+            } else {
+                ""
+            };
+            af_debug_nlp(state, &input, texto_debug);
+            pausa();
+            continue;
+        }
+        if input == "optimizar" || input == "optimizar gastos" || input == "sugerencias" {
+            af_optimizar(state);
+            pausa();
+            continue;
+        }
+
+        // ── Clasificación y respuesta NLP ────────────────────────────────
+        let intencion = state.nlp.motor.intencion.clasificar(&input);
+
+        // AgendarPago siempre lanza el flujo interactivo con confirmación,
+        // sin importar si viene del NLP o de la clarificación del menú.
+        if matches!(intencion.categoria, CategoriaIntencion::AgendarPago) {
+            programar_pago_interactivo(state);
+            continue;
+        }
+
+        let respuesta = asistente::responder(&input, &intencion, &mut *state);
+
+        // Si no se entendió con confianza suficiente, ofrecer clarificación
+        let respuesta = if matches!(
+            respuesta.intent,
+            CategoriaIntencion::Desconocido
+                | CategoriaIntencion::Consultar
+                | CategoriaIntencion::Listar
+                | CategoriaIntencion::Buscar
+                | CategoriaIntencion::Modificar
+                | CategoriaIntencion::Crear
+        ) && respuesta.confianza < 0.7
+        {
+            println!();
+            println!("  {} No entendí bien «{}».", "🤔".yellow(), input.dimmed());
+            match clarificar_intencion_financiera() {
+                Some(CategoriaIntencion::AgendarPago) => {
+                    // Pago futuro: flujo interactivo con confirmación real
+                    programar_pago_interactivo(state);
+                    continue;
+                }
+                Some(cat) => {
+                    let intencion_clara = Intencion {
+                        categoria: cat,
+                        confianza: 1.0,
+                        entidades: vec![],
+                        alternativas: vec![],
+                    };
+                    asistente::responder(&input, &intencion_clara, &mut *state)
+                }
+                None => {
+                    println!("  {} Cancelado.\n", "↩".dimmed());
+                    continue;
+                }
+            }
+        } else {
+            respuesta
+        };
+
+        // Auditar
+        state.auditoria.registrar(
+            TipoAuditoria::AccesoDatosFinancieros,
+            Some(&format!("asistente_ia: {}", respuesta.intent.nombre())),
         );
+
+        // Mostrar respuesta
+        println!();
+        println!("  {} {}", "🤖".cyan(), respuesta.texto);
+        println!();
+        println!(
+            "  {} {} · {:.0}%",
+            "→".dimmed(),
+            respuesta.intent.nombre().yellow(),
+            respuesta.confianza * 100.0,
+        );
+        if let Some(accion) = &respuesta.accion_realizada {
+            println!("  {} {}", "✓".green(), accion.green());
+        }
+        if !respuesta.seguimientos.is_empty() {
+            println!("  {} Puedes preguntar:", "💡".yellow());
+            for s in &respuesta.seguimientos {
+                println!("    • {}", s.dimmed());
+            }
+        }
         println!();
 
-        let opciones = &[
-            "🤖  Machine Learning (modelos, datasets, algoritmos)",
-            "🗣️   Procesamiento de Lenguaje Natural (NLP)",
-            "🔙  Volver",
-        ];
-
-        match menu("¿Qué abrir?", opciones) {
-            Some(0) => menu_ml(state),
-            Some(1) => menu_nlp(state),
-            _ => return,
+        if respuesta.modifico_estado {
+            if let Err(e) = state.guardar() {
+                eprintln!("  {} Error guardando: {}", "✗".red(), e);
+            }
         }
     }
 }
 
 fn main() {
+    // Configurar UTF-8 en Windows para mostrar emojis y caracteres Unicode
+    #[cfg(windows)]
+    unsafe {
+        extern "system" {
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+            fn SetConsoleCP(wCodePageID: u32) -> i32;
+        }
+        SetConsoleOutputCP(65001);
+        SetConsoleCP(65001);
+    }
+
     let mut state = match AppState::cargar() {
         Ok(s) => s,
         Err(_) => AppState::new(),
@@ -16006,20 +16573,20 @@ fn main() {
         dashboard(&state);
 
         let opciones = &[
-            "📋  Tareas",
-            "📅  Agenda y Horarios",
-            "✏️   Canvas (Escritura a mano)",
-            "📊  Diagramas de Flujo",
-            "💾  Versiones (Source Control)",
-            "🔄  Mapeo y Codificación",
+            "✅  Tareas",
+            "🗓️  Agenda y Horarios",
+            "✏️  Canvas (Escritura a mano)",
+            "🔺  Diagramas de Flujo",
+            "🌿  Versiones (Source Control)",
+            "🗺️  Mapeo y Codificación",
             "🧠  Memoria (Buscar y conectar todo)",
-            "🔗  Sincronización (Calendario y Email)",
-            "📄  Reportes (Diario / Semanal)",
-            "💡  Asesor Inteligente (Decisiones y Finanzas)",
-            "🤖  ML/NLP Avanzado (Herramientas técnicas)",
-            "💬  Asistente Financiero (lenguaje natural)",
-            "🔐  Seguridad y Privacidad",
-            "❌  Salir",
+            "☁️  Sincronización (Calendario y Email)",
+            "📊  Reportes (Diario / Semanal)",
+            "⚡  Asesor Inteligente (Decisiones y Finanzas)",
+            "�  Asistente IA (Lenguaje Natural · ML · NLP)",
+            "🏢  Empresa (Propuestas · Casos · Proveedores · Obras · Cobranzas)",
+            "🛡️  Seguridad y Privacidad",
+            "🚪  Salir",
         ];
 
         match menu("¿Qué módulo quieres usar?", opciones) {
@@ -16033,8 +16600,8 @@ fn main() {
             Some(7) => menu_sync(&mut state),
             Some(8) => menu_reportes(&mut state),
             Some(9) => menu_asesor(&mut state),
-            Some(10) => menu_ml_nlp_avanzado(&mut state),
-            Some(11) => menu_asistente_financiero(&mut state),
+            Some(10) => menu_asistente_ia(&mut state),
+            Some(11) => menu_empresa(&mut state),
             Some(12) => menu_seguridad(&mut state),
             _ => {
                 // Guardar antes de salir
@@ -16050,6 +16617,5888 @@ fn main() {
         // Auto-guardar después de cada acción
         if let Err(e) = state.guardar() {
             eprintln!("  {} Error guardando: {}", "✗".red(), e);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Módulo Empresa — agrupa todos los módulos de gestión empresarial
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_empresa(state: &mut AppState) {
+    loop {
+        limpiar();
+        separador("🏢  EMPRESA");
+
+        // Mini-dashboard empresarial
+        use chrono::Local;
+        let hoy = Local::now().date_naive();
+        let obras_activas = state.obras.activas().len();
+        let cuentas_pendientes = state
+            .cobranzas
+            .cuentas
+            .iter()
+            .filter(|c| c.monto_pendiente() > 0.0)
+            .count();
+        let propuestas_activas = state
+            .propuestas
+            .propuestas
+            .iter()
+            .filter(|p| {
+                !matches!(
+                    p.estado,
+                    omniplanner::propuestas::EstadoPropuesta::Ganada
+                        | omniplanner::propuestas::EstadoPropuesta::Perdida
+                        | omniplanner::propuestas::EstadoPropuesta::Cancelada
+                )
+            })
+            .count();
+        let casos_abiertos = state
+            .casos
+            .casos
+            .iter()
+            .filter(|c| {
+                !matches!(
+                    c.estado,
+                    omniplanner::casos::EstadoCaso::Cerrado
+                        | omniplanner::casos::EstadoCaso::Cancelado
+                )
+            })
+            .count();
+        let proveedores_total = state.proveedores.proveedores.len();
+
+        println!("  {} obras activas  │  {} cuentas por cobrar  │  {} propuestas  │  {} casos abiertos  │  {} proveedores",
+            obras_activas.to_string().cyan().bold(),
+            cuentas_pendientes.to_string().yellow(),
+            propuestas_activas.to_string().cyan(),
+            casos_abiertos.to_string().yellow(),
+            proveedores_total.to_string().dimmed());
+        println!();
+
+        let opciones = &[
+            "🧩  Propuestas de Trabajo",
+            "🏥  Intake / Casos de Coordinación",
+            "📞  Proveedores y Outreach",
+            "🏗️   Obras y Ciclo Financiero",
+            "💰  Cobranzas y Gestión de Cobro",
+            "← Volver",
+        ];
+
+        match menu("Módulo empresarial", opciones) {
+            Some(0) => menu_propuestas(state),
+            Some(1) => menu_casos(state),
+            Some(2) => menu_proveedores(state),
+            Some(3) => menu_obras(state),
+            Some(4) => menu_cobranzas(state),
+            _ => return,
+        }
+
+        // Auto-guardar tras cada operación empresarial
+        let _ = hoy; // usado implícitamente por submenús
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Propuestas de Planes de Salud Integrado
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_propuestas(state: &mut AppState) {
+    use chrono::Local;
+    use omniplanner::propuestas::{
+        ContactoSME, EscalacionProblema, EstadoPropuesta, HitoTimeline, NivelEscalacion, Propuesta,
+        PuntoAccion, RegistroSalesforce, ReunionProyecto, SeccionPropuesta, SolicitudRevision,
+        SolicitudSME, TipoReunion, TipoRevisor, TipoSeccion,
+    };
+    let mut ctx_propuesta: Option<String> = None;
+
+    loop {
+        limpiar();
+        separador("🧩  PROPUESTAS DE TRABAJO");
+        if let Some(ref pid) = ctx_propuesta {
+            if let Some(p) = state.propuestas.propuesta(pid) {
+                println!(
+                    "  📍 Propuesta activa: {}  |  {}  |  {}",
+                    p.nombre.cyan().bold(),
+                    p.cliente,
+                    p.estado.nombre()
+                );
+                println!("  💡 Todas las operaciones usarán esta propuesta. Selecciona opción 3 para cambiar.");
+            }
+        }
+        let hoy = Local::now().date_naive();
+        let d = state.propuestas.dashboard(hoy);
+        println!(
+            "  Activas: {}  |  Vencen (7 días): {}  |  SME pendientes: {}  |  Revisiones: {}  |  Escalaciones: {}",
+            d.total_activas.to_string().cyan(),
+            d.vencen_en_7_dias.to_string().yellow(),
+            d.sme_pendientes.to_string().red(),
+            d.revisiones_pendientes.to_string().yellow(),
+            d.escalaciones_abiertas.to_string().red(),
+        );
+        println!();
+
+        let opciones = &[
+            "📋  Ver propuestas activas",
+            "➕  Nueva propuesta",
+            "🔍  Detalle de propuesta",
+            "✏️   Actualizar estado de propuesta",
+            "📌  Secciones de propuesta",
+            "📆  Timeline (hitos)",
+            "🤝  Reuniones y puntos de acción",
+            "🧑‍💼 SMEs (expertos en materia)",
+            "🔔  Solicitudes a SMEs",
+            "👁️   Revisiones de borrador",
+            "⚠️   Escalaciones",
+            "📊  Verificar estrategia de ventas",
+            "💼  Registrar en Salesforce",
+            "🔙  Volver",
+        ];
+
+        match menu("¿Qué deseas hacer?", opciones) {
+            // ── Listar ────────────────────────────────────────────────
+            Some(0) => {
+                limpiar();
+                separador("📋 PROPUESTAS ACTIVAS");
+                let lista = state.propuestas.activas_por_urgencia();
+                if lista.is_empty() {
+                    println!("  Sin propuestas activas.");
+                } else {
+                    for p in &lista {
+                        let dias = p.dias_restantes(hoy);
+                        let color_dias = if dias < 0 {
+                            format!("{}d (VENCIDA)", dias).red().to_string()
+                        } else if dias <= 5 {
+                            format!("{}d", dias).yellow().to_string()
+                        } else {
+                            format!("{}d", dias).green().to_string()
+                        };
+                        println!(
+                            "  [{}] {} — {} | {} | Vence: {} ({})",
+                            p.id.cyan(),
+                            p.nombre.bold(),
+                            p.cliente.dimmed(),
+                            p.estado.nombre().yellow(),
+                            p.fecha_vencimiento,
+                            color_dias
+                        );
+                        println!(
+                            "        Progreso: {:.0}%  SME pend: {}  Rev pend: {}  Escal: {}",
+                            p.progreso_pct(),
+                            p.sme_pendientes().len(),
+                            p.revisiones_pendientes().len(),
+                            p.escalaciones_abiertas().len()
+                        );
+                    }
+                }
+                pausa();
+            }
+
+            // ── Nueva propuesta ───────────────────────────────────────
+            Some(1) => {
+                limpiar();
+                separador("➕ NUEVA PROPUESTA");
+                print!("  Nombre: ");
+                let nombre = leer_linea();
+                print!("  Cliente: ");
+                let cliente = leer_linea();
+                print!("  Vendedor: ");
+                let vendedor = leer_linea();
+                let recibida = leer_fecha("Fecha recibida");
+                let vencimiento = leer_fecha("Fecha de vencimiento");
+                print!("  ID Salesforce (enter=vacío): ");
+                let sf = leer_linea();
+                print!("  Estrategia de ventas (descripción breve): ");
+                let ev = leer_linea();
+
+                let mut prop = Propuesta::nueva(nombre, cliente, vendedor, recibida, vencimiento);
+                prop.id_salesforce = sf;
+                prop.estrategia_ventas = ev;
+                let id = prop.id.clone();
+                state.propuestas.agregar(prop);
+                let _ = state.guardar();
+                println!("  {} Propuesta creada [{}].", "✓".green(), id.cyan());
+                pausa();
+            }
+
+            // ── Detalle ───────────────────────────────────────────────
+            Some(2) => {
+                limpiar();
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                    separador(&format!("🔍 {}", p.nombre));
+                    println!("  Cliente:    {}", p.cliente.cyan());
+                    println!("  Vendedor:   {}", p.vendedor);
+                    println!("  Estado:     {}", p.estado.nombre().yellow());
+                    println!(
+                        "  Vence:      {}  ({} días)",
+                        p.fecha_vencimiento,
+                        p.dias_restantes(hoy)
+                    );
+                    println!("  Progreso:   {:.0}%", p.progreso_pct());
+                    println!("  SF:         {}", p.id_salesforce);
+                    println!("  Estrategia: {}", p.estrategia_ventas.dimmed());
+                    println!("  Secciones:  {}", p.secciones.len());
+                    println!("  Hitos:      {}", p.timeline.len());
+                    println!("  Reuniones:  {}", p.reuniones.len());
+                    println!("  SME pend:   {}", p.sme_pendientes().len());
+                    println!("  Rev pend:   {}", p.revisiones_pendientes().len());
+                    println!(
+                        "  Escalaciones abiertas: {}",
+                        p.escalaciones_abiertas().len()
+                    );
+                    let ver = p.verificar_estrategia();
+                    println!(
+                        "  Consistencia estrategia: {:.0}%",
+                        ver.porcentaje_consistencia
+                    );
+                } else {
+                    println!("  {} Propuesta no encontrada.", "✗".red());
+                }
+                pausa();
+            }
+
+            // ── Actualizar estado ─────────────────────────────────────
+            Some(3) => {
+                limpiar();
+                separador("✏️  ACTUALIZAR ESTADO");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let estados = &[
+                    "recibida",
+                    "kickoff_pendiente",
+                    "en_desarrollo",
+                    "revision_interna",
+                    "revision_vendedor",
+                    "proofreading",
+                    "lista_envio",
+                    "enviada",
+                    "ganada",
+                    "perdida",
+                    "cancelada",
+                ];
+                if let Some(idx) = menu("Nuevo estado:", estados) {
+                    let nuevo = match idx {
+                        0 => EstadoPropuesta::Recibida,
+                        1 => EstadoPropuesta::KickOffPendiente,
+                        2 => EstadoPropuesta::EnDesarrollo,
+                        3 => EstadoPropuesta::EnRevisionInterna,
+                        4 => EstadoPropuesta::EnRevisionVendedor,
+                        5 => EstadoPropuesta::Proofreading,
+                        6 => EstadoPropuesta::ListaParaEnvio,
+                        7 => EstadoPropuesta::Enviada,
+                        8 => EstadoPropuesta::Ganada,
+                        9 => EstadoPropuesta::Perdida,
+                        _ => EstadoPropuesta::Cancelada,
+                    };
+                    if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                        p.estado = nuevo;
+                        let _ = state.guardar();
+                        println!("  {} Estado actualizado.", "✓".green());
+                    } else {
+                        println!("  {} No encontrada.", "✗".red());
+                    }
+                }
+                pausa();
+            }
+
+            // ── Secciones ─────────────────────────────────────────────
+            Some(4) => {
+                limpiar();
+                separador("📌 SECCIONES");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let tipos = &[
+                    "pricing",
+                    "stop_loss",
+                    "red/network",
+                    "gestión de cuidado",
+                    "engagement de población",
+                    "estrategia de ventas",
+                    "resumen ejecutivo",
+                    "administrativa",
+                    "otra",
+                ];
+                if let Some(tidx) = menu("Tipo de sección:", tipos) {
+                    let tipo = match tidx {
+                        0 => TipoSeccion::Pricing,
+                        1 => TipoSeccion::StopLoss,
+                        2 => TipoSeccion::Red,
+                        3 => TipoSeccion::GestionCuidado,
+                        4 => TipoSeccion::EngagementPoblacion,
+                        5 => TipoSeccion::EstrategiaVentas,
+                        6 => TipoSeccion::ResumenEjecutivo,
+                        7 => TipoSeccion::Administrativa,
+                        _ => {
+                            print!("  Nombre de sección: ");
+                            TipoSeccion::Otra(leer_linea())
+                        }
+                    };
+                    print!("  Descripción: ");
+                    let desc = leer_linea();
+                    print!("  Responsable: ");
+                    let resp = leer_linea();
+                    let sec = SeccionPropuesta::nueva(tipo, desc, resp);
+                    let sid = sec.id.clone();
+                    if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                        p.agregar_seccion(sec);
+                        let _ = state.guardar();
+                        println!("  {} Sección añadida [{}].", "✓".green(), sid.cyan());
+                    } else {
+                        println!("  {} No encontrada.", "✗".red());
+                    }
+                }
+                pausa();
+            }
+
+            // ── Timeline ──────────────────────────────────────────────
+            Some(5) => {
+                limpiar();
+                separador("📆 TIMELINE");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let accs = &["Ver hitos", "Agregar hito", "Marcar hito completado"];
+                match menu("Acción:", accs) {
+                    Some(0) => {
+                        if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                            for h in &p.timeline {
+                                let estado = if h.completado {
+                                    "✓".green().to_string()
+                                } else {
+                                    let d = h.dias_restantes(hoy);
+                                    if d < 0 {
+                                        "VENCIDO".red().to_string()
+                                    } else {
+                                        format!("{}d", d).yellow().to_string()
+                                    }
+                                };
+                                println!(
+                                    "  [{}] {} — {} | {}",
+                                    h.id.cyan(),
+                                    h.descripcion,
+                                    h.fecha_objetivo,
+                                    estado
+                                );
+                            }
+                        }
+                    }
+                    Some(1) => {
+                        print!("  Descripción del hito: ");
+                        let desc = leer_linea();
+                        let f = leer_fecha("Fecha objetivo");
+                        let hito = HitoTimeline::nuevo(desc, f);
+                        let hid = hito.id.clone();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            p.agregar_hito(hito);
+                            let _ = state.guardar();
+                            println!("  {} Hito creado [{}].", "✓".green(), hid.cyan());
+                        }
+                    }
+                    Some(2) => {
+                        print!("  ID hito: ");
+                        let hid = leer_linea();
+                        let hoy_actual = hoy;
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(h) = p.timeline.iter_mut().find(|h| h.id == hid.trim()) {
+                                h.completado = true;
+                                h.fecha_real = Some(hoy_actual);
+                                let _ = state.guardar();
+                                println!("  {} Hito completado.", "✓".green());
+                            } else {
+                                println!("  {} No encontrado.", "✗".red());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+
+            // ── Reuniones ─────────────────────────────────────────────
+            Some(6) => {
+                limpiar();
+                separador("🤝 REUNIONES");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let accs = &[
+                    "Ver reuniones",
+                    "Nueva reunión",
+                    "Agregar punto de acción",
+                    "Marcar punto completado",
+                    "Enviar recap",
+                ];
+                match menu("Acción:", accs) {
+                    Some(0) => {
+                        if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                            for r in &p.reuniones {
+                                println!(
+                                    "  [{}] {} — {} | Recap: {}",
+                                    r.id.cyan(),
+                                    r.titulo.bold(),
+                                    r.fecha,
+                                    if r.recap_enviado {
+                                        "Sí".green().to_string()
+                                    } else {
+                                        "No".red().to_string()
+                                    }
+                                );
+                                for a in r.puntos_accion.iter().filter(|a| !a.completado) {
+                                    println!(
+                                        "       ⚡ {} — {}",
+                                        a.descripcion.yellow(),
+                                        a.responsable.dimmed()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Some(1) => {
+                        print!("  Título de reunión: ");
+                        let titulo = leer_linea();
+                        let f = leer_fecha("Fecha");
+                        let tipos_r = &[
+                            "Kick-Off",
+                            "Estrategia",
+                            "Estatus",
+                            "Revisión borrador",
+                            "Cierre",
+                            "Escalación",
+                        ];
+                        let tipo_r = match menu("Tipo:", tipos_r) {
+                            Some(0) => TipoReunion::KickOff,
+                            Some(1) => TipoReunion::Estrategia,
+                            Some(2) => TipoReunion::Estatus,
+                            Some(3) => TipoReunion::RevisionBorrador,
+                            Some(4) => TipoReunion::Cierre,
+                            Some(5) => TipoReunion::Escalacion,
+                            _ => TipoReunion::Estatus,
+                        };
+                        let reunion = ReunionProyecto::nueva(id.trim(), tipo_r, titulo, f);
+                        let rid = reunion.id.clone();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            p.agregar_reunion(reunion);
+                            let _ = state.guardar();
+                            println!("  {} Reunión creada [{}].", "✓".green(), rid.cyan());
+                        }
+                    }
+                    Some(2) => {
+                        print!("  ID reunión: ");
+                        let rid = leer_linea();
+                        print!("  Descripción: ");
+                        let desc = leer_linea();
+                        print!("  Responsable: ");
+                        let resp = leer_linea();
+                        let fl = leer_fecha("Fecha límite");
+                        let accion = PuntoAccion::nuevo(desc, resp, fl);
+                        let aid = accion.id.clone();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(r) = p.reuniones.iter_mut().find(|r| r.id == rid.trim()) {
+                                r.puntos_accion.push(accion);
+                                let _ = state.guardar();
+                                println!("  {} Punto de acción [{}].", "✓".green(), aid.cyan());
+                            }
+                        }
+                    }
+                    Some(3) => {
+                        print!("  ID reunión: ");
+                        let rid = leer_linea();
+                        print!("  ID acción: ");
+                        let aid = leer_linea();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(r) = p.reuniones.iter_mut().find(|r| r.id == rid.trim()) {
+                                if let Some(a) =
+                                    r.puntos_accion.iter_mut().find(|a| a.id == aid.trim())
+                                {
+                                    a.completado = true;
+                                    let _ = state.guardar();
+                                    println!("  {} Completado.", "✓".green());
+                                }
+                            }
+                        }
+                    }
+                    Some(4) => {
+                        print!("  ID reunión: ");
+                        let rid = leer_linea();
+                        print!("  Resumen del acta (enter para omitir): ");
+                        let acta = leer_linea();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(r) = p.reuniones.iter_mut().find(|r| r.id == rid.trim()) {
+                                if !acta.is_empty() {
+                                    r.acta_resumen = acta;
+                                }
+                                r.recap_enviado = true;
+                                let _ = state.guardar();
+                                println!("  {} Recap marcado enviado.", "✓".green());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+
+            // ── SMEs ──────────────────────────────────────────────────
+            Some(7) => {
+                limpiar();
+                separador("🧑‍💼 SMEs — EXPERTOS EN MATERIA");
+                let accs = &["Listar SMEs", "Agregar SME", "Buscar por área"];
+                match menu("Acción:", accs) {
+                    Some(0) => {
+                        for s in &state.propuestas.smes {
+                            println!(
+                                "  [{}] {} — {} | {} | {}",
+                                s.id.cyan(),
+                                s.nombre.bold(),
+                                s.area_especialidad.yellow(),
+                                s.empresa.dimmed(),
+                                s.email.dimmed()
+                            );
+                        }
+                    }
+                    Some(1) => {
+                        print!("  Nombre: ");
+                        let n = leer_linea();
+                        print!("  Área de especialidad: ");
+                        let a = leer_linea();
+                        print!("  Email: ");
+                        let e = leer_linea();
+                        print!("  Teléfono (enter=vacío): ");
+                        let t = leer_linea();
+                        print!("  Empresa (enter=vacío): ");
+                        let emp = leer_linea();
+                        let mut sme = ContactoSME::nuevo(n, a, e);
+                        sme.telefono = t;
+                        sme.empresa = emp;
+                        sme.activo = true;
+                        let sid = sme.id.clone();
+                        state.propuestas.agregar_sme(sme);
+                        let _ = state.guardar();
+                        println!("  {} SME registrado [{}].", "✓".green(), sid.cyan());
+                    }
+                    Some(2) => {
+                        print!("  Área a buscar: ");
+                        let a = leer_linea();
+                        for s in state.propuestas.smes_por_area(&a) {
+                            println!(
+                                "  [{}] {} — {} | {}",
+                                s.id.cyan(),
+                                s.nombre.bold(),
+                                s.area_especialidad.yellow(),
+                                s.email.dimmed()
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+
+            // ── Solicitudes a SMEs ────────────────────────────────────
+            Some(8) => {
+                limpiar();
+                separador("🔔 SOLICITUDES A SMEs");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let accs = &[
+                    "Ver solicitudes abiertas",
+                    "Nueva solicitud",
+                    "Registrar respuesta",
+                ];
+                match menu("Acción:", accs) {
+                    Some(0) => {
+                        if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                            for s in p.sme_pendientes() {
+                                let dias = s.dias_para_vencer(hoy);
+                                println!(
+                                    "  [{}] {} | SME: {} | Límite: {} ({}d)",
+                                    s.id.cyan(),
+                                    s.pregunta.bold(),
+                                    s.sme_id.yellow(),
+                                    s.fecha_limite,
+                                    dias
+                                );
+                            }
+                        }
+                    }
+                    Some(1) => {
+                        print!("  ID SME: ");
+                        let sme_id = leer_linea();
+                        print!("  Pregunta: ");
+                        let preg = leer_linea();
+                        print!("  Contexto (enter=vacío): ");
+                        let ctx = leer_linea();
+                        let fl = leer_fecha("Fecha límite");
+                        let mut sol = SolicitudSME::nueva(id.trim(), sme_id.trim(), preg, hoy, fl);
+                        sol.contexto = ctx;
+                        sol.estado = omniplanner::propuestas::EstadoSolicitudSME::Enviada;
+                        let sid = sol.id.clone();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            p.agregar_solicitud_sme(sol);
+                            let _ = state.guardar();
+                            println!("  {} Solicitud [{}] enviada.", "✓".green(), sid.cyan());
+                        }
+                    }
+                    Some(2) => {
+                        print!("  ID solicitud: ");
+                        let sid = leer_linea();
+                        print!("  Respuesta del SME: ");
+                        let resp = leer_linea();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(s) =
+                                p.solicitudes_sme.iter_mut().find(|s| s.id == sid.trim())
+                            {
+                                s.respuesta = resp;
+                                s.estado = omniplanner::propuestas::EstadoSolicitudSME::Respondida;
+                                s.fecha_respuesta = Some(hoy);
+                                let _ = state.guardar();
+                                println!("  {} Respuesta registrada.", "✓".green());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+
+            // ── Revisiones ────────────────────────────────────────────
+            Some(9) => {
+                limpiar();
+                separador("👁️  REVISIONES DE BORRADOR");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let accs = &["Ver revisiones", "Solicitar revisión", "Marcar completada"];
+                match menu("Acción:", accs) {
+                    Some(0) => {
+                        if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                            for r in &p.revisiones {
+                                println!(
+                                    "  [{}] {} | Límite: {} | Completada: {}",
+                                    r.id.cyan(),
+                                    r.tipo_revisor.nombre().yellow(),
+                                    r.fecha_limite,
+                                    if r.completada {
+                                        "Sí".green().to_string()
+                                    } else {
+                                        "No".red().to_string()
+                                    }
+                                );
+                                if !r.comentarios.is_empty() {
+                                    println!("       Comentarios: {}", r.comentarios.dimmed());
+                                }
+                            }
+                        }
+                    }
+                    Some(1) => {
+                        let tipos_r = &["Vendedor", "Editor Estratégico", "Interno"];
+                        let tipo = match menu("Tipo de revisor:", tipos_r) {
+                            Some(0) => TipoRevisor::Vendedor,
+                            Some(1) => TipoRevisor::EditorEstrategico,
+                            _ => TipoRevisor::Interno,
+                        };
+                        print!("  Nombre del revisor: ");
+                        let nombre = leer_linea();
+                        let fl = leer_fecha("Fecha límite");
+                        let rev = SolicitudRevision::nueva(id.trim(), tipo, nombre, hoy, fl);
+                        let rid = rev.id.clone();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            p.agregar_revision(rev);
+                            let _ = state.guardar();
+                            println!("  {} Revisión solicitada [{}].", "✓".green(), rid.cyan());
+                        }
+                    }
+                    Some(2) => {
+                        print!("  ID revisión: ");
+                        let rid = leer_linea();
+                        print!("  Comentarios (enter=vacío): ");
+                        let com = leer_linea();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(r) = p.revisiones.iter_mut().find(|r| r.id == rid.trim()) {
+                                r.completada = true;
+                                r.fecha_completada = Some(hoy);
+                                r.comentarios = com;
+                                let _ = state.guardar();
+                                println!("  {} Revisión completada.", "✓".green());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+
+            // ── Escalaciones ──────────────────────────────────────────
+            Some(10) => {
+                limpiar();
+                separador("⚠️  ESCALACIONES");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let accs = &["Ver escalaciones", "Escalar problema", "Marcar resuelta"];
+                match menu("Acción:", accs) {
+                    Some(0) => {
+                        if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                            for e in &p.escalaciones {
+                                println!(
+                                    "  [{}] {} | {} → {} | Resuelto: {}",
+                                    e.id.cyan(),
+                                    e.descripcion.red(),
+                                    e.nivel.nombre().yellow(),
+                                    e.escalado_a,
+                                    if e.resuelto {
+                                        "Sí".green().to_string()
+                                    } else {
+                                        "No".red().to_string()
+                                    }
+                                );
+                            }
+                        }
+                    }
+                    Some(1) => {
+                        print!("  Descripción del problema: ");
+                        let desc = leer_linea();
+                        let niveles = &["Supervisor", "Gerente", "Director", "VP"];
+                        let nivel = match menu("Nivel a escalar:", niveles) {
+                            Some(0) => NivelEscalacion::Supervisor,
+                            Some(1) => NivelEscalacion::Gerente,
+                            Some(2) => NivelEscalacion::Director,
+                            _ => NivelEscalacion::VP,
+                        };
+                        print!("  Escalado a (nombre): ");
+                        let a = leer_linea();
+                        let esc = EscalacionProblema::nueva(id.trim(), desc, nivel, a, hoy);
+                        let eid = esc.id.clone();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            p.agregar_escalacion(esc);
+                            let _ = state.guardar();
+                            println!("  {} Escalación registrada [{}].", "✓".green(), eid.cyan());
+                        }
+                    }
+                    Some(2) => {
+                        print!("  ID escalación: ");
+                        let eid = leer_linea();
+                        print!("  Resolución: ");
+                        let res = leer_linea();
+                        if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                            if let Some(e) = p.escalaciones.iter_mut().find(|e| e.id == eid.trim())
+                            {
+                                e.resuelto = true;
+                                e.resolucion = res;
+                                e.fecha_resolucion = Some(hoy);
+                                let _ = state.guardar();
+                                println!("  {} Escalación resuelta.", "✓".green());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+
+            // ── Verificar estrategia ──────────────────────────────────
+            Some(11) => {
+                limpiar();
+                separador("📊 VERIFICAR ESTRATEGIA DE VENTAS");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                    let ver = p.verificar_estrategia();
+                    println!("  Estrategia de ventas: {}", p.estrategia_ventas.cyan());
+                    println!(
+                        "  Definida: {}",
+                        if ver.estrategia_definida {
+                            "Sí".green().to_string()
+                        } else {
+                            "No".red().to_string()
+                        }
+                    );
+                    println!(
+                        "  Consistencia: {:.0}% ({}/{} secciones)",
+                        ver.porcentaje_consistencia,
+                        ver.secciones_con_estrategia,
+                        ver.secciones_total
+                    );
+                    println!();
+                    for s in &p.secciones {
+                        let pres = if s.estrategia_ventas_presente {
+                            "✓"
+                        } else {
+                            "✗"
+                        };
+                        let cons = if s.estrategia_ventas_consistente {
+                            "✓"
+                        } else {
+                            "✗"
+                        };
+                        println!(
+                            "  {:20} presente:{} consistente:{} — {}",
+                            s.tipo.nombre(),
+                            pres,
+                            cons,
+                            s.estado.nombre().yellow()
+                        );
+                    }
+                }
+                pausa();
+            }
+
+            // ── Log Salesforce ────────────────────────────────────────
+            Some(12) => {
+                limpiar();
+                separador("💼 REGISTRAR EN SALESFORCE");
+                let id = match resolver_propuesta_ctx(state, &mut ctx_propuesta) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(p) = state.propuestas.propuesta(id.trim()) {
+                    println!("  Oportunidad SF actual: {}", p.id_salesforce.cyan());
+                }
+                print!("  Acción realizada: ");
+                let accion = leer_linea();
+                print!("  ID de oportunidad SF (enter=actual): ");
+                let opp = leer_linea();
+                print!("  Tu nombre de usuario: ");
+                let usr = leer_linea();
+                print!("  Notas adicionales (enter=vacío): ");
+                let notas = leer_linea();
+                let ahora = chrono::Local::now().naive_local();
+                if let Some(p) = state.propuestas.propuesta_mut(id.trim()) {
+                    let oportunidad = if opp.is_empty() {
+                        p.id_salesforce.clone()
+                    } else {
+                        opp
+                    };
+                    let entrada = RegistroSalesforce {
+                        id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
+                        propuesta_id: p.id.clone(),
+                        oportunidad_sf: oportunidad,
+                        accion,
+                        fecha: ahora.date(),
+                        fecha_hora: ahora,
+                        usuario: usr,
+                        notas,
+                    };
+                    p.registrar_salesforce(entrada);
+                    let _ = state.guardar();
+                    println!("  {} Entrada registrada en Salesforce.", "✓".green());
+                } else {
+                    println!("  {} No encontrada.", "✗".red());
+                }
+                pausa();
+            }
+
+            _ => return,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Intake / Gestión de Casos y Coordinación
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_casos(state: &mut AppState) {
+    use chrono::Local;
+    use colored::Colorize;
+    use omniplanner::casos::*;
+    let mut ctx_caso: Option<String> = None;
+    loop {
+        limpiar();
+        banner();
+        println!("  🏥 INTAKE / GESTIÓN DE CASOS Y COORDINACIÓN");
+        if let Some(ref cid) = ctx_caso {
+            if let Some(c) = state.casos.caso(cid) {
+                println!(
+                    "  📍 Caso activo: {}  |  {}  |  {}",
+                    c.numero_caso.cyan().bold(),
+                    c.paciente.nombre_completo(),
+                    c.estado.nombre()
+                );
+                println!("  💡 Todas las operaciones usarán este caso. Selecciona opción 3 para cambiar.");
+            }
+        }
+        let hoy = Local::now().date_naive();
+        let m = state.casos.metricas(hoy);
+        println!(
+            "  Activos: {}  |  Criticos: {}  |  Requieren outreach: {}  |  Listos para ruteo: {}",
+            m.total_activos.to_string().cyan(),
+            m.criticos.to_string().red(),
+            state.casos.requieren_outreach().len().to_string().yellow(),
+            state.casos.listos_para_ruteo().len().to_string().green(),
+        );
+        separador("");
+        let opciones = &[
+            "Ver cola de trabajo (ordenada por urgencia/SLA)",
+            "Nuevo caso",
+            "Detalle de caso",
+            "Actualizar datos del cliente",
+            "Actualizar método de pago / entidad",
+            "Actualizar asignación y responsable",
+            "Checklist (ver / completar items)",
+            "Agregar nota al caso",
+            "Asignar a equipo de trabajo",
+            "Outreach: solicitar informacion faltante",
+            "Resolver informacion recibida",
+            "Casos listos para asignar",
+            "Casos que requieren outreach",
+            "Configuracion de clientes",
+            "Volver",
+        ];
+        match menu("Casos", opciones) {
+            Some(0) => {
+                limpiar();
+                let cola = state.casos.cola_trabajo(hoy);
+                if cola.is_empty() {
+                    println!("  {}", "No hay casos activos.".yellow());
+                    pausa();
+                    continue;
+                }
+                println!(
+                    "  {:<12} {:<12} {:<14} {:<20} {:<10} {:<8}",
+                    "Numero", "Estado", "Urgencia", "Cliente", "SLA dias", "Checklist%"
+                );
+                separador("");
+                for c in &cola {
+                    let dias = c.dias_para_sla(hoy);
+                    let color_sla = if dias < 0 {
+                        dias.to_string().red()
+                    } else if dias <= 1 {
+                        dias.to_string().yellow()
+                    } else {
+                        dias.to_string().green()
+                    };
+                    println!(
+                        "  {:<12} {:<12} {:<14} {:<20} {:<10} {:.0}%",
+                        c.numero_caso,
+                        c.estado.nombre(),
+                        c.urgencia.nombre(),
+                        c.paciente.nombre_completo(),
+                        color_sla,
+                        c.checklist_pct()
+                    );
+                }
+                pausa();
+            }
+            Some(1) => {
+                let tipo_op = &[
+                    "Autorizacion previa",
+                    "Referido",
+                    "Continuacion de cuidado",
+                    "Emergencia",
+                    "Cierre gap de cuidado",
+                    "Otro",
+                ];
+                let tipo_str = match menu("Tipo de solicitud", tipo_op) {
+                    Some(0) => "autorizacion_previa",
+                    Some(1) => "referido",
+                    Some(2) => "continuacion",
+                    Some(3) => "emergencia",
+                    Some(4) => "gap_cuidado",
+                    _ => "otro",
+                };
+                let urg_op = &["Rutina (72h SLA)", "Urgente (24h SLA)", "Critico (4h SLA)"];
+                let urg_str = match menu("Urgencia", urg_op) {
+                    Some(1) => "urgente",
+                    Some(2) => "critico",
+                    _ => "rutina",
+                };
+                print!("  ID del cliente (Enter = sin cliente): ");
+                let cliente = leer_linea();
+                print!("  Asignado a: ");
+                let asignado = leer_linea();
+                let prefijo = if tipo_str == "referido" {
+                    "REF"
+                } else if tipo_str == "emergencia" {
+                    "EMR"
+                } else {
+                    "AUT"
+                };
+                let numero = state.casos.siguiente_numero(prefijo);
+                let tipo_enum = match tipo_str {
+                    "referido" => TipoSolicitud::Referido,
+                    "continuacion" => TipoSolicitud::ContinuacionCuidado,
+                    "emergencia" => TipoSolicitud::Emergencia,
+                    "gap_cuidado" => TipoSolicitud::CierreGapCuidado,
+                    otro => TipoSolicitud::Otro(otro.to_string()),
+                };
+                let urg_enum = match urg_str {
+                    "urgente" => UrgenciaCaso::Urgente,
+                    "critico" => UrgenciaCaso::Critico,
+                    _ => UrgenciaCaso::Rutina,
+                };
+                let mut caso =
+                    Caso::nuevo(numero.clone(), tipo_enum, urg_enum, hoy, cliente.clone());
+                caso.asignado_a = asignado;
+                if !cliente.is_empty() {
+                    if let Some(cli) = state.casos.cliente(&cliente) {
+                        let plantilla: Vec<_> = cli.checklist_plantilla.clone();
+                        for item_desc in plantilla {
+                            caso.checklist.push(ItemChecklist::nuevo(item_desc, true));
+                        }
+                    }
+                }
+                let id = caso.id.clone();
+                state.casos.agregar(caso);
+                let _ = state.guardar();
+                println!("  {} Caso {} creado (ID: {})", "OK".green(), numero, id);
+                pausa();
+            }
+            Some(2) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(c) = state.casos.caso(&id) {
+                    limpiar();
+                    println!(
+                        "  Caso: {}  Estado: {}  Urgencia: {}",
+                        c.numero_caso.cyan(),
+                        c.estado.nombre(),
+                        c.urgencia.nombre()
+                    );
+                    println!(
+                        "  Cliente: {}  ID / Código: {}",
+                        c.paciente.nombre_completo(),
+                        c.paciente.id_miembro
+                    );
+                    println!(
+                        "  Pago / Entidad: {} / {}  Confirmado: {}",
+                        c.seguro.aseguradora, c.seguro.plan, c.seguro.autorizado_verificado
+                    );
+                    println!(
+                        "  Asignado por: {}  Área destino: {}  Proceso: {}",
+                        c.referido.medico_referidor,
+                        c.referido.especialidad_destino,
+                        c.referido.procedimiento_cpt
+                    );
+                    println!(
+                        "  Checklist: {:.0}%  Listo asignar: {}  SLA dias: {}",
+                        c.checklist_pct(),
+                        c.listo_para_ruteo(),
+                        c.dias_para_sla(hoy)
+                    );
+                    let faltan = c.campos_faltantes();
+                    if !faltan.is_empty() {
+                        println!("  Campos faltantes: {}", faltan.join(", ").yellow());
+                    }
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(3) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(c) = state.casos.caso_mut(&id) {
+                    print!("  Nombre: ");
+                    c.paciente.nombre = leer_linea();
+                    print!("  Apellido: ");
+                    c.paciente.apellido = leer_linea();
+                    c.paciente.fecha_nacimiento = leer_fecha("Fecha de nacimiento")
+                        .format("%Y-%m-%d")
+                        .to_string();
+                    print!("  ID / Código: ");
+                    c.paciente.id_miembro = leer_linea();
+                    print!("  Teléfono: ");
+                    c.paciente.telefono = leer_linea();
+                    let _ = state.guardar();
+                    println!("  {} Datos del cliente actualizados", "OK".green());
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(4) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(c) = state.casos.caso_mut(&id) {
+                    print!("  Entidad / Aseguradora: ");
+                    c.seguro.aseguradora = leer_linea();
+                    print!("  Tipo / Plan: ");
+                    c.seguro.plan = leer_linea();
+                    print!("  Referencia / No. Póliza: ");
+                    c.seguro.numero_poliza = leer_linea();
+                    print!("  Confirmado / Verificado? (s/n): ");
+                    c.seguro.autorizado_verificado = leer_linea().to_lowercase().starts_with('s');
+                    let _ = state.guardar();
+                    println!("  {} Método de pago actualizado", "OK".green());
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(5) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(c) = state.casos.caso_mut(&id) {
+                    print!("  Asignado por / Solicitante: ");
+                    c.referido.medico_referidor = leer_linea();
+                    print!("  Área / Responsable destino: ");
+                    c.referido.especialidad_destino = leer_linea();
+                    print!("  Código de caso / Clasificación: ");
+                    c.referido.diagnostico_icd10 = leer_linea();
+                    print!("  Código de proceso / Servicio: ");
+                    c.referido.procedimiento_cpt = leer_linea();
+                    print!("  Documentos adjuntos? (s/n): ");
+                    c.referido.notas_clinicas_adjuntas =
+                        leer_linea().to_lowercase().starts_with('s');
+                    let _ = state.guardar();
+                    println!("  {} Asignación actualizada", "OK".green());
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(6) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(c) = state.casos.caso(&id.clone()) {
+                    limpiar();
+                    println!("  Checklist ({:.0}% completado):", c.checklist_pct());
+                    for item in &c.checklist {
+                        let mark = if item.completado {
+                            "[X]".green()
+                        } else {
+                            "[ ]".yellow()
+                        };
+                        let req = if item.requerido { "*" } else { " " };
+                        println!("  {} {} {}  ID: {}", mark, req, item.descripcion, item.id);
+                    }
+                    if let Some(0) = menu("Accion", &["Completar item", "Agregar item", "Volver"]) {
+                        print!("  ID del item: ");
+                        let iid = leer_linea();
+                        if let Some(c2) = state.casos.caso_mut(&id) {
+                            if c2.completar_checklist_item(&iid, hoy) {
+                                if c2.checklist_requeridos_ok()
+                                    && c2.estado == EstadoCaso::ValidandoDatos
+                                {
+                                    c2.estado = EstadoCaso::ChecklistCompleto;
+                                }
+                                let _ = state.guardar();
+                                println!("  {} Item completado", "OK".green());
+                            }
+                        }
+                    }
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(7) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                print!("  Nota: ");
+                let texto = leer_linea();
+                print!("  Autor: ");
+                let autor = leer_linea();
+                if let Some(c) = state.casos.caso_mut(&id) {
+                    let ahora = chrono::Local::now().naive_local();
+                    c.notas.push(NotaCaso::nueva(texto, autor, ahora));
+                    let _ = state.guardar();
+                    println!("  {} Nota agregada", "OK".green());
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(8) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(c) = state.casos.caso(&id.clone()) {
+                    if c.listo_para_ruteo() {
+                        let _ = c;
+                        print!("  Equipo / Responsable asignado: ");
+                        let equipo = leer_linea();
+                        if let Some(c2) = state.casos.caso_mut(&id) {
+                            let ahora = chrono::Local::now().naive_local();
+                            c2.equipo_clinico = equipo.clone();
+                            c2.estado = EstadoCaso::EnRevisionClinica;
+                            c2.fecha_ruteo_clinico = Some(hoy);
+                            c2.sla_cumplido = Some(c2.dias_para_sla(hoy) >= 0);
+                            c2.registrar_evento(
+                                "asignacion_equipo",
+                                format!("Asignado a: {}", equipo),
+                                "cli".to_string(),
+                                ahora,
+                            );
+                            let _ = state.guardar();
+                            println!("  {} Caso asignado al equipo de trabajo", "OK".green());
+                        }
+                    } else {
+                        println!("  {} El caso no esta listo. Campos faltantes:", "X".red());
+                        for f in c.campos_faltantes() {
+                            println!("    - {}", f.yellow());
+                        }
+                    }
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(9) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                print!("  Campo faltante: ");
+                let campo = leer_linea();
+                print!("  Contacto: ");
+                let contacto = leer_linea();
+                let limite = hoy + chrono::Duration::days(3);
+                if let Some(c) = state.casos.caso_mut(&id) {
+                    c.estado = EstadoCaso::PendienteInformacion;
+                    c.solicitudes_info.push(SolicitudInfoFaltante::nueva(
+                        id.clone(),
+                        campo,
+                        contacto,
+                        MetodoContacto::LlamadaTelefonica,
+                        hoy,
+                        limite,
+                    ));
+                    let _ = state.guardar();
+                    println!("  {} Outreach registrado, limite: {}", "OK".green(), limite);
+                } else {
+                    println!("  {} Caso no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(10) => {
+                let id = match resolver_caso_ctx(state, &mut ctx_caso) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                print!("  ID de solicitud: ");
+                let sid = leer_linea();
+                if let Some(c) = state.casos.caso_mut(&id) {
+                    if let Some(s) = c.solicitudes_info.iter_mut().find(|s| s.id == sid) {
+                        s.resuelto = true;
+                        s.fecha_resolucion = Some(hoy);
+                        if c.info_pendiente().is_empty() {
+                            c.estado = EstadoCaso::ValidandoDatos;
+                        }
+                        let _ = state.guardar();
+                        println!("  {} Informacion resuelta", "OK".green());
+                    }
+                } else {
+                    println!("  {} No encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(11) => {
+                let listos = state.casos.listos_para_ruteo();
+                if listos.is_empty() {
+                    println!("  {}", "No hay casos listos para asignar.".yellow());
+                } else {
+                    for c in &listos {
+                        println!(
+                            "  {} | {} | {} | {}",
+                            c.id.cyan(),
+                            c.numero_caso,
+                            c.paciente.nombre_completo(),
+                            c.urgencia.nombre()
+                        );
+                    }
+                }
+                pausa();
+            }
+            Some(12) => {
+                let casos = state.casos.requieren_outreach();
+                if casos.is_empty() {
+                    println!("  {}", "No hay casos con outreach pendiente.".yellow());
+                } else {
+                    for c in &casos {
+                        println!(
+                            "  {} | {} | Faltantes: {}",
+                            c.id.cyan(),
+                            c.numero_caso,
+                            c.campos_faltantes().join(", ").yellow()
+                        );
+                    }
+                }
+                pausa();
+            }
+            Some(13) => {
+                let sub_op = &["Listar clientes", "Agregar cliente", "Volver"];
+                match menu("Clientes", sub_op) {
+                    Some(0) => {
+                        for cli in &state.casos.clientes {
+                            println!(
+                                "  {} | {} | SLA rutina: {}h | Checklist: {} items",
+                                cli.id.cyan(),
+                                cli.nombre_cliente,
+                                cli.sla_horas_rutina,
+                                cli.checklist_plantilla.len()
+                            );
+                        }
+                        pausa();
+                    }
+                    Some(1) => {
+                        print!("  Nombre del cliente: ");
+                        let nombre = leer_linea();
+                        let mut cli = RequisitosCliente::nuevo(nombre);
+                        print!("  Items checklist (separados por coma): ");
+                        let items_str = leer_linea();
+                        if !items_str.is_empty() {
+                            cli.checklist_plantilla =
+                                items_str.split(',').map(|s| s.trim().to_string()).collect();
+                        }
+                        let cid = cli.id.clone();
+                        state.casos.agregar_cliente(cli);
+                        let _ = state.guardar();
+                        println!("  {} Cliente agregado: {}", "OK".green(), cid);
+                        pausa();
+                    }
+                    _ => {}
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Proveedores y Outreach
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_proveedores(state: &mut AppState) {
+    use chrono::Local;
+    use colored::Colorize;
+    use omniplanner::proveedores::*;
+    loop {
+        limpiar();
+        banner();
+        println!("  📞 PROVEEDORES Y OUTREACH");
+        let hoy = Local::now().date_naive();
+        let m = state.proveedores.metricas(hoy);
+        println!(
+            "  Total: {}  |  Activos: {}  |  Seguimientos pendientes: {}  |  Contacto %: {:.0}%",
+            m.total_proveedores.to_string().cyan(),
+            m.proveedores_activos.to_string().green(),
+            m.seguimientos_pendientes.to_string().yellow(),
+            m.tasa_contacto_pct,
+        );
+        separador("");
+        let opciones = &[
+            "Listar proveedores",
+            "Buscar proveedor",
+            "Agregar proveedor",
+            "Detalle de proveedor",
+            "Registrar interaccion (llamada/email/fax)",
+            "Ver interacciones de proveedor",
+            "Seguimientos pendientes",
+            "Completar seguimiento",
+            "Proveedores sin contacto reciente",
+            "Metricas de outreach",
+            "Campanias (crear/listar/actualizar)",
+            "Volver",
+        ];
+        match menu("Proveedores", opciones) {
+            Some(0) => {
+                limpiar();
+                for p in &state.proveedores.proveedores {
+                    println!(
+                        "  {} | {} | {} | NPI: {} | {}",
+                        p.id.cyan(),
+                        p.nombre,
+                        p.especialidad,
+                        p.npi,
+                        p.nivel_engagement.nombre()
+                    );
+                }
+                pausa();
+            }
+            Some(1) => {
+                print!("  Buscar (nombre/especialidad): ");
+                let q = leer_linea();
+                let res = state.proveedores.buscar_por_nombre(&q);
+                for p in res {
+                    println!(
+                        "  {} | {} | {} | {}",
+                        p.id.cyan(),
+                        p.nombre,
+                        p.especialidad,
+                        p.telefono
+                    );
+                }
+                pausa();
+            }
+            Some(2) => {
+                print!("  Nombre: ");
+                let nombre = leer_linea();
+                print!("  NPI: ");
+                let npi = leer_linea();
+                print!("  Especialidad: ");
+                let esp = leer_linea();
+                print!("  Grupo medico: ");
+                let grupo = leer_linea();
+                print!("  Telefono: ");
+                let tel = leer_linea();
+                print!("  Fax: ");
+                let fax = leer_linea();
+                let mut p = Proveedor::nuevo(nombre, npi, esp, hoy);
+                p.grupo_medico = grupo;
+                p.telefono = tel;
+                p.fax = fax;
+                let id = p.id.clone();
+                state.proveedores.agregar(p);
+                let _ = state.guardar();
+                println!("  {} Proveedor agregado: {}", "OK".green(), id);
+                pausa();
+            }
+            Some(3) => {
+                let id = match buscar_proveedor_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(p) = state.proveedores.proveedor(&id) {
+                    limpiar();
+                    println!(
+                        "  {} — {} | NPI: {} | Engagement: {}",
+                        p.nombre.cyan(),
+                        p.especialidad,
+                        p.npi,
+                        p.nivel_engagement.nombre()
+                    );
+                    println!("  Tel: {}  Fax: {}  Email: {}", p.telefono, p.fax, p.email);
+                    println!("  Grupo: {}  Activo: {}", p.grupo_medico, p.activo);
+                    println!(
+                        "  Ultima interaccion: {}",
+                        p.ultima_interaccion
+                            .map(|d| d.to_string())
+                            .unwrap_or_default()
+                    );
+                    let n_int = state
+                        .proveedores
+                        .interacciones
+                        .iter()
+                        .filter(|i| i.proveedor_id == p.id)
+                        .count();
+                    println!("  Total interacciones: {}", n_int);
+                } else {
+                    println!("  {} Proveedor no encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(4) => {
+                let id = match buscar_proveedor_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let tipo_op = &[
+                    "Llamada saliente",
+                    "Llamada entrante",
+                    "Email",
+                    "Fax",
+                    "Portal",
+                    "Visita",
+                ];
+                let tipo = match menu("Tipo", tipo_op) {
+                    Some(1) => TipoInteraccion::LlamadaEntrante,
+                    Some(2) => TipoInteraccion::Email,
+                    Some(3) => TipoInteraccion::Fax,
+                    Some(4) => TipoInteraccion::Portal,
+                    Some(5) => TipoInteraccion::Visita,
+                    _ => TipoInteraccion::LlamadaSaliente,
+                };
+                let res_op = &[
+                    "Completado",
+                    "Sin contestacion",
+                    "Voicemail",
+                    "Transferido",
+                    "Rechazado",
+                    "Pendiente",
+                    "Reprogramado",
+                ];
+                let resultado = match menu("Resultado", res_op) {
+                    Some(1) => ResultadoInteraccion::SinContestacion,
+                    Some(2) => ResultadoInteraccion::Voicemail,
+                    Some(3) => ResultadoInteraccion::Transferido,
+                    Some(4) => ResultadoInteraccion::Rechazado,
+                    Some(5) => ResultadoInteraccion::PendienteRespuesta,
+                    Some(6) => ResultadoInteraccion::Reprogramado,
+                    _ => ResultadoInteraccion::Completado,
+                };
+                print!("  Proposito: ");
+                let prop = leer_linea();
+                print!("  Agente: ");
+                let agente = leer_linea();
+                let ahora = chrono::Local::now().naive_local();
+                let mut inter =
+                    InteraccionProveedor::nueva(id.clone(), tipo, agente, prop, hoy, ahora);
+                inter.resultado = resultado;
+                let iid = inter.id.clone();
+                state.proveedores.registrar_interaccion(inter);
+                let _ = state.guardar();
+                println!("  {} Interaccion registrada: {}", "OK".green(), iid);
+                pausa();
+            }
+            Some(5) => {
+                let id = match buscar_proveedor_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let interacciones: Vec<_> = state.proveedores.interacciones_de(&id);
+                for i in &interacciones {
+                    println!(
+                        "  {} | {} | {} | {}",
+                        i.fecha.to_string().cyan(),
+                        i.tipo.nombre(),
+                        i.resultado.nombre(),
+                        i.proposito
+                    );
+                }
+                if interacciones.is_empty() {
+                    println!("  {}", "Sin interacciones registradas.".yellow());
+                }
+                pausa();
+            }
+            Some(6) => {
+                limpiar();
+                println!("  {}:", "SEGUIMIENTOS VENCIDOS".red());
+                let vencidos = state.proveedores.seguimientos_vencidos(hoy);
+                for s in &vencidos {
+                    let nombre = state
+                        .proveedores
+                        .proveedor(&s.proveedor_id)
+                        .map(|p| p.nombre.as_str())
+                        .unwrap_or("?");
+                    println!(
+                        "  {} | {} | {} | {}",
+                        s.id.cyan(),
+                        nombre,
+                        s.fecha_programada,
+                        s.motivo.red()
+                    );
+                }
+                separador("");
+                println!("  {}:", "SEGUIMIENTOS PENDIENTES".yellow());
+                let pendientes = state.proveedores.seguimientos_pendientes(hoy);
+                for s in &pendientes {
+                    let nombre = state
+                        .proveedores
+                        .proveedor(&s.proveedor_id)
+                        .map(|p| p.nombre.as_str())
+                        .unwrap_or("?");
+                    println!(
+                        "  {} | {} | {} dias | {}",
+                        s.id.cyan(),
+                        nombre,
+                        s.dias_restantes(hoy),
+                        s.motivo
+                    );
+                }
+                pausa();
+            }
+            Some(7) => {
+                print!("  ID del seguimiento: ");
+                let sid = leer_linea();
+                print!("  Resultado: ");
+                let resultado = leer_linea();
+                if let Some(s) = state
+                    .proveedores
+                    .seguimientos
+                    .iter_mut()
+                    .find(|s| s.id == sid)
+                {
+                    s.completado = true;
+                    s.fecha_completado = Some(hoy);
+                    s.resultado = resultado;
+                    let _ = state.guardar();
+                    println!("  {} Seguimiento completado", "OK".green());
+                } else {
+                    println!("  {} No encontrado", "X".red());
+                }
+                pausa();
+            }
+            Some(8) => {
+                print!("  Dias sin contacto (Enter=30): ");
+                let d_str = leer_linea();
+                let dias = d_str.parse::<i64>().unwrap_or(30);
+                let lista = state.proveedores.sin_contacto_reciente(hoy, dias);
+                println!(
+                    "  {} proveedores sin contacto en {} dias:",
+                    lista.len(),
+                    dias
+                );
+                for p in &lista {
+                    println!(
+                        "  {} | {} | Tel: {} | Ultima: {}",
+                        p.id.cyan(),
+                        p.nombre,
+                        p.telefono,
+                        p.ultima_interaccion
+                            .map(|d| d.to_string())
+                            .unwrap_or("Nunca".to_string())
+                    );
+                }
+                pausa();
+            }
+            Some(9) => {
+                let m2 = state.proveedores.metricas(hoy);
+                limpiar();
+                println!("  Total proveedores:       {}", m2.total_proveedores);
+                println!(
+                    "  Proveedores activos:     {}",
+                    m2.proveedores_activos.to_string().green()
+                );
+                println!("  Total interacciones:     {}", m2.total_interacciones);
+                println!("  Interacciones exitosas:  {}", m2.interacciones_exitosas);
+                println!("  Tasa de contacto:        {:.1}%", m2.tasa_contacto_pct);
+                println!(
+                    "  Seguimientos pendientes: {}",
+                    m2.seguimientos_pendientes.to_string().yellow()
+                );
+                println!("  Campanas activas:        {}", m2.campanas_activas);
+                pausa();
+            }
+            Some(10) => {
+                let sub_op = &[
+                    "Crear campana",
+                    "Listar campanas",
+                    "Actualizar campana",
+                    "Volver",
+                ];
+                match menu("Campanas", sub_op) {
+                    Some(0) => {
+                        print!("  Nombre: ");
+                        let nombre = leer_linea();
+                        print!("  Proposito: ");
+                        let prop = leer_linea();
+                        let inicio = leer_fecha("Fecha inicio");
+                        let fin = leer_fecha("Fecha fin");
+                        let c = CampanaOutreach::nueva(nombre, prop, inicio, fin);
+                        let cid = c.id.clone();
+                        state.proveedores.agregar_campana(c);
+                        let _ = state.guardar();
+                        println!("  {} Campana creada: {}", "OK".green(), cid);
+                        pausa();
+                    }
+                    Some(1) => {
+                        for c in &state.proveedores.campanas {
+                            println!(
+                                "  {} | {} | {} | {:.0}% contacto",
+                                c.id.cyan(),
+                                c.nombre,
+                                c.estado.nombre(),
+                                c.metricas.tasa_contacto()
+                            );
+                        }
+                        pausa();
+                    }
+                    Some(2) => {
+                        print!("  ID de campana: ");
+                        let cid = leer_linea();
+                        let est_op = &[
+                            "Planificada",
+                            "Activa",
+                            "Pausada",
+                            "Completada",
+                            "Cancelada",
+                        ];
+                        if let Some(idx) = menu("Nuevo estado", est_op) {
+                            if let Some(c) = state.proveedores.campana_mut(&cid) {
+                                c.estado = match idx {
+                                    1 => EstadoCampana::Activa,
+                                    2 => EstadoCampana::Pausada,
+                                    3 => EstadoCampana::Completada,
+                                    4 => EstadoCampana::Cancelada,
+                                    _ => EstadoCampana::Planificada,
+                                };
+                                let _ = state.guardar();
+                                println!("  {} Estado actualizado", "OK".green());
+                            }
+                        }
+                        pausa();
+                    }
+                    _ => {}
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Mapa del Marco Lógico — vista estructural completa del proyecto
+// ═══════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Presupuesto de Base Cero por Obra
+// ═══════════════════════════════════════════════════════════════════════
+
+fn menu_presupuesto_obra(state: &mut AppState, obra_id: &str) {
+    use chrono::Local;
+    use colored::Colorize;
+    use omniplanner::obras::PrioridadPartida;
+
+    let periodo_hoy = Local::now().format("%Y-%m").to_string();
+
+    loop {
+        let o = match state.obras.obra(obra_id) {
+            Some(o) => o.clone(),
+            None => {
+                println!("  Obra no encontrada");
+                pausa();
+                return;
+            }
+        };
+
+        let pres = &o.presupuesto_obra;
+        let periodo = if pres.periodo_activo.is_empty() {
+            periodo_hoy.clone()
+        } else {
+            pres.periodo_activo.clone()
+        };
+
+        let (sol, apr, eje) = pres.totales_periodo(&periodo);
+        let (sol_g, apr_g, eje_g) = pres.totales_globales();
+        let partidas = pres.partidas_periodo(&periodo);
+        let periodos = pres.periodos();
+
+        limpiar();
+        separador("");
+        println!(
+            "  {}  PRESUPUESTO BASE CERO — {}",
+            "📊".to_string(),
+            o.nombre.cyan().bold()
+        );
+        println!(
+            "  Período activo: {}  │  {} período(s) con datos",
+            periodo.yellow().bold(),
+            periodos.len()
+        );
+        separador("");
+
+        // Tabla del período
+        if partidas.is_empty() {
+            println!(
+                "  {} Sin partidas en {}.  Selecciona [1] para agregar.",
+                "—".dimmed(),
+                periodo.yellow()
+            );
+        } else {
+            println!(
+                "  {:<4}  {:<18}  {:<28}  {:>9}  {:>9}  {:>9}  {}",
+                "Pri", "Categoría", "Descripción", "Solicit.", "Aprobado", "Ejecut.", "Estado"
+            );
+            println!("  {}", "─".repeat(92).dimmed());
+            for p in &partidas {
+                let estado = if !p.aprobada {
+                    "⏳ pend.".dimmed().to_string()
+                } else if p.monto_ejecutado >= p.monto_aprobado {
+                    "✅ ok".green().to_string()
+                } else if p.monto_ejecutado > 0.0 {
+                    "🔄 parcial".yellow().to_string()
+                } else {
+                    "📋 aprob.".cyan().to_string()
+                };
+                println!(
+                    "  {:<4}  {:<18}  {:<28}  {:>9.2}  {:>9.2}  {:>9.2}  {}",
+                    p.prioridad.icono(),
+                    truncar(&p.categoria, 18),
+                    truncar(&p.descripcion, 28),
+                    p.monto_solicitado,
+                    p.monto_aprobado,
+                    p.monto_ejecutado,
+                    estado
+                );
+            }
+            println!("  {}", "─".repeat(92).dimmed());
+            println!(
+                "  {:<53}  {:>9.2}  {:>9.2}  {:>9.2}",
+                format!("TOTALES {} ({} partidas)", periodo, partidas.len()),
+                sol,
+                apr,
+                eje
+            );
+
+            // Varianza global del período
+            let varianza = apr - eje;
+            let pct = if apr > 0.0 { eje / apr * 100.0 } else { 0.0 };
+            let varianza_txt = if varianza >= 0.0 {
+                format!("  Disponible: ${:.2}  ({:.0}% ejecutado)", varianza, pct)
+                    .green()
+                    .to_string()
+            } else {
+                format!(
+                    "  ⚠️  Sobregiro: ${:.2}  ({:.0}% ejecutado)",
+                    varianza.abs(),
+                    pct
+                )
+                .red()
+                .to_string()
+            };
+            println!("{}", varianza_txt);
+        }
+
+        // Resumen global obra
+        separador("");
+        println!(
+            "  Acumulado obra completa:  Sol ${:.2}  Apr ${:.2}  Eje ${:.2}",
+            sol_g, apr_g, eje_g
+        );
+        separador("");
+
+        let opciones = &[
+            "➕  Agregar partida (justificar desde cero)",
+            "✅  Aprobar / rechazar partida",
+            "💸  Registrar ejecución (gasto real)",
+            "✏️   Editar partida",
+            "🗑️   Eliminar partida",
+            "📅  Cambiar período activo",
+            "🗂️   Ver todos los períodos (resumen global)",
+            "📝  Notas del presupuesto",
+            "← Volver",
+        ];
+
+        match menu("Presupuesto de la obra", opciones) {
+            // ── 0: Agregar partida ────────────────────────────────────
+            Some(0) => {
+                separador("➕ Nueva partida");
+                let cats = &[
+                    "Mano de obra",
+                    "Materiales",
+                    "Subcontrato",
+                    "Equipo/Herramientas",
+                    "Transporte",
+                    "Permisos/Honorarios",
+                    "Imprevistos",
+                    "Otro",
+                ];
+                let cat_idx = match menu("Categoría", cats) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let cat = cats[cat_idx].to_string();
+
+                let desc = match pedir_texto("Descripción del gasto") {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let just = match pedir_texto("Justificación (¿por qué es necesario desde cero?)")
+                {
+                    Some(v) => v,
+                    None => continue,
+                };
+
+                let monto_txt = match pedir_texto("Monto solicitado") {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let monto: f64 = match monto_txt.trim().parse() {
+                    Ok(m) => m,
+                    Err(_) => {
+                        println!("  Monto inválido");
+                        pausa();
+                        continue;
+                    }
+                };
+
+                let prios = &[
+                    "🔴 Esencial (sin esto la obra no avanza)",
+                    "🟡 Importante (beneficio significativo)",
+                    "🟢 Deseable (mejora, prescindible si hay recorte)",
+                ];
+                let prio = match menu("Prioridad", prios) {
+                    Some(0) => PrioridadPartida::Esencial,
+                    Some(1) => PrioridadPartida::Importante,
+                    _ => PrioridadPartida::Deseable,
+                };
+
+                let per = match pedir_texto(&format!("Período (Enter = {})", periodo)) {
+                    Some(v) if !v.trim().is_empty() => v.trim().to_string(),
+                    _ => periodo.clone(),
+                };
+
+                use omniplanner::obras::PartidaPresupuesto;
+                let partida = PartidaPresupuesto::nueva(cat, desc, just, per, monto, prio);
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    o.presupuesto_obra.partidas.push(partida);
+                    if o.presupuesto_obra.periodo_activo.is_empty() {
+                        o.presupuesto_obra.periodo_activo = periodo.clone();
+                    }
+                }
+                println!("  {} Partida agregada.", "✓".green());
+                pausa();
+            }
+
+            // ── 1: Aprobar / rechazar ─────────────────────────────────
+            Some(1) => {
+                let lista: Vec<(String, String)> = partidas
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.id.clone(),
+                            format!(
+                                "{} {} — {} ${:.2}",
+                                p.prioridad.icono(),
+                                p.categoria,
+                                p.descripcion,
+                                p.monto_solicitado
+                            ),
+                        )
+                    })
+                    .collect();
+                if lista.is_empty() {
+                    println!("  Sin partidas.");
+                    pausa();
+                    continue;
+                }
+
+                let id = match buscar_en_lista("Selecciona partida", lista) {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                let acciones = &["✅ Aprobar", "❌ Rechazar / desaprobar"];
+                let aprobar = match menu("Acción", acciones) {
+                    Some(0) => true,
+                    Some(1) => false,
+                    _ => continue,
+                };
+
+                let monto_apr = if aprobar {
+                    let s = pedir_texto("Monto aprobado (Enter = igual a solicitado)");
+                    match s {
+                        Some(v) if !v.trim().is_empty() => v.trim().parse().unwrap_or(0.0),
+                        _ => partidas
+                            .iter()
+                            .find(|p| p.id == id)
+                            .map(|p| p.monto_solicitado)
+                            .unwrap_or(0.0),
+                    }
+                } else {
+                    0.0
+                };
+
+                let aprobador =
+                    pedir_texto("Aprobado por (nombre, Enter para omitir)").unwrap_or_default();
+
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    if let Some(p) = o.presupuesto_obra.partidas.iter_mut().find(|p| p.id == id) {
+                        p.aprobada = aprobar;
+                        p.monto_aprobado = monto_apr;
+                        if !aprobador.trim().is_empty() {
+                            p.aprobado_por = aprobador;
+                        }
+                    }
+                }
+                println!(
+                    "  {} Partida {}.",
+                    "✓".green(),
+                    if aprobar { "aprobada" } else { "rechazada" }
+                );
+                pausa();
+            }
+
+            // ── 2: Registrar ejecución ────────────────────────────────
+            Some(2) => {
+                let aprobadas: Vec<(String, String)> = partidas
+                    .iter()
+                    .filter(|p| p.aprobada)
+                    .map(|p| {
+                        (
+                            p.id.clone(),
+                            format!(
+                                "{} {} — {} Apr${:.2} Eje${:.2}",
+                                p.prioridad.icono(),
+                                p.categoria,
+                                p.descripcion,
+                                p.monto_aprobado,
+                                p.monto_ejecutado
+                            ),
+                        )
+                    })
+                    .collect();
+                if aprobadas.is_empty() {
+                    println!("  Sin partidas aprobadas en este período.");
+                    pausa();
+                    continue;
+                }
+
+                let id = match buscar_en_lista("Selecciona partida", aprobadas) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let monto_txt = match pedir_texto("Monto ejecutado (gastado realmente)") {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let monto: f64 = match monto_txt.trim().parse() {
+                    Ok(m) => m,
+                    Err(_) => {
+                        println!("  Monto inválido");
+                        pausa();
+                        continue;
+                    }
+                };
+
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    if let Some(p) = o.presupuesto_obra.partidas.iter_mut().find(|p| p.id == id) {
+                        p.monto_ejecutado = monto;
+                    }
+                }
+                println!("  {} Ejecución registrada.", "✓".green());
+                pausa();
+            }
+
+            // ── 3: Editar partida ─────────────────────────────────────
+            Some(3) => {
+                let lista: Vec<(String, String)> = partidas
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.id.clone(),
+                            format!(
+                                "{} {} — {}",
+                                p.prioridad.icono(),
+                                p.categoria,
+                                p.descripcion
+                            ),
+                        )
+                    })
+                    .collect();
+                if lista.is_empty() {
+                    println!("  Sin partidas.");
+                    pausa();
+                    continue;
+                }
+
+                let id = match buscar_en_lista("Selecciona partida", lista) {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    if let Some(p) = o.presupuesto_obra.partidas.iter_mut().find(|p| p.id == id) {
+                        if let Some(v) = pedir_texto(&format!("Descripción [{}]", p.descripcion)) {
+                            if !v.trim().is_empty() {
+                                p.descripcion = v;
+                            }
+                        }
+                        if let Some(v) = pedir_texto("Nueva justificación (Enter para no cambiar)")
+                        {
+                            if !v.trim().is_empty() {
+                                p.justificacion = v;
+                            }
+                        }
+                        if let Some(v) =
+                            pedir_texto(&format!("Monto solicitado [{:.2}]", p.monto_solicitado))
+                        {
+                            if let Ok(m) = v.trim().parse::<f64>() {
+                                p.monto_solicitado = m;
+                            }
+                        }
+                    }
+                }
+                println!("  {} Partida actualizada.", "✓".green());
+                pausa();
+            }
+
+            // ── 4: Eliminar partida ───────────────────────────────────
+            Some(4) => {
+                let lista: Vec<(String, String)> = partidas
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.id.clone(),
+                            format!(
+                                "{} {} — {} ${:.2}",
+                                p.prioridad.icono(),
+                                p.categoria,
+                                p.descripcion,
+                                p.monto_solicitado
+                            ),
+                        )
+                    })
+                    .collect();
+                if lista.is_empty() {
+                    println!("  Sin partidas.");
+                    pausa();
+                    continue;
+                }
+
+                let id = match buscar_en_lista("Selecciona partida a eliminar", lista) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    o.presupuesto_obra.partidas.retain(|p| p.id != id);
+                }
+                println!("  {} Partida eliminada.", "✓".green());
+                pausa();
+            }
+
+            // ── 5: Cambiar período ────────────────────────────────────
+            Some(5) => {
+                println!("  Períodos con datos: {}", periodos.join(", ").yellow());
+                let nuevo = match pedir_texto("Período a activar (YYYY-MM, ej. 2026-05)") {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if nuevo.trim().len() == 7 {
+                    if let Some(o) = state.obras.obra_mut(obra_id) {
+                        o.presupuesto_obra.periodo_activo = nuevo.trim().to_string();
+                    }
+                    println!("  {} Período cambiado.", "✓".green());
+                } else {
+                    println!("  Formato inválido, usa YYYY-MM.");
+                }
+                pausa();
+            }
+
+            // ── 6: Vista global de todos los períodos ─────────────────
+            Some(6) => {
+                limpiar();
+                separador("🗂️  TODOS LOS PERÍODOS");
+                if periodos.is_empty() {
+                    println!("  Sin datos todavía.");
+                } else {
+                    println!(
+                        "  {:<10}  {:>10}  {:>10}  {:>10}  {:>8}  {:>8}",
+                        "Período", "Solicit.", "Aprobado", "Ejecutado", "Varianza", "% Ejec."
+                    );
+                    println!("  {}", "─".repeat(65).dimmed());
+                    let (mut ts, mut ta, mut te) = (0.0f64, 0.0f64, 0.0f64);
+                    for per in &periodos {
+                        let (s, a, e) = o.presupuesto_obra.totales_periodo(per);
+                        let var = a - e;
+                        let pct = if a > 0.0 { e / a * 100.0 } else { 0.0 };
+                        ts += s;
+                        ta += a;
+                        te += e;
+                        let var_txt = if var >= 0.0 {
+                            format!("{:>8.2}", var).green().to_string()
+                        } else {
+                            format!("{:>8.2}", var).red().to_string()
+                        };
+                        println!(
+                            "  {:<10}  {:>10.2}  {:>10.2}  {:>10.2}  {}  {:>7.0}%",
+                            per, s, a, e, var_txt, pct
+                        );
+                    }
+                    println!("  {}", "─".repeat(65).dimmed());
+                    let var_g = ta - te;
+                    let pct_g = if ta > 0.0 { te / ta * 100.0 } else { 0.0 };
+                    let var_g_txt = if var_g >= 0.0 {
+                        format!("{:>8.2}", var_g).green().to_string()
+                    } else {
+                        format!("{:>8.2}", var_g).red().to_string()
+                    };
+                    println!(
+                        "  {:<10}  {:>10.2}  {:>10.2}  {:>10.2}  {}  {:>7.0}%",
+                        "TOTAL", ts, ta, te, var_g_txt, pct_g
+                    );
+                }
+                separador("");
+                pausa();
+            }
+
+            // ── 7: Notas ──────────────────────────────────────────────
+            Some(7) => {
+                println!("  Nota actual: {}", o.presupuesto_obra.notas.dimmed());
+                if let Some(n) = pedir_texto("Nueva nota del presupuesto") {
+                    if let Some(ob) = state.obras.obra_mut(obra_id) {
+                        ob.presupuesto_obra.notas = n;
+                    }
+                    println!("  {} Nota guardada.", "✓".green());
+                    pausa();
+                }
+            }
+
+            _ => return,
+        }
+    }
+}
+
+/// Renderiza el Marco Lógico completo del proyecto: Fin → Propósito →
+/// Componentes A/B/C → Actividades, con estado, indicadores, navegación
+/// bidireccional y alertas de redundancia.
+fn mapa_marco_logico_obra(state: &AppState, obra_id: &str) {
+    use colored::Colorize;
+    use omniplanner::obras::{ComponenteObra, EstadoPaso};
+
+    let o = match state.obras.obra(obra_id) {
+        Some(o) => o.clone(),
+        None => {
+            println!("  Obra no encontrada");
+            return;
+        }
+    };
+
+    let pasos = o.validar_flujo_completo();
+    let redundancias = o.verificar_redundancias();
+
+    // Agrupar pasos por componente
+    let comp_a: Vec<_> = pasos
+        .iter()
+        .filter(|p| p.componente == ComponenteObra::A)
+        .collect();
+    let comp_b: Vec<_> = pasos
+        .iter()
+        .filter(|p| p.componente == ComponenteObra::B)
+        .collect();
+    let comp_c: Vec<_> = pasos
+        .iter()
+        .filter(|p| p.componente == ComponenteObra::C)
+        .collect();
+    let cierre: Vec<_> = pasos
+        .iter()
+        .filter(|p| p.componente == ComponenteObra::CierreFormal)
+        .collect();
+
+    let comp_ok = |ps: &[&omniplanner::obras::PasoFlujo]| {
+        ps.iter().all(|p| p.estado == EstadoPaso::Completado)
+    };
+    let comp_pct = |ps: &[&omniplanner::obras::PasoFlujo]| {
+        let ok = ps
+            .iter()
+            .filter(|p| p.estado == EstadoPaso::Completado)
+            .count();
+        (ok, ps.len())
+    };
+    let comp_icono = |ps: &[&omniplanner::obras::PasoFlujo]| {
+        if comp_ok(ps) {
+            "✅"
+        } else if ps.iter().any(|p| p.estado == EstadoPaso::Faltante) {
+            "⏳"
+        } else {
+            "🔒"
+        }
+    };
+
+    limpiar();
+    separador("");
+    println!(
+        "  {}  MARCO LÓGICO — {}",
+        "🗂️".to_string(),
+        o.nombre.cyan().bold()
+    );
+    println!(
+        "  Cliente: {}  │  Estado: {}  │  Avance: {:.0}%",
+        o.cliente,
+        o.estado.nombre().yellow(),
+        o.pct_avance()
+    );
+    separador("");
+
+    // ── Nivel FIN ──────────────────────────────────────────────────────
+    println!(
+        "  {}  {}   {}",
+        "🎯".to_string(),
+        "FIN ESTRATÉGICO".bold(),
+        "Empresa rentable con proyectos documentados y cobrados al 100%".dimmed()
+    );
+    println!(
+        "  {}  Indicador: Cobrar 100% del contrato + gastos dentro del presupuesto + acta firmada",
+        "   ".to_string()
+    );
+    separador("");
+
+    // ── Nivel PROPÓSITO ───────────────────────────────────────────────
+    let acta_lista = cierre.iter().all(|p| p.estado == EstadoPaso::Completado);
+    println!(
+        "  {}  {}   {}  {}",
+        "🏁".to_string(),
+        "PROPÓSITO".bold(),
+        "Obra entregada al cliente con evidencia legal completa".dimmed(),
+        if acta_lista {
+            "✅".to_string()
+        } else {
+            "⏳".to_string()
+        }
+    );
+    println!("  {}  Indicador: Acta de cierre firmada por ambas partes (autorizado por empresa + aprobado por cliente)",
+        "   ".to_string());
+    separador("");
+
+    // ── Componentes ────────────────────────────────────────────────────
+    println!("  COMPONENTES DEL MARCO LÓGICO:");
+    separador("");
+    for (comp, nombre, objetivo, pasos_comp) in [
+        (
+            comp_icono(&comp_a),
+            ComponenteObra::A.nombre(),
+            ComponenteObra::A.objetivo(),
+            &comp_a,
+        ),
+        (
+            comp_icono(&comp_b),
+            ComponenteObra::B.nombre(),
+            ComponenteObra::B.objetivo(),
+            &comp_b,
+        ),
+        (
+            comp_icono(&comp_c),
+            ComponenteObra::C.nombre(),
+            ComponenteObra::C.objetivo(),
+            &comp_c,
+        ),
+        (
+            comp_icono(&cierre),
+            ComponenteObra::CierreFormal.nombre(),
+            ComponenteObra::CierreFormal.objetivo(),
+            &cierre,
+        ),
+    ] {
+        let (ok, total) = comp_pct(pasos_comp);
+        println!(
+            "  {}  {:<38}  {}/{}  {}",
+            comp,
+            nombre.yellow().to_string(),
+            ok,
+            total,
+            objetivo.dimmed()
+        );
+    }
+    separador("");
+
+    // ── Detalle por componente ─────────────────────────────────────────
+    for (titulo, ps) in [
+        (
+            "COMPONENTE A — Contratación documentada  (Pasos 1-5)",
+            &comp_a,
+        ),
+        (
+            "COMPONENTE B — Ejecución financiera      (Pasos 6-9)",
+            &comp_b,
+        ),
+        (
+            "COMPONENTE C — Entrega y seguimiento     (Pasos 10-13)",
+            &comp_c,
+        ),
+        (
+            "CIERRE FORMAL                            (Paso 14)",
+            &cierre,
+        ),
+    ] {
+        println!("  {}", titulo.cyan().to_string());
+        separador("");
+        for paso in ps.iter() {
+            let icono = match paso.estado {
+                EstadoPaso::Completado => "✅",
+                EstadoPaso::Faltante => "❌",
+                EstadoPaso::Pendiente => "🔒",
+            };
+            let nivel_ico = paso.nivel.icono();
+            let revisable = if paso.puede_revisarse {
+                "🔁 revisable".dimmed().to_string()
+            } else {
+                "🔒 irreversible".dimmed().to_string()
+            };
+            let nombre_coloreado = match paso.estado {
+                EstadoPaso::Completado => paso.nombre.green().to_string(),
+                EstadoPaso::Faltante => paso.nombre.yellow().to_string(),
+                EstadoPaso::Pendiente => paso.nombre.dimmed().to_string(),
+            };
+            println!(
+                "  {}  {:>2}.  {:<44}  {}  {}",
+                icono, paso.numero, nombre_coloreado, nivel_ico, revisable
+            );
+
+            // Mostrar indicador brevemente
+            println!("          Indicador: {}", paso.indicador.dimmed());
+
+            // Mostrar qué afecta si cambia
+            if !paso.afecta_si_cambia.is_empty() {
+                let afecta: Vec<String> = paso
+                    .afecta_si_cambia
+                    .iter()
+                    .map(|n| format!("Paso {}", n))
+                    .collect();
+                println!(
+                    "          {} Si cambia → revisar: {}",
+                    "↻".yellow(),
+                    afecta.join(", ").yellow()
+                );
+            }
+
+            // Si está Faltante, mostrar la acción
+            if paso.estado == EstadoPaso::Faltante {
+                if let Some(op) = paso.opcion_menu {
+                    println!(
+                        "          {} ACCIÓN: opción {}",
+                        "→".cyan().bold(),
+                        op.cyan().bold()
+                    );
+                }
+            }
+            println!();
+        }
+    }
+
+    // ── Redundancias ───────────────────────────────────────────────────
+    separador("");
+    if redundancias.is_empty() {
+        println!(
+            "  {}  Sin redundancias — flujo coherente y bien documentado",
+            "✅".to_string().green()
+        );
+    } else {
+        println!(
+            "  {}  REGRESIONES / REDUNDANCIAS DETECTADAS:",
+            "⚠️ ".to_string().yellow().bold()
+        );
+        for r in &redundancias {
+            println!("  {}  {}", "⚠️ ".to_string(), r.yellow());
+        }
+    }
+    separador("");
+
+    // ── Navegación bidireccional ───────────────────────────────────────
+    let siguiente = pasos.iter().find(|p| p.estado == EstadoPaso::Faltante);
+    let revisables: Vec<_> = pasos
+        .iter()
+        .filter(|p| {
+            p.estado == EstadoPaso::Completado
+                && p.puede_revisarse
+                && !p.afecta_si_cambia.is_empty()
+        })
+        .collect();
+
+    println!("  NAVEGACIÓN:");
+    match siguiente {
+        Some(p) => {
+            println!(
+                "  {} SIGUIENTE: Paso {} — {}  → opción {}",
+                "→".cyan().bold(),
+                p.numero.to_string().cyan(),
+                p.nombre.yellow(),
+                p.opcion_menu.unwrap_or("?").cyan()
+            );
+        }
+        None => println!(
+            "  {} Todos los pasos completados → listo para cierre (op. 20)",
+            "✅".to_string().green()
+        ),
+    }
+    if !revisables.is_empty() {
+        println!(
+            "  {} Pasos que puedes revisar si algo cambió:",
+            "←".yellow()
+        );
+        for p in revisables.iter().take(3) {
+            let afecta: Vec<String> = p
+                .afecta_si_cambia
+                .iter()
+                .map(|n| format!("Paso {}", n))
+                .collect();
+            println!(
+                "    Paso {:>2} — {}  (afecta {})  → op. {}",
+                p.numero,
+                p.nombre.dimmed(),
+                afecta.join(", ").yellow(),
+                p.opcion_menu.unwrap_or("?").cyan()
+            );
+        }
+    }
+    separador("");
+    pausa();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Obras y Ciclo Financiero — Guía inteligente de pasos
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Muestra el próximo paso requerido + pasos revisables + redundancias.
+/// Efecto "dimming": 🔒 bloqueado, ❌ siguiente requerido, ✅ completo.
+fn guia_siguiente_paso(state: &AppState, obra_id: &str) {
+    use colored::Colorize;
+    use omniplanner::obras::EstadoPaso;
+
+    let o = match state.obras.obra(obra_id) {
+        Some(o) => o,
+        None => return,
+    };
+
+    let pasos = o.validar_flujo_completo();
+    let redundancias = o.verificar_redundancias();
+    let completados = pasos
+        .iter()
+        .filter(|p| p.estado == EstadoPaso::Completado)
+        .count();
+    let total = pasos.len();
+    let siguiente = pasos.iter().find(|p| p.estado == EstadoPaso::Faltante);
+    let bloqueados = pasos
+        .iter()
+        .filter(|p| p.estado == EstadoPaso::Pendiente)
+        .count();
+
+    let filled = (completados * 24 / total.max(1)).min(24);
+    let barra = format!(
+        "[{}{}]  {}/{}",
+        "█".repeat(filled),
+        "░".repeat(24 - filled),
+        completados,
+        total
+    );
+
+    separador("");
+    println!("  PROGRESO DE LA OBRA  {}", barra.green());
+
+    let iconos: String = pasos
+        .iter()
+        .map(|p| match p.estado {
+            EstadoPaso::Completado => "✅",
+            EstadoPaso::Faltante => "❌",
+            EstadoPaso::Pendiente => "🔒",
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("  {}", iconos);
+
+    // Redundancias / regresiones detectadas
+    if !redundancias.is_empty() {
+        println!();
+        for r in redundancias.iter().take(2) {
+            println!("  {}  {}", "⚠️ ".to_string(), r.yellow());
+        }
+    }
+
+    // Siguiente paso requerido
+    match siguiente {
+        Some(paso) => {
+            println!();
+            println!(
+                "  {}  SIGUIENTE ACCIÓN  ──────────────────────────────────────────",
+                "⚡".to_string().yellow().bold()
+            );
+            println!(
+                "  Paso {:>2}:  {}  [{} {}]",
+                paso.numero.to_string().cyan().bold(),
+                paso.nombre.yellow().bold(),
+                paso.nivel.icono(),
+                paso.nivel.nombre().dimmed()
+            );
+            println!("  Indicador:  {}", paso.indicador.dimmed());
+            if let Some(op) = paso.opcion_menu {
+                println!("  → Selecciona opción {}  del menú", op.cyan().bold());
+            }
+            if bloqueados > 0 {
+                println!(
+                    "  🔒 {} paso(s) esperan que completes este primero",
+                    bloqueados.to_string().dimmed()
+                );
+            }
+        }
+        None => {
+            println!();
+            println!(
+                "  {}  Todos los pasos documentados — listo para cierre formal",
+                "✅".to_string().green().bold()
+            );
+            println!(
+                "  → Actualiza el estado a Completada en opción {}",
+                "20".cyan().bold()
+            );
+        }
+    }
+
+    // Pasos revisables que afectan pasos posteriores
+    let revisables: Vec<_> = pasos
+        .iter()
+        .filter(|p| {
+            p.estado == EstadoPaso::Completado
+                && p.puede_revisarse
+                && !p.afecta_si_cambia.is_empty()
+        })
+        .collect();
+    if !revisables.is_empty() {
+        println!();
+        println!(
+            "  {} Si algo cambió, puedes regresar a:",
+            "←".yellow().bold()
+        );
+        for p in revisables.iter().take(3) {
+            let afecta: Vec<String> = p
+                .afecta_si_cambia
+                .iter()
+                .map(|n| format!("Paso {}", n))
+                .collect();
+            println!(
+                "    Paso {:>2} — {}  →  afecta {}  (op. {})",
+                p.numero,
+                p.nombre.dimmed(),
+                afecta.join(", ").yellow(),
+                p.opcion_menu.unwrap_or("?").cyan()
+            );
+        }
+        println!(
+            "  {} Ver mapa completo del marco lógico → opción {}",
+            "🗂️".to_string(),
+            "23".cyan().bold()
+        );
+    }
+    separador("");
+}
+
+/// Panel de todos los proyectos activos con su próxima acción.
+/// Se muestra cuando no hay obra en contexto — da visión completa del portafolio.
+fn panel_multiproyecto(state: &AppState, hoy: chrono::NaiveDate) {
+    use colored::Colorize;
+    use omniplanner::obras::EstadoPaso;
+
+    let activas = state.obras.activas();
+    if activas.is_empty() {
+        println!(
+            "  Sin proyectos activos. Crea uno con opción {}",
+            "1".cyan().bold()
+        );
+        separador("");
+        return;
+    }
+
+    println!(
+        "  PORTAFOLIO DE PROYECTOS ACTIVOS  ({} obra(s))",
+        activas.len().to_string().cyan().bold()
+    );
+    separador("");
+    println!(
+        "  {:<3}  {:<28}  {:<20}  {:<7}  {}",
+        "   ", "Proyecto", "Estado", "Avance", "Siguiente acción requerida"
+    );
+    separador("");
+
+    for o in &activas {
+        let pasos = o.validar_flujo_completo();
+        let completados = pasos
+            .iter()
+            .filter(|p| p.estado == EstadoPaso::Completado)
+            .count();
+        let total = pasos.len();
+        let siguiente = pasos.iter().find(|p| p.estado == EstadoPaso::Faltante);
+
+        let saldo = o.saldo_disponible();
+        let gastos_sin_consul = o.gastos.iter().filter(|g| g.consulta_id.is_empty()).count();
+        let cuentas_vencidas = state
+            .cobranzas
+            .cuentas
+            .iter()
+            .filter(|c| c.obra_id == o.id && c.dias_mora(hoy) > 0 && c.monto_pendiente() > 0.0)
+            .count();
+
+        let semaforo = if saldo < 0.0 || gastos_sin_consul > 0 || cuentas_vencidas > 0 {
+            "🔴"
+        } else if completados < total / 2 {
+            "🟡"
+        } else {
+            "🟢"
+        };
+
+        let sig_txt = siguiente
+            .map(|p| {
+                format!(
+                    "Paso {:>2} — {}  (op. {})",
+                    p.numero,
+                    p.nombre,
+                    p.opcion_menu.unwrap_or("?")
+                )
+            })
+            .unwrap_or_else(|| "✅ Listo para cierre (op. 20)".to_string());
+
+        let avance = format!("{}/{}", completados, total);
+        println!(
+            "  {}  {:<28}  {:<20}  {:<7}  {}",
+            semaforo,
+            truncar(&o.nombre, 28).cyan().to_string(),
+            truncar(o.estado.nombre(), 20).yellow().to_string(),
+            avance,
+            sig_txt.dimmed()
+        );
+    }
+    separador("");
+    println!("  💡 Tip: selecciona una opción del menú y elige tu proyecto, o usa 'Cambiar obra' (op. 2)");
+    separador("");
+}
+
+/// Trunca un &str a n caracteres para alinear columnas en el panel.
+fn truncar(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Obras y Ciclo Financiero
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_obras(state: &mut AppState) {
+    use chrono::Local;
+    use colored::Colorize;
+    use omniplanner::cobranzas::EstadoCuenta;
+    use omniplanner::obras::*;
+    let mut ctx_obra: Option<String> = None;
+    loop {
+        limpiar();
+        banner();
+        println!("  🏗️  OBRAS Y CICLO FINANCIERO");
+        let hoy = Local::now().date_naive();
+
+        if let Some(ref oid) = ctx_obra.clone() {
+            // ── Modo proyecto activo: muestra guía de próximo paso ────
+            if let Some(o) = state.obras.obra(oid) {
+                println!(
+                    "  📍 Proyecto activo: {}  │  {}  │  {:.0}%  │  Saldo: ${:.0}",
+                    o.nombre.cyan().bold(),
+                    o.estado.nombre().yellow(),
+                    o.pct_avance(),
+                    o.saldo_disponible()
+                );
+            }
+            guia_siguiente_paso(state, oid);
+            println!("  💡 Op. {} → cambiar de proyecto   Op. {} → diagnóstico completo   Op. {} → asesor financiero",
+                "2".cyan(), "19".cyan(), "22".cyan());
+            separador("");
+        } else {
+            // ── Modo sin proyecto: muestra el portafolio completo ─────
+            panel_multiproyecto(state, hoy);
+        }
+
+        let d = state.obras.dashboard();
+        println!("  Activas: {}  |  Portafolio: ${:.0}  |  Cobrado: ${:.0}  |  Saldo: ${:.0}  |  Ciclos ok: {}",
+            d.activas.to_string().cyan(),
+            d.valor_portafolio,
+            d.total_cobrado.to_string().green(),
+            d.saldo.to_string().yellow(),
+            d.ciclos_intactos.to_string().green(),
+        );
+        if d.ciclos_con_alerta > 0 {
+            println!(
+                "  {} {} obra(s) con alertas en el ciclo financiero",
+                "WARN".red(),
+                d.ciclos_con_alerta
+            );
+        }
+        separador("");
+        let opciones = &[
+            "Listar obras activas",
+            "Nueva obra",
+            "Detalle de obra",
+            "Registrar RFI",
+            "Registrar contacto con cliente",
+            "Correo de requerimientos",
+            "Configurar contrato",
+            "Firmar contrato (crea desembolsos automaticamente)",
+            "Posicion contable (disponible/exigible/realizable)",
+            "Consulta previa al cliente (antes de gastar)",
+            "Responder consulta (aprobacion del cliente)",
+            "Consultas pendientes de aprobacion",
+            "Registrar desembolso recibido",
+            "Registrar gasto (requiere consulta aprobada)",
+            "Ver gastos de la obra",
+            "Cambio de alcance (solicitud del cliente)",
+            "Reporte de avance para el cliente",
+            "Verificar ciclo financiero",
+            "Auditoria de proteccion",
+            "Diagnosticar obra / Ver flujo completo (14 pasos)",
+            "Actualizar estado de obra",
+            "Hitos del proyecto (Inicial / Intermedio / Final)",
+            "Asesor financiero de la obra (ratios y ciclo)",
+            "Marco lógico del proyecto (flujo bidireccional)",
+            "Presupuesto base cero de la obra",
+            "Volver",
+        ];
+        match menu("Obras", opciones) {
+            Some(0) => {
+                limpiar();
+                for o in state.obras.activas() {
+                    let ciclo = if o.salud.ciclo_integro {
+                        "OK".green()
+                    } else {
+                        "ALERTA".red()
+                    };
+                    println!(
+                        "  {} | {} | {} | ${:.0} | {:.0}% | Ciclo: {}",
+                        o.id.cyan(),
+                        o.nombre,
+                        o.estado.nombre(),
+                        o.contrato.valor_total,
+                        o.pct_avance(),
+                        ciclo
+                    );
+                }
+                pausa();
+            }
+            Some(1) => {
+                print!("  Nombre de la obra: ");
+                let nombre = leer_linea();
+                print!("  Cliente: ");
+                let cliente = leer_linea();
+                print!("  Telefono cliente: ");
+                let tel = leer_linea();
+                let mut o = Obra::nueva(nombre, cliente, hoy);
+                o.telefono_cliente = tel;
+                let id = o.id.clone();
+                state.obras.agregar(o);
+                ctx_obra = Some(id.clone()); // auto-seleccionar la obra recién creada
+                let _ = state.guardar();
+                println!(
+                    "  {} Obra creada y seleccionada como proyecto activo",
+                    "OK".green()
+                );
+                guia_siguiente_paso(state, &id);
+                pausa();
+            }
+            Some(2) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra(&id) {
+                    limpiar();
+                    println!("  {} — Cliente: {}", o.nombre.cyan(), o.cliente);
+                    println!(
+                        "  Estado: {}  |  Avance: {:.0}%",
+                        o.estado.nombre(),
+                        o.pct_avance()
+                    );
+                    println!("  Contrato: ${:.2}  |  Cobrado: ${:.2}  |  Gastado: ${:.2}  |  Saldo: ${:.2}",
+                        o.contrato.valor_total, o.total_cobrado(), o.total_gastado(), o.saldo_disponible());
+                    println!(
+                        "  Desembolsos: {}  |  Consultas pendientes: {}  |  Cambios alcance: {}",
+                        o.desembolsos.len(),
+                        o.consultas.iter().filter(|c| !c.esta_aprobada()).count(),
+                        o.cambios_alcance.len()
+                    );
+                    let a = o.auditoria();
+                    println!(
+                        "  Proteccion empresa: {}  |  Cobertura: {:.0}%  |  Riesgo: {}",
+                        if a.empresa_protegida {
+                            "TOTAL".green()
+                        } else {
+                            "REVISAR".red()
+                        },
+                        a.porcentaje_cobertura,
+                        a.riesgo
+                    );
+                    if !o.salud.alertas.is_empty() {
+                        println!("  Alertas ciclo:");
+                        for al in &o.salud.alertas {
+                            println!("    {}", al.yellow());
+                        }
+                    }
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(3) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    print!("  Canal (email/llamada/portal): ");
+                    let canal = leer_linea();
+                    print!("  Descripcion: ");
+                    let desc = leer_linea();
+                    let mut rfi = RFI::nuevo(hoy, canal, desc);
+                    print!("  Necesidades (separadas por coma): ");
+                    let nec_str = leer_linea();
+                    if !nec_str.is_empty() {
+                        rfi.necesidades =
+                            nec_str.split(',').map(|s| s.trim().to_string()).collect();
+                    }
+                    o.rfi = Some(rfi);
+                    o.estado = EstadoObra::ContactoCliente;
+                    let _ = state.guardar();
+                    println!("  {} RFI registrado", "OK".green());
+                    guia_siguiente_paso(state, &id);
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(4) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    print!("  Tipo (llamada/reunion/email): ");
+                    let tipo = leer_linea();
+                    print!("  Resumen de la conversacion: ");
+                    let resumen = leer_linea();
+                    print!("  Registrado por: ");
+                    let por = leer_linea();
+                    let mut c = ContactoCliente::nuevo(hoy, tipo, resumen, por);
+                    print!("  Acuerdos (separados por coma): ");
+                    let ac = leer_linea();
+                    if !ac.is_empty() {
+                        c.acuerdos = ac.split(',').map(|s| s.trim().to_string()).collect();
+                    }
+                    print!("  Proxima accion: ");
+                    c.proxima_accion = leer_linea();
+                    o.contactos.push(c);
+                    let _ = state.guardar();
+                    println!("  {} Contacto registrado", "OK".green());
+                    guia_siguiente_paso(state, &id);
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(5) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    print!("  Asunto del correo: ");
+                    let asunto = leer_linea();
+                    let mut cr = CorreoRequerimiento::nuevo(hoy, asunto);
+                    print!("  Requerimientos (separados por coma): ");
+                    let req_str = leer_linea();
+                    if !req_str.is_empty() {
+                        cr.requerimientos =
+                            req_str.split(',').map(|s| s.trim().to_string()).collect();
+                    }
+                    o.correo_requerimiento = Some(cr);
+                    if o.estado == EstadoObra::ContactoCliente {
+                        o.estado = EstadoObra::CorreoRequerimientos;
+                    }
+                    let _ = state.guardar();
+                    println!("  {} Correo de requerimientos registrado", "OK".green());
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(6) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let mut m1 = 0.0;
+                let mut m2 = 0.0;
+                let mut m3 = 0.0;
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    print!("  Numero de contrato: ");
+                    o.contrato.numero = leer_linea();
+                    print!("  Valor total: $");
+                    let vt_str = leer_linea();
+                    o.contrato.valor_total = vt_str.parse::<f64>().unwrap_or(0.0);
+                    print!("  % para 1er desembolso (materiales): ");
+                    let p1_str = leer_linea();
+                    o.contrato.pct_primer_desembolso = p1_str.parse::<f64>().unwrap_or(30.0);
+                    o.contrato.pct_segundo_desembolso = 80.0;
+                    o.contrato.pct_pago_final = 20.0;
+                    if o.estado == EstadoObra::CorreoRequerimientos {
+                        o.estado = EstadoObra::ContratoPendiente;
+                    }
+                    m1 = o.contrato.monto_primer();
+                    m2 = o.contrato.monto_segundo();
+                    m3 = o.contrato.monto_final();
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                let _ = state.guardar();
+                if m1 > 0.0 {
+                    println!(
+                        "  Estructura: 1er=${:.0}  2do=${:.0} (80%)  Final=${:.0} (20% impuestos)",
+                        m1, m2, m3
+                    );
+                }
+                pausa();
+            }
+            Some(7) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    if o.contrato.valor_total <= 0.0 {
+                        println!("  {} Configura el contrato antes de firmar", "X".red());
+                        pausa();
+                        continue;
+                    }
+                    o.contrato.firmado = true;
+                    o.contrato.fecha_firma = Some(hoy);
+                    o.estado = EstadoObra::ContratoFirmado;
+                    let m1 = o.contrato.monto_primer();
+                    let m2 = o.contrato.monto_segundo();
+                    let m3 = o.contrato.monto_final();
+                    o.desembolsos.push(Desembolso::nuevo(
+                        NumeroDesembolso::Primero,
+                        m1,
+                        "Compra de materiales",
+                    ));
+                    o.desembolsos.push(Desembolso::nuevo(
+                        NumeroDesembolso::Segundo,
+                        m2,
+                        "Operativo + mano de obra (80%)",
+                    ));
+                    o.desembolsos.push(Desembolso::nuevo(
+                        NumeroDesembolso::Final,
+                        m3,
+                        "Solo impuestos (20%)",
+                    ));
+                    let _ = state.guardar();
+                    println!("  {} Contrato firmado — desembolsos creados:", "OK".green());
+                    println!(
+                        "    1er: ${:.2}  |  2do: ${:.2} (80%)  |  Final: ${:.2} (20%)",
+                        m1, m2, m3
+                    );
+                    guia_siguiente_paso(state, &id);
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(8) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Calcular posición automáticamente del flujo registrado
+                let (auto_disp, auto_exig_des, auto_real) = if let Some(o) = state.obras.obra(&id) {
+                    o.calcular_posicion_auto()
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                    pausa();
+                    continue;
+                };
+                // Sumar cuentas por cobrar vinculadas a esta obra (exigible de cobranzas)
+                let exig_cobr: f64 = state
+                    .cobranzas
+                    .cuentas
+                    .iter()
+                    .filter(|c| {
+                        c.obra_id == id
+                            && !matches!(c.estado, EstadoCuenta::Pagada | EstadoCuenta::Incobrable)
+                    })
+                    .map(|c| c.monto_pendiente())
+                    .sum();
+                let auto_exig = auto_exig_des + exig_cobr;
+                let auto_total = auto_disp + auto_exig + auto_real;
+
+                limpiar();
+                if let Some(o) = state.obras.obra(&id) {
+                    println!(
+                        "  {} — {} | Contrato: ${:.2}",
+                        o.nombre.cyan().bold(),
+                        o.estado.nombre().yellow(),
+                        o.contrato.valor_total
+                    );
+                    separador("");
+                    // Desglose del cálculo automático
+                    println!("  {} CÁLCULO AUTOMÁTICO DEL FLUJO:", "📊".to_string());
+                    separador("");
+                    println!("  Cobrado del cliente:        ${:.2}", o.total_cobrado());
+                    println!("  Gastos aprobados:          -${:.2}", o.total_gastado());
+                    println!("  ┌─ {} (caja):     ${:.2}", "Disponible".cyan(), auto_disp);
+                    let pend_des: Vec<_> = o.desembolsos.iter().filter(|d| !d.recibido).collect();
+                    if !pend_des.is_empty() {
+                        println!("  │");
+                        for d in &pend_des {
+                            println!(
+                                "  │  {} — esperado: ${:.2}",
+                                d.destino_autorizado, d.monto_esperado
+                            );
+                        }
+                    }
+                    if exig_cobr > 0.0 {
+                        println!("  │  + Facturas pendientes cobranzas: ${:.2}", exig_cobr);
+                    }
+                    println!("  ├─ {} (por cobrar): ${:.2}", "Exigible".cyan(), auto_exig);
+                    let mat_gastos: f64 = o
+                        .gastos
+                        .iter()
+                        .filter(|g| g.aprobado && matches!(g.categoria, CategoriaGasto::Materiales))
+                        .map(|g| g.monto)
+                        .sum();
+                    if mat_gastos > 0.0 {
+                        println!("  │  Gastos en materiales: ${:.2}", mat_gastos);
+                    }
+                    println!(
+                        "  └─ {} (inventario): ${:.2}",
+                        "Realizable".cyan(),
+                        auto_real
+                    );
+                    separador("");
+                    println!("  Total activo corriente auto: ${:.2}", auto_total);
+                    println!(
+                        "  Guardado actual:             ${:.2}  (disp:{:.0} exig:{:.0} real:{:.0})",
+                        o.posicion.total_activo_corriente,
+                        o.posicion.disponible,
+                        o.posicion.exigible,
+                        o.posicion.realizable
+                    );
+                }
+                separador("");
+                let opt = &[
+                    "Aplicar valores calculados (recomendado)",
+                    "Ajustar manualmente (con motivo)",
+                    "Volver sin cambiar",
+                ];
+                match menu("Actualizar posición contable", opt) {
+                    Some(0) => {
+                        if let Some(o) = state.obras.obra_mut(&id) {
+                            o.posicion.disponible = auto_disp;
+                            o.posicion.exigible = auto_exig;
+                            o.posicion.realizable = auto_real;
+                            o.posicion.recalcular(hoy);
+                            o.posicion.notas =
+                                format!("Calculado automáticamente del flujo el {}", hoy);
+                        }
+                        let _ = state.guardar();
+                        println!("  {} Posición actualizada: disp=${:.2} exig=${:.2} real=${:.2} total=${:.2}",
+                            "OK".green(), auto_disp, auto_exig, auto_real, auto_total);
+                    }
+                    Some(1) => {
+                        if let Some(o) = state.obras.obra(&id) {
+                            let ad = o.posicion.disponible;
+                            let ae = o.posicion.exigible;
+                            let ar = o.posicion.realizable;
+                            print!(
+                                "  Disponible  [auto=${:.0} | guardado=${:.0}]: $",
+                                auto_disp, ad
+                            );
+                            let s = leer_linea();
+                            let nd = if s.trim().is_empty() {
+                                auto_disp
+                            } else {
+                                s.parse::<f64>().unwrap_or(auto_disp)
+                            };
+                            print!(
+                                "  Exigible    [auto=${:.0} | guardado=${:.0}]: $",
+                                auto_exig, ae
+                            );
+                            let s = leer_linea();
+                            let ne = if s.trim().is_empty() {
+                                auto_exig
+                            } else {
+                                s.parse::<f64>().unwrap_or(auto_exig)
+                            };
+                            print!(
+                                "  Realizable  [auto=${:.0} | guardado=${:.0}]: $",
+                                auto_real, ar
+                            );
+                            let s = leer_linea();
+                            let nr = if s.trim().is_empty() {
+                                auto_real
+                            } else {
+                                s.parse::<f64>().unwrap_or(auto_real)
+                            };
+                            print!("  Motivo del ajuste manual (requerido): ");
+                            let motivo = leer_linea();
+                            if let Some(o) = state.obras.obra_mut(&id) {
+                                o.posicion.disponible = nd;
+                                o.posicion.exigible = ne;
+                                o.posicion.realizable = nr;
+                                o.posicion.recalcular(hoy);
+                                o.posicion.notas = if motivo.trim().is_empty() {
+                                    format!("Ajuste manual el {} (sin motivo)", hoy)
+                                } else {
+                                    format!("{} — ajustado el {}", motivo, hoy)
+                                };
+                            }
+                            let _ = state.guardar();
+                            println!(
+                                "  {} Posición guardada con ajuste manual | Motivo: {}",
+                                "OK".green(),
+                                motivo
+                            );
+                        } else {
+                            println!("  {} Obra no encontrada", "X".red());
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+            Some(9) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Mostrar consultas existentes antes de crear una nueva
+                if let Some(o) = state.obras.obra(&id) {
+                    let prev: Vec<_> = o.consultas.iter().collect();
+                    if !prev.is_empty() {
+                        limpiar();
+                        println!(
+                            "  {} — Consultas previas registradas:",
+                            o.nombre.cyan().bold()
+                        );
+                        separador("");
+                        println!("  {:<12} {:<32} {:>10}  Estado", "ID", "Concepto", "Monto");
+                        separador("");
+                        for c in &prev {
+                            let estado_tag = match c.estado {
+                                EstadoConsulta::PendienteRespuesta => {
+                                    "⏳ Pendiente".yellow().to_string()
+                                }
+                                EstadoConsulta::Aprobada => "✅ Aprobada".green().to_string(),
+                                EstadoConsulta::ModificadaYAprobada => {
+                                    "✅ Aprobada (mod)".green().to_string()
+                                }
+                                EstadoConsulta::Rechazada => "❌ Rechazada".red().to_string(),
+                            };
+                            println!(
+                                "  {:<12} {:<32} {:>10.2}  {}",
+                                c.id.cyan(),
+                                &c.concepto[..c.concepto.len().min(32)],
+                                c.monto_propuesto,
+                                estado_tag
+                            );
+                        }
+                        separador("");
+                    }
+                }
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    print!("  Concepto (que quieres hacer): ");
+                    let concepto = leer_linea();
+                    print!("  Detalle (justificacion): ");
+                    let detalle = leer_linea();
+                    print!("  Monto propuesto: $");
+                    let m_str = leer_linea();
+                    let monto = m_str.parse::<f64>().unwrap_or(0.0);
+                    print!("  Etapa (materiales/operativo/mano_obra): ");
+                    let etapa = leer_linea();
+                    let c = ConsultaPrevia::nueva(hoy, concepto.clone(), detalle, monto, etapa);
+                    let cid = c.id.clone();
+                    o.consultas.push(c);
+                    let _ = state.guardar();
+                    separador("");
+                    println!("  {} Solicitud registrada: {}", "OK".green(), cid.cyan());
+                    println!("  Concepto:  {}", concepto);
+                    println!("  Monto:     ${:.2}", monto);
+                    separador("");
+                    println!(
+                        "  {} Flujo de aprobación:",
+                        "SIGUIENTE PASO".yellow().bold()
+                    );
+                    println!("  1. Envía esta solicitud al cliente y espera su respuesta");
+                    println!(
+                        "  2. Opción 10 — Registrar la respuesta del cliente (aprobada/rechazada)"
+                    );
+                    println!("  3. Opción 13 — Registrar el gasto usando esta solicitud aprobada");
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(10) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Auto-seleccionar si hay 1 pendiente; FuzzySelect si hay varias
+                let cid = {
+                    let pendientes: Vec<(String, String)> = if let Some(o) = state.obras.obra(&id) {
+                        o.consultas
+                            .iter()
+                            .filter(|c| matches!(c.estado, EstadoConsulta::PendienteRespuesta))
+                            .map(|c| {
+                                (
+                                    format!(
+                                        "{:<12} | {:<30} | ${:.2} | {} | {}",
+                                        c.id,
+                                        &c.concepto[..c.concepto.len().min(30)],
+                                        c.monto_propuesto,
+                                        c.etapa,
+                                        c.fecha
+                                    ),
+                                    c.id.clone(),
+                                )
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    if pendientes.is_empty() {
+                        println!(
+                            "  {} No hay solicitudes pendientes de respuesta del cliente",
+                            "X".red()
+                        );
+                        println!("  → Registra una nueva solicitud con opción 9");
+                        pausa();
+                        continue;
+                    } else if pendientes.len() == 1 {
+                        let (etiqueta, pid) = pendientes.into_iter().next().unwrap();
+                        println!("  {} Auto-seleccionada (única pendiente):", "AUTO".cyan());
+                        println!("  {}", etiqueta);
+                        pid
+                    } else {
+                        match buscar_en_lista("Selecciona la solicitud a responder", pendientes) {
+                            Some(pid) => pid,
+                            None => {
+                                pausa();
+                                continue;
+                            }
+                        }
+                    }
+                };
+                // Mostrar detalle de la consulta seleccionada
+                if let Some(o) = state.obras.obra(&id) {
+                    if let Some(c) = o.consultas.iter().find(|c| c.id == cid) {
+                        separador("");
+                        println!("  Solicitud:  {}", c.id.cyan());
+                        println!("  Concepto:   {}", c.concepto);
+                        println!("  Detalle:    {}", c.detalle);
+                        println!("  Monto:      ${:.2}", c.monto_propuesto);
+                        println!("  Etapa:      {}", c.etapa);
+                        println!("  Registrada: {}", c.fecha);
+                        separador("");
+                    }
+                }
+                let resp_op = &[
+                    "Aprobada",
+                    "Rechazada",
+                    "Modificada y aprobada (monto ajustado)",
+                ];
+                let nueva_estado = match menu("Respuesta del cliente", resp_op) {
+                    Some(1) => EstadoConsulta::Rechazada,
+                    Some(2) => EstadoConsulta::ModificadaYAprobada,
+                    _ => EstadoConsulta::Aprobada,
+                };
+                let aprobada = matches!(
+                    nueva_estado,
+                    EstadoConsulta::Aprobada | EstadoConsulta::ModificadaYAprobada
+                );
+                let monto_ajustado = if matches!(nueva_estado, EstadoConsulta::ModificadaYAprobada)
+                {
+                    print!("  Monto aprobado por el cliente (puede diferir del propuesto): $");
+                    let s = leer_linea();
+                    s.parse::<f64>().ok()
+                } else {
+                    None
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    if let Some(c) = o.consultas.iter_mut().find(|c| c.id == cid) {
+                        c.estado = nueva_estado;
+                        c.fecha_respuesta = Some(hoy);
+                        print!("  Aprobado por (nombre del cliente): ");
+                        c.aprobado_por = leer_linea();
+                        print!("  Medio (email/llamada/reunión): ");
+                        c.medio_confirmacion = leer_linea();
+                        print!("  Observaciones del cliente (Enter para omitir): ");
+                        c.respuesta_cliente = leer_linea();
+                        if let Some(m) = monto_ajustado {
+                            c.monto_propuesto = m;
+                        }
+                        let _ = state.guardar();
+                        separador("");
+                        if aprobada {
+                            println!(
+                                "  {} Solicitud {} APROBADA por el cliente",
+                                "OK".green(),
+                                cid.cyan()
+                            );
+                            separador("");
+                            println!("  {} Flujo continúa:", "SIGUIENTE PASO".yellow().bold());
+                            println!(
+                                "  → Opción 13 — Registrar gasto usando esta solicitud aprobada"
+                            );
+                            println!(
+                                "  → La solicitud {} aparecerá en el selector de gastos",
+                                cid.cyan()
+                            );
+                        } else {
+                            println!(
+                                "  {} Solicitud {} RECHAZADA por el cliente",
+                                "X".red(),
+                                cid.cyan()
+                            );
+                            println!("  → Puedes crear una nueva solicitud con opción 9 ajustando el concepto o monto");
+                        }
+                    } else {
+                        println!("  {} Solicitud no encontrada", "X".red());
+                    }
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(11) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra(&id) {
+                    let pendientes: Vec<_> =
+                        o.consultas.iter().filter(|c| !c.esta_aprobada()).collect();
+                    if pendientes.is_empty() {
+                        println!("  {}", "No hay consultas pendientes.".green());
+                    }
+                    for c in pendientes {
+                        println!(
+                            "  {} | {} | ${:.2} | {}",
+                            c.id.cyan(),
+                            c.concepto,
+                            c.monto_propuesto,
+                            c.estado.nombre().yellow()
+                        );
+                    }
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(12) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Mostrar tabla completa de desembolsos ANTES de preguntar
+                if let Some(o) = state.obras.obra(&id) {
+                    limpiar();
+                    println!(
+                        "  {} — Contrato: {}  |  Total: ${:.2}",
+                        o.nombre.cyan().bold(),
+                        o.contrato.numero,
+                        o.contrato.valor_total
+                    );
+                    separador("");
+                    println!(
+                        "  {:<22} {:>12} {:>12} {:>12}  Estado",
+                        "Desembolso", "Esperado", "Recibido", "Pendiente"
+                    );
+                    separador("");
+                    for d in &o.desembolsos {
+                        let pend = (d.monto_esperado - d.monto_recibido).max(0.0);
+                        let tag = if d.recibido {
+                            "✅ RECIBIDO".to_string()
+                        } else if pend > 0.0 {
+                            "⏳ PENDIENTE".to_string()
+                        } else {
+                            "-".to_string()
+                        };
+                        println!(
+                            "  {:<22} {:>12.2} {:>12.2} {:>12.2}  {}",
+                            &d.destino_autorizado[..d.destino_autorizado.len().min(22)],
+                            d.monto_esperado,
+                            d.monto_recibido,
+                            pend,
+                            tag
+                        );
+                    }
+                    separador("");
+                    let total_pend = o.contrato.valor_total - o.total_cobrado();
+                    println!(
+                        "  Cobrado hasta ahora: ${}   Pendiente total: ${}",
+                        format!("{:.2}", o.total_cobrado()).green(),
+                        format!("{:.2}", total_pend).yellow()
+                    );
+                    if total_pend < 0.0 {
+                        println!(
+                            "  {} Hay ${:.2} recibidos en exceso — documentar en Cambio de Alcance",
+                            "AVISO".red(),
+                            total_pend.abs()
+                        );
+                    }
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                    pausa();
+                    continue;
+                }
+                separador("");
+                let des_op = &[
+                    "Primero (materiales)",
+                    "Segundo (80% operativo)",
+                    "Final (20% impuestos)",
+                ];
+                let des = match menu("Seleccionar desembolso a registrar", des_op) {
+                    Some(1) => NumeroDesembolso::Segundo,
+                    Some(2) => NumeroDesembolso::Final,
+                    _ => NumeroDesembolso::Primero,
+                };
+                // Mostrar monto esperado para el desembolso seleccionado
+                let monto_esperado = state
+                    .obras
+                    .obra(&id)
+                    .and_then(|o| o.desembolsos.iter().find(|d| d.numero == des))
+                    .map(|d| d.monto_esperado)
+                    .unwrap_or(0.0);
+                if monto_esperado > 0.0 {
+                    println!(
+                        "  Monto esperado para este desembolso: ${:.2}",
+                        monto_esperado
+                    );
+                    println!("  {} Si difiere, documenta un Cambio de Alcance (opción 16) antes de aceptar", "⚠️".to_string());
+                }
+                print!("  Monto recibido (Enter = ${:.0}): $", monto_esperado);
+                let m_str = leer_linea();
+                let monto = if m_str.trim().is_empty() {
+                    monto_esperado
+                } else {
+                    m_str.parse::<f64>().unwrap_or(monto_esperado)
+                };
+                // Advertir diferencias
+                let diferencia = monto - monto_esperado;
+                if diferencia.abs() > 1.0 {
+                    if diferencia > 0.0 {
+                        println!(
+                            "  {} Recibiste ${:.2} MÁS de lo pactado",
+                            "AVISO".red(),
+                            diferencia
+                        );
+                        println!("    → Documenta el motivo como Cambio de Alcance del cliente (opción 16)");
+                    } else {
+                        println!("  {} Recibiste ${:.2} MENOS de lo pactado — coordina el cobro del saldo", "AVISO".yellow(), diferencia.abs());
+                    }
+                    print!("  Motivo de la diferencia (Enter para omitir): ");
+                    let _m = leer_linea();
+                }
+                let mut estado_des = String::new();
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    if let Some(d) = o.desembolsos.iter_mut().find(|d| d.numero == des) {
+                        d.recibido = true;
+                        d.monto_recibido = monto;
+                        d.fecha_real = Some(hoy);
+                    }
+                    o.estado = match &des {
+                        NumeroDesembolso::Primero => EstadoObra::PrimerDesembolsoRecibido,
+                        NumeroDesembolso::Segundo => EstadoObra::SegundoDesembolsoRecibido,
+                        // El pago final recibido pone la obra en "Entrega pendiente"
+                        // hasta que se complete la validación de cierre formal.
+                        NumeroDesembolso::Final => EstadoObra::EntregaPendiente,
+                    };
+                    estado_des = o.estado.nombre().to_string();
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                let _ = state.guardar();
+                if !estado_des.is_empty() {
+                    println!(
+                        "  {} Desembolso registrado: ${:.2} | Estado: {}",
+                        "OK".green(),
+                        monto,
+                        estado_des
+                    );
+                }
+                // Si fue el pago final, iniciar el flujo de cierre formal inmediatamente
+                if des == NumeroDesembolso::Final {
+                    separador("");
+                    println!(
+                        "  {} Pago final recibido — iniciando validación de cierre formal...",
+                        "📋".to_string()
+                    );
+                    pausa();
+                    flujo_cierre_obra(state, &id, hoy);
+                    continue;
+                }
+                guia_siguiente_paso(state, &id);
+                pausa();
+            }
+            Some(13) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Mostrar consultas aprobadas disponibles ANTES de pedir la categoria
+                let consultas_aprobadas: Vec<(String, String)> =
+                    if let Some(o) = state.obras.obra(&id) {
+                        o.consultas
+                            .iter()
+                            .filter(|c| c.esta_aprobada())
+                            .map(|c| {
+                                (
+                                    format!(
+                                        "{:<10} | {:<30} | ${:.2} | {}",
+                                        c.id,
+                                        &c.concepto[..c.concepto.len().min(30)],
+                                        c.monto_propuesto,
+                                        c.etapa
+                                    ),
+                                    c.id.clone(),
+                                )
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                if consultas_aprobadas.is_empty() {
+                    println!("  {} No hay consultas aprobadas — registra y aprueba una consulta previa (opciones 9 y 10) antes de gastar", "X".red());
+                    pausa();
+                    continue;
+                }
+                println!(
+                    "  {} Selecciona la consulta aprobada que autoriza este gasto:",
+                    "PASO 1".cyan()
+                );
+                let cid = match buscar_en_lista("Consulta aprobada", consultas_aprobadas) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let cat_op = &[
+                    "Materiales",
+                    "Mano de obra",
+                    "Viaticos",
+                    "Gastos representacion",
+                    "Empleados/Salarios",
+                    "Subcontratados",
+                    "Equipos/Alquiler",
+                    "Operativo general",
+                    "Otro",
+                ];
+                let cat = match menu(
+                    "Categoria (REGLA: 1er=materiales, 2do=operativo, final=impuestos)",
+                    cat_op,
+                ) {
+                    Some(0) => CategoriaGasto::Materiales,
+                    Some(1) => CategoriaGasto::ManoObra,
+                    Some(2) => CategoriaGasto::Viaticos,
+                    Some(3) => CategoriaGasto::GastosRepresentacion,
+                    Some(4) => CategoriaGasto::Empleados,
+                    Some(5) => CategoriaGasto::ServiciosSubcontratados,
+                    Some(6) => CategoriaGasto::EquiposAlquiler,
+                    Some(7) => CategoriaGasto::OperativoGeneral,
+                    _ => {
+                        print!("  Descripcion categoria: ");
+                        CategoriaGasto::Otro(leer_linea())
+                    }
+                };
+                let des = match cat {
+                    CategoriaGasto::Materiales => NumeroDesembolso::Primero,
+                    CategoriaGasto::Impuesto => NumeroDesembolso::Final,
+                    _ => NumeroDesembolso::Segundo,
+                };
+                print!("  Descripcion: ");
+                let desc = leer_linea();
+                print!("  Monto: $");
+                let m_str = leer_linea();
+                let monto = m_str.parse::<f64>().unwrap_or(0.0);
+                print!("  Beneficiario: ");
+                let benef = leer_linea();
+                let mut saldo_obra = 0.0;
+                let mut gasto_id = String::new();
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    let cons_ok = o.consultas.iter().any(|c| c.id == cid && c.esta_aprobada());
+                    if !cons_ok {
+                        println!(
+                            "  {} La consulta {} no existe o no esta aprobada",
+                            "X".red(),
+                            cid
+                        );
+                        pausa();
+                        continue;
+                    }
+                    let mut g = GastoObra::nuevo(cat, desc, monto, hoy, des, cid);
+                    g.beneficiario = benef;
+                    gasto_id = g.id.clone();
+                    o.gastos.push(g);
+                    saldo_obra = o.saldo_disponible();
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                let _ = state.guardar();
+                if !gasto_id.is_empty() {
+                    println!(
+                        "  {} Gasto registrado: {} | Saldo: ${:.2}",
+                        "OK".green(),
+                        gasto_id,
+                        saldo_obra
+                    );
+                }
+                guia_siguiente_paso(state, &id);
+                pausa();
+            }
+            Some(14) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra(&id) {
+                    limpiar();
+                    println!(
+                        "  {:<10} {:<22} {:<12} {:<14} {:<10}",
+                        "ID", "Descripcion", "Categoria", "Desembolso", "Monto"
+                    );
+                    separador("");
+                    for g in &o.gastos {
+                        println!(
+                            "  {:<10} {:<22} {:<12} {:<14} ${:.2}",
+                            g.id.cyan(),
+                            &g.descripcion[..g.descripcion.len().min(20)],
+                            g.categoria.nombre(),
+                            g.desembolso_origen.nombre(),
+                            g.monto
+                        );
+                    }
+                    separador("");
+                    println!("  1er desembolso: ${:.2}  |  2do: ${:.2}  |  Final: ${:.2}  |  Total: ${:.2}",
+                        o.total_gastos_desembolso(&NumeroDesembolso::Primero),
+                        o.total_gastos_desembolso(&NumeroDesembolso::Segundo),
+                        o.total_gastos_desembolso(&NumeroDesembolso::Final),
+                        o.total_gastado());
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(15) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    print!("  Descripcion del cambio solicitado: ");
+                    let desc = leer_linea();
+                    print!("  Nombre del cliente que lo solicito: ");
+                    let solicitado = leer_linea();
+                    print!("  Costo adicional: $");
+                    let c_str = leer_linea();
+                    let costo = c_str.parse::<f64>().unwrap_or(0.0);
+                    print!("  Impacto en plazo (dias): ");
+                    let p_str = leer_linea();
+                    let plazo = p_str.parse::<i32>().unwrap_or(0);
+                    let mut c = CambioAlcance::nuevo(hoy, desc, solicitado);
+                    c.impacto_costo_adicional = costo;
+                    c.impacto_plazo_dias = plazo;
+                    let cid = c.id.clone();
+                    o.cambios_alcance.push(c);
+                    let _ = state.guardar();
+                    println!(
+                        "  {} Cambio documentado: {} — Iniciativa del cliente, empresa protegida",
+                        "OK".green(),
+                        cid
+                    );
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(16) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Primero: ver si hay reportes existentes que confirmar
+                let hay_sin_confirmar = state
+                    .obras
+                    .obra(&id)
+                    .map(|o| o.reportes_avance.iter().any(|r| !r.confirmado_por_cliente))
+                    .unwrap_or(false);
+                let sub_op = if hay_sin_confirmar {
+                    &[
+                        "Nuevo reporte de avance",
+                        "Confirmar reporte existente (cliente aprobó)",
+                        "Volver",
+                    ][..]
+                } else {
+                    &["Nuevo reporte de avance", "Volver"][..]
+                };
+                match menu("Reporte de avance", sub_op) {
+                    Some(0) => {
+                        if let Some(o) = state.obras.obra_mut(&id) {
+                            print!("  Porcentaje completado: ");
+                            let pct_str = leer_linea();
+                            let pct = pct_str.parse::<f64>().unwrap_or(0.0);
+                            print!("  Etapa actual: ");
+                            let etapa = leer_linea();
+                            print!("  Preparado por: ");
+                            let por = leer_linea();
+                            let mut r = ReporteAvance::nuevo(hoy, pct, etapa, por);
+                            r.gastos_a_fecha = o.total_gastado();
+                            r.entregado_al_cliente = true;
+                            let rid = r.id.clone();
+                            o.reportes_avance.push(r);
+                            let _ = state.guardar();
+                            if pct >= 100.0 {
+                                println!("  {} Reporte al 100% registrado: {} — cuando el cliente confirme, usa 'Confirmar reporte existente'", "OK".green(), rid);
+                            } else {
+                                println!(
+                                    "  {} Reporte registrado: {} | Avance: {:.0}%",
+                                    "OK".green(),
+                                    rid,
+                                    pct
+                                );
+                            }
+                        } else {
+                            println!("  {} Obra no encontrada", "X".red());
+                        }
+                    }
+                    Some(1) if hay_sin_confirmar => {
+                        // Confirmar un reporte existente
+                        let reportes: Vec<(String, String)> = if let Some(o) = state.obras.obra(&id)
+                        {
+                            o.reportes_avance
+                                .iter()
+                                .filter(|r| !r.confirmado_por_cliente)
+                                .map(|r| {
+                                    (
+                                        format!(
+                                            "{} | {:.0}% | {}",
+                                            r.id, r.pct_completado, r.etapa_actual
+                                        ),
+                                        r.id.clone(),
+                                    )
+                                })
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+                        if let Some(rid) =
+                            buscar_en_lista("Selecciona el reporte a confirmar", reportes)
+                        {
+                            if let Some(o) = state.obras.obra_mut(&id) {
+                                if let Some(r) = o.reportes_avance.iter_mut().find(|r| r.id == rid)
+                                {
+                                    r.confirmado_por_cliente = true;
+                                    print!("  Observaciones del cliente (Enter para omitir): ");
+                                    r.observaciones_cliente = leer_linea();
+                                    let _ = state.guardar();
+                                    println!("  {} Reporte {} confirmado por el cliente — paso 13 completado", "OK".green(), rid);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pausa();
+            }
+            Some(17) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra_mut(&id) {
+                    o.verificar_ciclo();
+                    limpiar();
+                    if o.salud.ciclo_integro {
+                        println!(
+                            "  {} CICLO FINANCIERO INTEGRO — el bucle no ha sido roto",
+                            "OK".green()
+                        );
+                    } else {
+                        println!("  {} ALERTAS EN EL CICLO:", "WARN".red());
+                        for al in &o.salud.alertas {
+                            println!("    {}", al.red());
+                        }
+                    }
+                    println!(
+                        "  Materiales ejecutados:  ${:.2}",
+                        o.salud.materiales_ejecutado
+                    );
+                    println!(
+                        "  Operativo ejecutado:    ${:.2}",
+                        o.salud.operativo_ejecutado
+                    );
+                    println!(
+                        "  Impuesto reservado:     ${:.2}",
+                        o.salud.impuesto_reservado
+                    );
+                    println!("  Impuesto pagado:        ${:.2}", o.salud.impuesto_pagado);
+                    println!(
+                        "  Fondo impuesto intacto: {}",
+                        if o.salud.fondo_impuesto_intacto {
+                            "SI".green()
+                        } else {
+                            "NO".red()
+                        }
+                    );
+                    let _ = state.guardar();
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(18) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(o) = state.obras.obra(&id) {
+                    let a = o.auditoria();
+                    limpiar();
+                    println!("  AUDITORIA DE PROTECCION — {}", o.nombre.cyan());
+                    separador("");
+                    println!("  Total gastos:              {}", a.total_gastos);
+                    println!(
+                        "  Con consulta previa:       {} ({:.0}%)",
+                        a.gastos_con_consulta, a.porcentaje_cobertura
+                    );
+                    println!(
+                        "  Cambios de alcance:        {} documentados, {} aprobados por cliente",
+                        a.cambios_documentados, a.cambios_aprobados_cliente
+                    );
+                    println!(
+                        "  Reportes de avance:        {} enviados, {} confirmados",
+                        a.reportes_enviados, a.reportes_confirmados
+                    );
+                    println!(
+                        "  Empresa protegida:         {}",
+                        if a.empresa_protegida {
+                            "SI - TOTAL".green()
+                        } else {
+                            "REVISAR".red()
+                        }
+                    );
+                    println!(
+                        "  Nivel de riesgo:           {}",
+                        if a.empresa_protegida {
+                            a.riesgo.green()
+                        } else {
+                            a.riesgo.red()
+                        }
+                    );
+                } else {
+                    println!("  {} Obra no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(19) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                mostrar_diagnostico_obra(state, &id);
+                continue;
+            }
+            Some(21) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                menu_hitos_obra(state, &id, hoy);
+                continue;
+            }
+            Some(22) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                asesor_financiero_obra(state, &id, hoy);
+                continue;
+            }
+            Some(23) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                mapa_marco_logico_obra(state, &id);
+                continue;
+            }
+            Some(24) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                menu_presupuesto_obra(state, &id);
+                guia_siguiente_paso(state, &id);
+                continue;
+            }
+            Some(20) => {
+                let id = match resolver_obra_ctx(state, &mut ctx_obra) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                let estados = &[
+                    "RFI",
+                    "Contacto cliente",
+                    "Correo requerimientos",
+                    "Contrato pendiente",
+                    "Contrato firmado",
+                    "En ejecucion",
+                    "Entrega pendiente",
+                    "Completada",
+                    "Suspendida",
+                    "Cancelada",
+                ];
+                if let Some(idx) = menu("Nuevo estado", estados) {
+                    // Los estados de cierre (Entregada, Completada) requieren validación
+                    let es_cierre = matches!(idx, 7);
+                    let es_entrega = matches!(idx, 6); // EntregaPendiente también activa advertencia
+                    if es_cierre {
+                        // Bloquear hasta que pase la validación formal
+                        flujo_cierre_obra(state, &id, hoy);
+                        continue;
+                    }
+                    let mut nombre_estado = String::new();
+                    if let Some(o) = state.obras.obra_mut(&id) {
+                        o.estado = match idx {
+                            0 => EstadoObra::RFI,
+                            1 => EstadoObra::ContactoCliente,
+                            2 => EstadoObra::CorreoRequerimientos,
+                            3 => EstadoObra::ContratoPendiente,
+                            4 => EstadoObra::ContratoFirmado,
+                            5 => EstadoObra::EnEjecucion,
+                            6 => EstadoObra::EntregaPendiente,
+                            8 => EstadoObra::SuspendidaCliente,
+                            _ => EstadoObra::Cancelada,
+                        };
+                        if es_entrega {
+                            println!("  {} Estado: Entrega pendiente — cuando recibas el pago final, el sistema iniciará el cierre formal", "AVISO".yellow());
+                        }
+                        nombre_estado = o.estado.nombre().to_string();
+                    }
+                    let _ = state.guardar();
+                    if !nombre_estado.is_empty() {
+                        println!("  {} Estado: {}", "OK".green(), nombre_estado);
+                    }
+                }
+                pausa();
+            }
+            _ => break,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Diagrama de flujo completo — 14 pasos desde RFI hasta cierre formal
+// ─────────────────────────────────────────────────────────────────────
+
+fn mostrar_diagnostico_obra(state: &AppState, obra_id: &str) {
+    use colored::Colorize;
+    use omniplanner::obras::EstadoPaso;
+
+    let (nombre, estado_nombre, pct, es_completada) = if let Some(o) = state.obras.obra(obra_id) {
+        (
+            o.nombre.clone(),
+            o.estado.nombre().to_string(),
+            o.pct_avance(),
+            matches!(o.estado, omniplanner::obras::EstadoObra::Completada),
+        )
+    } else {
+        println!("  {} Obra no encontrada", "X".red());
+        return;
+    };
+
+    let pasos = if let Some(o) = state.obras.obra(obra_id) {
+        o.validar_flujo_completo()
+    } else {
+        return;
+    };
+
+    limpiar();
+    println!("  {} — FLUJO COMPLETO (14 pasos)", nombre.cyan().bold());
+    println!("  Estado: {} | Avance: {:.0}%", estado_nombre.yellow(), pct);
+    separador("");
+
+    let total = pasos.len();
+    let completos = pasos
+        .iter()
+        .filter(|p| p.estado == EstadoPaso::Completado)
+        .count();
+    let faltantes = pasos
+        .iter()
+        .filter(|p| p.estado == EstadoPaso::Faltante)
+        .count();
+    let pendientes = pasos
+        .iter()
+        .filter(|p| p.estado == EstadoPaso::Pendiente)
+        .count();
+
+    for paso in &pasos {
+        let (icono, separador_color) = match paso.estado {
+            EstadoPaso::Completado => ("✅", "│".dimmed().to_string()),
+            EstadoPaso::Faltante => ("❌", "│".red().to_string()),
+            EstadoPaso::Pendiente => ("⏳", "│".white().to_string()),
+        };
+        println!("  {}  {:>2}. {}", icono, paso.numero, paso.nombre);
+        match paso.estado {
+            EstadoPaso::Completado => {
+                println!(
+                    "       {}  {}",
+                    separador_color,
+                    paso.detalle.dimmed().to_string()
+                );
+            }
+            EstadoPaso::Faltante => {
+                println!(
+                    "       {}  {}",
+                    separador_color,
+                    paso.detalle.yellow().to_string()
+                );
+                println!(
+                    "       {}  Riesgo: {}",
+                    separador_color,
+                    paso.riesgo.red().to_string()
+                );
+                if let Some(op) = paso.opcion_menu {
+                    println!("       {}  → Ir a: {}", "└".red(), op.cyan().to_string());
+                }
+            }
+            EstadoPaso::Pendiente => {
+                println!(
+                    "       {}  {} — completa los pasos anteriores primero",
+                    separador_color,
+                    paso.detalle.as_str()
+                );
+            }
+        }
+    }
+
+    separador("");
+    println!(
+        "  Resumen: {} completados | {} FALTANTES | {} pendientes de desbloquear",
+        completos.to_string().green(),
+        faltantes.to_string().red(),
+        pendientes.to_string().yellow()
+    );
+
+    if faltantes == 0 && pendientes == 0 {
+        println!(
+            "  {} FLUJO ÍNTEGRO — todos los {} pasos documentados",
+            "✅".to_string(),
+            total
+        );
+        if !es_completada {
+            println!("  → Lista para cierre formal (opción 20 — Actualizar estado → Completada)");
+        }
+    } else if es_completada && (faltantes > 0 || pendientes > 0) {
+        // Obra marcada como completada pero con pasos faltantes — diagnóstico de problemas
+        separador("");
+        println!(
+            "  {} ESTA OBRA ESTÁ MARCADA COMO COMPLETADA PERO TIENE PASOS SIN REGISTRO:",
+            "ALERTA CRÍTICA".red().bold()
+        );
+        for paso in pasos.iter().filter(|p| p.estado != EstadoPaso::Completado) {
+            println!();
+            println!(
+                "  {} PASO {}: {}",
+                if paso.estado == EstadoPaso::Faltante {
+                    "❌"
+                } else {
+                    "⏳"
+                },
+                paso.numero,
+                paso.nombre.red().to_string()
+            );
+            println!("    Situación:  {}", paso.detalle.yellow().to_string());
+            println!("    Problema:   {}", paso.riesgo.red().to_string());
+            if let Some(op) = paso.opcion_menu {
+                println!(
+                    "    Resolver:   opción {} del menú de la obra",
+                    op.cyan().to_string()
+                );
+            }
+        }
+    } else {
+        // Normal — mostrar el próximo paso a completar
+        if let Some(siguiente) = pasos.iter().find(|p| p.estado == EstadoPaso::Faltante) {
+            separador("");
+            println!("  {} Próximo paso obligatorio:", "ACCIÓN".cyan().bold());
+            println!(
+                "  {:>2}. {} ",
+                siguiente.numero,
+                siguiente.nombre.cyan().to_string()
+            );
+            if let Some(op) = siguiente.opcion_menu {
+                println!("  → Ir a {} en el menú de la obra", op.yellow().to_string());
+            }
+        }
+    }
+
+    separador("");
+    println!(
+        "  {} Ver ciclo financiero completo → opción 22 (Asesor financiero de la obra)",
+        "💡".to_string()
+    );
+    separador("");
+    pausa();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Flujo de Cierre Formal — valida requisitos y registra el acta
+// ─────────────────────────────────────────────────────────────────────
+
+fn flujo_cierre_obra(state: &mut AppState, obra_id: &str, hoy: chrono::NaiveDate) {
+    use colored::Colorize;
+    use omniplanner::obras::*;
+
+    let validacion = if let Some(o) = state.obras.obra(obra_id) {
+        o.validar_cierre()
+    } else {
+        println!("  {} Obra no encontrada", "X".red());
+        return;
+    };
+
+    limpiar();
+    let nombre_obra = state
+        .obras
+        .obra(obra_id)
+        .map(|o| o.nombre.clone())
+        .unwrap_or_default();
+    println!(
+        "  {} — VALIDACIÓN DE CIERRE FORMAL",
+        nombre_obra.cyan().bold()
+    );
+    separador("");
+
+    let mut bloqueantes_fallidos = 0u32;
+    for item in &validacion.items {
+        let icono = if item.ok {
+            "✅".to_string()
+        } else if item.bloqueante {
+            bloqueantes_fallidos += 1;
+            "❌".to_string()
+        } else {
+            "⚠️ ".to_string()
+        };
+        println!("  {}  {}", icono, item.descripcion);
+        if !item.ok {
+            if let Some(op) = item.opcion_menu {
+                println!("       → Ir a opción: {}", op.yellow());
+            }
+        }
+    }
+    separador("");
+
+    if bloqueantes_fallidos > 0 {
+        println!(
+            "  {} {} requisito(s) BLOQUEANTE(S) sin cumplir.",
+            "NO SE PUEDE CERRAR".red().bold(),
+            bloqueantes_fallidos
+        );
+        println!("  Resuelve los puntos marcados con ❌ y vuelve a actualizar el estado.");
+        println!(
+            "  La obra permanece en estado: {}",
+            "Entrega pendiente".yellow()
+        );
+        separador("");
+        println!("  Mostrando el flujo completo para visualizar qué falta...");
+        pausa();
+        mostrar_diagnostico_obra(state, obra_id);
+        return;
+    }
+
+    let advertencias = validacion
+        .items
+        .iter()
+        .filter(|i| !i.bloqueante && !i.ok)
+        .count();
+    if advertencias > 0 {
+        println!(
+            "  {} Hay {} advertencia(s) — puedes cerrar pero considera resolverlas.",
+            "AVISO".yellow(),
+            advertencias
+        );
+    } else {
+        println!(
+            "  {} TODOS LOS REQUISITOS CUMPLIDOS — listo para el cierre formal.",
+            "OK".green().bold()
+        );
+    }
+    separador("");
+
+    println!("  Registra el acta de cierre (quién autorizó y quién aprobó):");
+    print!("  Autorizado por (responsable interno): ");
+    let autorizado = leer_linea();
+    if autorizado.trim().is_empty() {
+        println!(
+            "  {} El nombre del autorizador es requerido para el acta de cierre",
+            "X".red()
+        );
+        pausa();
+        return;
+    }
+    print!("  Aprobado por el cliente (nombre): ");
+    let aprobado_cli = leer_linea();
+    if aprobado_cli.trim().is_empty() {
+        println!(
+            "  {} El nombre del representante del cliente es requerido",
+            "X".red()
+        );
+        pausa();
+        return;
+    }
+    print!("  Medio de aprobación (email/reunión/llamada/documento): ");
+    let medio = leer_linea();
+    print!("  Referencia del documento o correo (Enter para omitir): ");
+    let referencia = leer_linea();
+    print!("  Observaciones del cliente (Enter para omitir): ");
+    let obs = leer_linea();
+
+    if let Some(o) = state.obras.obra_mut(obra_id) {
+        o.acta_cierre.fecha = Some(hoy);
+        o.acta_cierre.autorizado_por = autorizado.clone();
+        o.acta_cierre.aprobado_por_cliente = aprobado_cli.clone();
+        o.acta_cierre.medio_aprobacion = medio;
+        o.acta_cierre.referencia_documento = referencia;
+        o.acta_cierre.observaciones_cliente = obs;
+        o.estado = EstadoObra::Completada;
+    }
+    let _ = state.guardar();
+
+    separador("");
+    println!("  {} OBRA COMPLETADA FORMALMENTE", "✅".to_string());
+    println!("  Autorizado por:      {}", autorizado.cyan());
+    println!("  Aprobado (cliente):  {}", aprobado_cli.cyan());
+    println!("  Fecha de cierre:     {}", hoy);
+    pausa();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Asesor Financiero de Obra — ratios, ciclo de facturación, semáforo
+// ═══════════════════════════════════════════════════════════════════════
+
+fn asesor_financiero_obra(state: &AppState, obra_id: &str, hoy: chrono::NaiveDate) {
+    use colored::Colorize;
+
+    let o = match state.obras.obra(obra_id) {
+        Some(o) => o.clone(),
+        None => {
+            println!("  {} Obra no encontrada", "X".red());
+            return;
+        }
+    };
+
+    // ── Datos del ciclo financiero ────────────────────────────────────
+    let valor_contrato = o.contrato.valor_total;
+    let total_cobrado = o.total_cobrado(); // desembolsos recibidos
+    let total_gastado = o.total_gastado(); // gastos aprobados
+    let saldo_disp = o.saldo_disponible();
+    let exigible: f64 = o
+        .desembolsos
+        .iter()
+        .filter(|d| !d.recibido)
+        .map(|d| d.monto_esperado)
+        .sum();
+    let pct_avance = o.pct_avance();
+    let dias_desde_inicio = (hoy - o.fecha_inicio).num_days().max(0);
+
+    // Desembolsos individuales
+    let d1 = o
+        .desembolsos
+        .iter()
+        .find(|d| d.numero == omniplanner::obras::NumeroDesembolso::Primero);
+    let d2 = o
+        .desembolsos
+        .iter()
+        .find(|d| d.numero == omniplanner::obras::NumeroDesembolso::Segundo);
+    let d3 = o
+        .desembolsos
+        .iter()
+        .find(|d| d.numero == omniplanner::obras::NumeroDesembolso::Final);
+
+    // Cuentas de cobranzas vinculadas a esta obra
+    let cuentas_obra: Vec<_> = state
+        .cobranzas
+        .cuentas
+        .iter()
+        .filter(|c| c.obra_id == obra_id)
+        .collect();
+    let total_facturado: f64 = cuentas_obra.iter().map(|c| c.monto_total).sum();
+    let total_cobrado_cob: f64 = cuentas_obra.iter().map(|c| c.monto_cobrado).sum();
+    let total_pend_cob: f64 = cuentas_obra.iter().map(|c| c.monto_pendiente()).sum();
+    let cuentas_vencidas = cuentas_obra
+        .iter()
+        .filter(|c| c.dias_mora(hoy) > 0 && c.monto_pendiente() > 0.0)
+        .count();
+
+    // Consultas y gastos
+    let _consultas_aprobadas = o.consultas.iter().filter(|c| c.esta_aprobada()).count();
+    let consultas_pendientes = o
+        .consultas
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.estado,
+                omniplanner::obras::EstadoConsulta::PendienteRespuesta
+            )
+        })
+        .count();
+    let gastos_sin_consulta = o.gastos.iter().filter(|g| g.consulta_id.is_empty()).count();
+
+    // ── Ratios financieros ─────────────────────────────────────────────
+    let margen_bruto = if total_cobrado > 0.0 {
+        (total_cobrado - total_gastado) / total_cobrado * 100.0
+    } else {
+        0.0
+    };
+    let pct_ejecutado = if valor_contrato > 0.0 {
+        total_gastado / valor_contrato * 100.0
+    } else {
+        0.0
+    };
+    let pct_cobrado_cont = if valor_contrato > 0.0 {
+        total_cobrado / valor_contrato * 100.0
+    } else {
+        0.0
+    };
+    let eficiencia_cobro = if total_facturado > 0.0 {
+        total_cobrado_cob / total_facturado * 100.0
+    } else {
+        0.0_f64
+    };
+    // Tasa de gasto promedio diario (si hay días transcurridos)
+    let gasto_diario_prom = if dias_desde_inicio > 0 {
+        total_gastado / dias_desde_inicio as f64
+    } else {
+        0.0
+    };
+    // Días de runway con el saldo disponible actual
+    let dias_runway = if gasto_diario_prom > 0.0 {
+        (saldo_disp / gasto_diario_prom) as i64
+    } else {
+        9999
+    };
+
+    // ── Semáforo de salud ─────────────────────────────────────────────
+    // Rojo: cobrado < gastado  OR margen < 5%  OR cuentas vencidas  OR gastos sin consulta
+    // Amarillo: margen 5-15%   OR consultas pendientes               OR runway < 30 días
+    // Verde: margen ≥ 15%      AND sin cuentas vencidas              AND sin gastos sin consulta
+    let (semaforo, semaforo_msg) = if total_cobrado < total_gastado
+        || (margen_bruto < 5.0 && total_cobrado > 0.0)
+        || cuentas_vencidas > 0
+        || gastos_sin_consulta > 0
+    {
+        (
+            "🔴 RIESGO".red().bold().to_string(),
+            "Situación financiera requiere atención inmediata",
+        )
+    } else if margen_bruto < 15.0
+        || consultas_pendientes > 0
+        || (dias_runway < 30 && dias_runway != 9999)
+    {
+        (
+            "🟡 VIGILAR".yellow().bold().to_string(),
+            "Indicadores aceptables — hay puntos a monitorear",
+        )
+    } else {
+        (
+            "🟢 SALUDABLE".green().bold().to_string(),
+            "Ciclo financiero equilibrado y bien documentado",
+        )
+    };
+
+    // ── Render ─────────────────────────────────────────────────────────
+    limpiar();
+    println!("  {} — ASESOR FINANCIERO", o.nombre.cyan().bold());
+    println!(
+        "  Cliente: {} | Estado: {} | Avance: {:.0}% | Día {} del proyecto",
+        o.cliente,
+        o.estado.nombre().yellow(),
+        pct_avance,
+        dias_desde_inicio
+    );
+    if !o.origen_descripcion.is_empty() {
+        println!("  Origen: {}", o.origen_descripcion.dimmed().to_string());
+    }
+    separador("");
+
+    // Salud general
+    println!("  SALUD GENERAL:  {}  — {}", semaforo, semaforo_msg);
+    separador("");
+
+    // Ciclo de facturación
+    println!("  CICLO DE FACTURACIÓN Y COBRO");
+    separador("");
+    let barra = |pct: f64| -> String {
+        let filled = ((pct / 100.0 * 20.0) as usize).min(20);
+        format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled))
+    };
+    println!(
+        "  {:<32} {:>12}  {:>6}  {}",
+        "Concepto", "Monto", "%", "Progreso"
+    );
+    separador("");
+    println!(
+        "  {:<32} {:>12.2}  {:>5.0}%  {}",
+        "Valor del contrato",
+        valor_contrato,
+        100.0,
+        barra(100.0)
+    );
+    println!(
+        "  {:<32} {:>12.2}  {:>5.0}%  {}  {}",
+        "  ├─ 1er desembolso (materiales)",
+        d1.map(|d| d.monto_esperado).unwrap_or(0.0),
+        d1.map(|d| d.monto_esperado / valor_contrato * 100.0)
+            .unwrap_or(0.0),
+        if d1.map(|d| d.recibido).unwrap_or(false) {
+            "✅"
+        } else {
+            "⏳"
+        },
+        d1.map(|d| if d.recibido {
+            format!("${:.0} recibido", d.monto_recibido)
+        } else {
+            format!("${:.0} pendiente", d.monto_esperado)
+        })
+        .unwrap_or_default()
+        .dimmed()
+        .to_string()
+    );
+    println!(
+        "  {:<32} {:>12.2}  {:>5.0}%  {}  {}",
+        "  ├─ 2do desembolso (80% operativo)",
+        d2.map(|d| d.monto_esperado).unwrap_or(0.0),
+        d2.map(|d| d.monto_esperado / valor_contrato * 100.0)
+            .unwrap_or(0.0),
+        if d2.map(|d| d.recibido).unwrap_or(false) {
+            "✅"
+        } else {
+            "⏳"
+        },
+        d2.map(|d| if d.recibido {
+            format!("${:.0} recibido", d.monto_recibido)
+        } else {
+            format!("${:.0} pendiente", d.monto_esperado)
+        })
+        .unwrap_or_default()
+        .dimmed()
+        .to_string()
+    );
+    println!(
+        "  {:<32} {:>12.2}  {:>5.0}%  {}  {}",
+        "  └─ Pago final (20% impuestos)",
+        d3.map(|d| d.monto_esperado).unwrap_or(0.0),
+        d3.map(|d| d.monto_esperado / valor_contrato * 100.0)
+            .unwrap_or(0.0),
+        if d3.map(|d| d.recibido).unwrap_or(false) {
+            "✅"
+        } else {
+            "⏳"
+        },
+        d3.map(|d| if d.recibido {
+            format!("${:.0} recibido", d.monto_recibido)
+        } else {
+            format!("${:.0} pendiente", d.monto_esperado)
+        })
+        .unwrap_or_default()
+        .dimmed()
+        .to_string()
+    );
+    separador("");
+    println!(
+        "  {:<32} {:>12.2}  {:>5.0}%  {}",
+        "Total cobrado (desembolsos)",
+        total_cobrado,
+        pct_cobrado_cont,
+        barra(pct_cobrado_cont)
+    );
+    println!(
+        "  {:<32} {:>12.2}  {:>5.0}%  {}",
+        "Total gastado (aprobado)",
+        total_gastado,
+        pct_ejecutado,
+        barra(pct_ejecutado)
+    );
+    let color_saldo = if saldo_disp >= 0.0 {
+        saldo_disp.to_string().green().to_string()
+    } else {
+        format!("-${:.2}", saldo_disp.abs()).red().to_string()
+    };
+    println!("  {:<32} {:>12}", "  Saldo disponible", color_saldo);
+    println!(
+        "  {:<32} {:>12.2}",
+        "  Por cobrar (desembolsos pend.)", exigible
+    );
+    separador("");
+    if total_facturado > 0.0 {
+        println!("  COBRANZAS VINCULADAS ({} cuenta(s))", cuentas_obra.len());
+        separador("");
+        println!(
+            "  {:<32} {:>12.2}  {:>5.0}%  {}",
+            "Facturas emitidas",
+            total_facturado,
+            100.0,
+            barra(100.0)
+        );
+        println!(
+            "  {:<32} {:>12.2}  {:>5.0}%  {}",
+            "  Cobrado",
+            total_cobrado_cob,
+            eficiencia_cobro,
+            barra(eficiencia_cobro)
+        );
+        let color_pend = if cuentas_vencidas > 0 {
+            format!("${:.2}", total_pend_cob).red().to_string()
+        } else {
+            format!("${:.2}", total_pend_cob)
+        };
+        println!(
+            "  {:<32} {:>12}  {}",
+            "  Pendiente",
+            color_pend,
+            if cuentas_vencidas > 0 {
+                format!("{} cuenta(s) VENCIDA(S)", cuentas_vencidas)
+                    .red()
+                    .to_string()
+            } else {
+                "Al corriente".green().to_string()
+            }
+        );
+        separador("");
+    }
+
+    // Ratios
+    println!("  RATIOS CLAVE");
+    separador("");
+    let ratio_str = |val: f64, baja: f64, alta: f64, invertido: bool| -> colored::ColoredString {
+        let s = format!("{:.1}%", val);
+        let bueno = if invertido { val < baja } else { val >= alta };
+        let malo = if invertido { val > alta } else { val < baja };
+        if bueno {
+            s.green()
+        } else if malo {
+            s.red()
+        } else {
+            s.yellow()
+        }
+    };
+    println!(
+        "  {:<38} {}",
+        "Margen bruto (cobrado − gastado / cobrado):",
+        ratio_str(margen_bruto, 5.0, 15.0, false)
+    );
+    println!(
+        "  {:<38} {}",
+        "Ejecución presupuestal (gastado / contrato):",
+        ratio_str(pct_ejecutado, 0.0, 80.0, true)
+    );
+    println!(
+        "  {:<38} {}",
+        "Cobrado del contrato (%):                   ",
+        ratio_str(pct_cobrado_cont, 30.0, 60.0, false)
+    );
+    if total_facturado > 0.0 {
+        println!(
+            "  {:<38} {}",
+            "Eficiencia de cobro (cobrado / facturado):  ",
+            ratio_str(eficiencia_cobro, 50.0, 90.0, false)
+        );
+    }
+    if dias_runway != 9999 && gasto_diario_prom > 0.0 {
+        let runway_str = format!("{} días de runway", dias_runway);
+        let runway_colored = if dias_runway > 60 {
+            runway_str.green()
+        } else if dias_runway > 14 {
+            runway_str.yellow()
+        } else {
+            runway_str.red()
+        };
+        println!(
+            "  {:<38} {}",
+            "Proyección de fondos disponibles:          ", runway_colored
+        );
+    }
+    separador("");
+
+    // Alertas inteligentes
+    println!("  ALERTAS Y RECOMENDACIONES");
+    separador("");
+    let mut hay_alertas = false;
+    if total_cobrado < total_gastado {
+        println!(
+            "  {} Gastado supera lo cobrado — riesgo de descapitalización (${:.2} en rojo)",
+            "🔴".to_string(),
+            total_gastado - total_cobrado
+        );
+        hay_alertas = true;
+    }
+    if cuentas_vencidas > 0 {
+        println!(
+            "  {} {} cuenta(s) de cobranza vencida(s) — gestionar cobro urgente (opción Cobranzas)",
+            "🔴".to_string(),
+            cuentas_vencidas
+        );
+        hay_alertas = true;
+    }
+    if gastos_sin_consulta > 0 {
+        println!(
+            "  {} {} gasto(s) sin consulta previa aprobada — riesgo legal con el cliente",
+            "🔴".to_string(),
+            gastos_sin_consulta
+        );
+        hay_alertas = true;
+    }
+    if exigible > 0.0 {
+        println!(
+            "  {} ${:.2} en desembolsos pendientes por cobrar al cliente",
+            "🟡".to_string(),
+            exigible
+        );
+        hay_alertas = true;
+    }
+    if consultas_pendientes > 0 {
+        println!(
+            "  {} {} solicitud(es) esperando respuesta del cliente (opción 10)",
+            "🟡".to_string(),
+            consultas_pendientes
+        );
+        hay_alertas = true;
+    }
+    if dias_runway < 30 && dias_runway > 0 {
+        println!(
+            "  {} Solo {} días de runway con el ritmo de gasto actual — solicitar desembolso",
+            "🟡".to_string(),
+            dias_runway
+        );
+        hay_alertas = true;
+    }
+    if o.reportes_avance.is_empty() {
+        println!(
+            "  {} Sin reportes de avance — el cliente no tiene evidencia del progreso (opción 16)",
+            "🟡".to_string()
+        );
+        hay_alertas = true;
+    }
+    let no_confirmados = o
+        .reportes_avance
+        .iter()
+        .filter(|r| !r.confirmado_por_cliente)
+        .count();
+    if no_confirmados > 0 && pct_avance >= 50.0 {
+        println!(
+            "  {} {} reporte(s) sin confirmar por el cliente — solicitar confirmación",
+            "🟡".to_string(),
+            no_confirmados
+        );
+        hay_alertas = true;
+    }
+    if !hay_alertas {
+        println!(
+            "  {} Sin alertas — ciclo financiero bien documentado",
+            "✅".to_string()
+        );
+    }
+    // Hitos completados vs total
+    if !o.hitos.is_empty() {
+        let h_comp = o.hitos.iter().filter(|h| h.completado).count();
+        separador("");
+        println!(
+            "  HITOS: {}/{} completados (ver opción 21 — Hitos del proyecto)",
+            h_comp,
+            o.hitos.len()
+        );
+    }
+    separador("");
+    pausa();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Hitos del Proyecto — gestión por fase (Inicial / Intermedio / Final)
+// ═══════════════════════════════════════════════════════════════════════
+
+fn menu_hitos_obra(state: &mut AppState, obra_id: &str, hoy: chrono::NaiveDate) {
+    use colored::Colorize;
+    use omniplanner::obras::{plantillas_hitos, EstadoObra, Hito, TipoHito};
+
+    /// Determina la fase activa según el estado actual de la obra.
+    fn fase_activa(estado: &EstadoObra) -> TipoHito {
+        match estado {
+            EstadoObra::RFI
+            | EstadoObra::ContactoCliente
+            | EstadoObra::CorreoRequerimientos
+            | EstadoObra::ContratoPendiente
+            | EstadoObra::ContratoFirmado => TipoHito::Inicial,
+
+            EstadoObra::PrimerDesembolsoPendiente
+            | EstadoObra::PrimerDesembolsoRecibido
+            | EstadoObra::EnEjecucion
+            | EstadoObra::SegundoDesembolsoPendiente
+            | EstadoObra::SegundoDesembolsoRecibido => TipoHito::Intermedio,
+
+            _ => TipoHito::Final,
+        }
+    }
+
+    loop {
+        let (nombre_obra, fase) = if let Some(o) = state.obras.obra(obra_id) {
+            (o.nombre.clone(), fase_activa(&o.estado))
+        } else {
+            println!("  {} Obra no encontrada", "X".red());
+            return;
+        };
+
+        let hitos_snap: Vec<Hito> = state
+            .obras
+            .obra(obra_id)
+            .map(|o| o.hitos.clone())
+            .unwrap_or_default();
+
+        limpiar();
+        println!("  {} — HITOS DEL PROYECTO", nombre_obra.cyan().bold());
+        println!("  Fase activa: {}", fase.nombre().yellow().bold());
+        separador("");
+
+        // Mostrar los tres grupos con la fase activa destacada
+        for tipo in &[TipoHito::Inicial, TipoHito::Intermedio, TipoHito::Final] {
+            let es_activa = tipo == &fase;
+            let marca = if es_activa {
+                " ◄ FASE ACTUAL".yellow().to_string()
+            } else {
+                String::new()
+            };
+            println!(
+                "  ─── {} ───────────────────────────────{}",
+                tipo.nombre().to_uppercase().cyan().bold(),
+                marca
+            );
+            let del_tipo: Vec<_> = hitos_snap.iter().filter(|h| &h.tipo == tipo).collect();
+            if del_tipo.is_empty() {
+                println!("    (sin hitos registrados en esta fase)");
+            } else {
+                for h in &del_tipo {
+                    let (icono, color_n) = if h.completado {
+                        ("✅", h.nombre.green().to_string())
+                    } else {
+                        ("⭕", h.nombre.yellow().to_string())
+                    };
+                    let fecha_str = if let Some(fc) = h.fecha_cumplido {
+                        format!(" | completado: {}", fc)
+                    } else if let Some(fp) = h.fecha_planificada {
+                        format!(" | plan: {}", fp)
+                    } else {
+                        String::new()
+                    };
+                    println!(
+                        "  {}  [{}] {}{}",
+                        icono,
+                        h.id.dimmed(),
+                        color_n,
+                        fecha_str.dimmed().to_string()
+                    );
+                    if !h.aprobado_por.is_empty() {
+                        println!(
+                            "       {} Aprobado por: {}",
+                            "│".dimmed(),
+                            h.aprobado_por.dimmed().to_string()
+                        );
+                    }
+                }
+            }
+        }
+
+        let total = hitos_snap.len();
+        let completos = hitos_snap.iter().filter(|h| h.completado).count();
+        separador("");
+        if total == 0 {
+            println!("  Sin hitos registrados — agrega hitos desde plantilla o personalizados");
+        } else {
+            let pct = (completos * 100).checked_div(total).unwrap_or(0);
+            println!(
+                "  Progreso: {}/{} hitos completados ({}%)",
+                completos, total, pct
+            );
+        }
+        separador("");
+
+        let opciones = &[
+            "Agregar hito desde plantilla (Inicial / Intermedio / Final)",
+            "Agregar hito personalizado",
+            "Marcar hito como completado",
+            "Ver detalle completo de un hito",
+            "Volver",
+        ];
+        match menu("Hitos", opciones) {
+            // ── Agregar desde plantilla ──────────────────────────────
+            Some(0) => {
+                let fases_op = &["Inicial", "Intermedio", "Final"];
+                let tipo_sel = match menu("Fase del hito", fases_op) {
+                    Some(0) => TipoHito::Inicial,
+                    Some(1) => TipoHito::Intermedio,
+                    Some(2) => TipoHito::Final,
+                    _ => continue,
+                };
+                let plantillas = plantillas_hitos(&tipo_sel);
+                // Construir lista para FuzzySelect
+                let items: Vec<(String, String)> = plantillas
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (n, _d))| (format!("{}", n), i.to_string()))
+                    .collect();
+                // Mostrar plantillas también como lista con descripción
+                println!();
+                println!("  Plantillas disponibles — {}:", tipo_sel.nombre().cyan());
+                for (i, (n, d)) in plantillas.iter().enumerate() {
+                    println!("  [{:>2}] {} \u{2014} {}", i, n.yellow(), d);
+                }
+                println!();
+                let idx_sel = match buscar_en_lista("Selecciona la plantilla", items) {
+                    Some(s) => s.parse::<usize>().unwrap_or(999),
+                    None => continue,
+                };
+                if idx_sel >= plantillas.len() {
+                    continue;
+                }
+                let (nombre_p, desc_p) = plantillas[idx_sel];
+                print!("  Fecha planificada (YYYY-MM-DD, Enter para omitir): ");
+                let fp_str = leer_linea();
+                let fp = chrono::NaiveDate::parse_from_str(fp_str.trim(), "%Y-%m-%d").ok();
+                let mut h = Hito::nuevo(tipo_sel, nombre_p, desc_p);
+                h.fecha_planificada = fp;
+                let hid = h.id.clone();
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    o.hitos.push(h);
+                    let _ = state.guardar();
+                    println!(
+                        "  {} Hito registrado: {} — {}",
+                        "OK".green(),
+                        hid.cyan(),
+                        nombre_p
+                    );
+                }
+            }
+            // ── Agregar personalizado ────────────────────────────────
+            Some(1) => {
+                let fases_op = &["Inicial", "Intermedio", "Final"];
+                let tipo_sel = match menu("Fase del hito", fases_op) {
+                    Some(0) => TipoHito::Inicial,
+                    Some(1) => TipoHito::Intermedio,
+                    Some(2) => TipoHito::Final,
+                    _ => continue,
+                };
+                print!("  Nombre del hito: ");
+                let nombre_h = leer_linea();
+                if nombre_h.trim().is_empty() {
+                    continue;
+                }
+                print!("  Descripción: ");
+                let desc_h = leer_linea();
+                print!("  Fecha planificada (YYYY-MM-DD, Enter para omitir): ");
+                let fp_str = leer_linea();
+                let fp = chrono::NaiveDate::parse_from_str(fp_str.trim(), "%Y-%m-%d").ok();
+                let mut h = Hito::nuevo(tipo_sel, nombre_h.clone(), desc_h);
+                h.fecha_planificada = fp;
+                let hid = h.id.clone();
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    o.hitos.push(h);
+                    let _ = state.guardar();
+                    println!(
+                        "  {} Hito registrado: {} — {}",
+                        "OK".green(),
+                        hid.cyan(),
+                        nombre_h
+                    );
+                }
+            }
+            // ── Marcar como completado ───────────────────────────────
+            Some(2) => {
+                let pendientes: Vec<(String, String)> = hitos_snap
+                    .iter()
+                    .filter(|h| !h.completado)
+                    .map(|h| {
+                        (
+                            format!("[{}] {} | {}", h.tipo.nombre(), h.nombre, h.id),
+                            h.id.clone(),
+                        )
+                    })
+                    .collect();
+                if pendientes.is_empty() {
+                    println!("  {} Todos los hitos están completados", "OK".green());
+                    pausa();
+                    continue;
+                }
+                let hid = match buscar_en_lista("Selecciona el hito a completar", pendientes) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                if let Some(o) = state.obras.obra_mut(obra_id) {
+                    if let Some(h) = o.hitos.iter_mut().find(|h| h.id == hid) {
+                        h.completado = true;
+                        h.fecha_cumplido = Some(hoy);
+                        print!("  Aprobado / validado por (nombre): ");
+                        h.aprobado_por = leer_linea();
+                        print!("  Evidencia (correo, acta, foto — Enter para omitir): ");
+                        h.evidencia = leer_linea();
+                    }
+                }
+                let nombre_hito = state
+                    .obras
+                    .obra(obra_id)
+                    .and_then(|o| o.hitos.iter().find(|h| h.id == hid))
+                    .map(|h| h.nombre.clone())
+                    .unwrap_or_default();
+                let _ = state.guardar();
+                if !nombre_hito.is_empty() {
+                    println!(
+                        "  {} Hito \"{}\" marcado como completado el {}",
+                        "OK".green(),
+                        nombre_hito.cyan(),
+                        hoy
+                    );
+                }
+            }
+            // ── Ver detalle ──────────────────────────────────────────
+            Some(3) => {
+                let todos: Vec<(String, String)> = hitos_snap
+                    .iter()
+                    .map(|h| {
+                        (
+                            format!(
+                                "[{}] {} {} | {}",
+                                h.tipo.nombre(),
+                                if h.completado { "✅" } else { "⭕" },
+                                h.nombre,
+                                h.id
+                            ),
+                            h.id.clone(),
+                        )
+                    })
+                    .collect();
+                if todos.is_empty() {
+                    println!("  Sin hitos registrados");
+                    pausa();
+                    continue;
+                }
+                let hid = match buscar_en_lista("Selecciona hito", todos) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                if let Some(h) = hitos_snap.iter().find(|h| h.id == hid) {
+                    separador("");
+                    println!("  ID:           {}", h.id.cyan());
+                    println!("  Tipo/Fase:    {}", h.tipo.nombre().yellow());
+                    println!("  Nombre:       {}", h.nombre);
+                    println!("  Descripción:  {}", h.descripcion);
+                    println!(
+                        "  Estado:       {}",
+                        if h.completado {
+                            "✅ Completado".green().to_string()
+                        } else {
+                            "⭕ Pendiente".yellow().to_string()
+                        }
+                    );
+                    if let Some(fp) = h.fecha_planificada {
+                        println!("  Planificado:  {}", fp);
+                    }
+                    if let Some(fc) = h.fecha_cumplido {
+                        println!("  Cumplido:     {}", fc);
+                    }
+                    if !h.aprobado_por.is_empty() {
+                        println!("  Aprobado por: {}", h.aprobado_por);
+                    }
+                    if !h.evidencia.is_empty() {
+                        println!("  Evidencia:    {}", h.evidencia);
+                    }
+                    separador("");
+                }
+                pausa();
+            }
+            _ => break,
+        }
+        pausa();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Cobranzas y Gestion de Cobro
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(crate) fn menu_cobranzas(state: &mut AppState) {
+    use chrono::{Local, NaiveDate};
+    use colored::Colorize;
+    use omniplanner::cobranzas::*;
+    loop {
+        limpiar();
+        banner();
+        println!("  💰 COBRANZAS Y GESTION DE COBRO");
+        let hoy = Local::now().date_naive();
+        let ahora = Local::now().naive_local();
+        state.cobranzas.generar_alertas_automaticas(hoy, ahora);
+        let d = state.cobranzas.dashboard(hoy);
+        println!(
+            "  Por cobrar: {}  |  Vencido: {}  |  Cobrado este mes: {}",
+            format!("${:.0}", d.total_por_cobrar).cyan(),
+            format!("${:.0}", d.monto_vencido).red(),
+            format!("${:.0}", d.monto_cobrado_mes).green(),
+        );
+        println!(
+            "  Alertas criticas: {}  |  Llamadas hoy: {}  |  Llamadas acordadas cliente: {}",
+            d.alertas_criticas.to_string().red(),
+            d.llamadas_programadas_hoy.to_string().yellow(),
+            d.llamadas_acordadas_cliente_pendientes.to_string().cyan(),
+        );
+        println!("  Eficiencia de cobro: {:.0}%", d.eficiencia_pct);
+        separador("");
+        let opciones = &[
+            "Ver alertas activas (ordenadas por prioridad)",
+            "ALERTAS CRITICAS — accion inmediata",
+            "Procesar alerta (workflow: ver->aprobar->ejecutar->completar)",
+            "Reagendar alerta (no se pudo completar)",
+            "Registrar intento de contacto",
+            "Llamadas de hoy (programadas y acordadas con clientes)",
+            "Cuentas por cobrar",
+            "Cuentas VENCIDAS",
+            "Nueva cuenta por cobrar",
+            "Registrar pago recibido",
+            "Nueva alerta manual",
+            "Perfiles de clientes (datos bancarios / contacto)",
+            "Generar alertas automaticas (escanear vencimientos)",
+            "Exportar facturacion a CSV (abrir en Excel)",
+            "Volver",
+        ];
+        match menu("Cobranzas", opciones) {
+            Some(0) => {
+                limpiar();
+                let alertas = state.cobranzas.alertas_activas();
+                if alertas.is_empty() {
+                    println!("  {}", "No hay alertas activas.".green());
+                    pausa();
+                    continue;
+                }
+                for (i, a) in alertas.iter().enumerate() {
+                    let color_prio = match a.prioridad {
+                        Prioridad::Critica => a.prioridad.nombre().red(),
+                        Prioridad::Alta => a.prioridad.nombre().yellow(),
+                        _ => a.prioridad.nombre().white(),
+                    };
+                    println!(
+                        "  [{}] {} | {} | {} | ${:.0} | Tel: {}",
+                        i + 1,
+                        a.id.cyan(),
+                        color_prio,
+                        a.titulo,
+                        a.monto_relacionado,
+                        a.telefono_contacto
+                    );
+                    println!(
+                        "       Estado: {} | Intentos sin exito: {}",
+                        a.estado.nombre(),
+                        a.intentos_sin_exito()
+                    );
+                }
+                pausa();
+            }
+            Some(1) => {
+                limpiar();
+                let criticas = state.cobranzas.alertas_criticas();
+                if criticas.is_empty() {
+                    println!("  {}", "No hay alertas criticas.".green());
+                    pausa();
+                    continue;
+                }
+                println!("  {} ALERTAS CRITICAS — ACTUAR HOY:", "==>".red());
+                separador("");
+                for a in &criticas {
+                    println!("  {} {} — {}", a.id.cyan(), a.cliente.red(), a.titulo);
+                    println!(
+                        "    Monto: ${:.2}  |  Tel: {}  |  Banco: {} / {}",
+                        a.monto_relacionado, a.telefono_contacto, a.banco, a.numero_cuenta_banco
+                    );
+                    println!("    Accion: {}", a.accion_requerida.nombre().yellow());
+                    if let Some(v) = &a.fecha_vencimiento {
+                        println!("    Vencio: {}", v);
+                    }
+                    separador("");
+                }
+                pausa();
+            }
+            Some(2) => {
+                let id = match buscar_alerta_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(a) = state.cobranzas.alerta_mut(&id) {
+                    if !a.estado.puede_avanzar() {
+                        println!("  Alerta en estado final: {}", a.estado.nombre());
+                        pausa();
+                        continue;
+                    }
+                    limpiar();
+                    println!("  {} — {}", a.cliente.cyan(), a.titulo);
+                    println!("  Estado actual: {}", a.estado.nombre().yellow());
+                    println!("  Accion requerida: {}", a.accion_requerida.nombre());
+                    println!(
+                        "  Monto: ${:.2}  |  Tel: {}  |  Email: {}",
+                        a.monto_relacionado, a.telefono_contacto, a.email_contacto
+                    );
+                    separador("");
+                    let workflow_op = &[
+                        "Avanzar al siguiente estado",
+                        "Marcar como completada",
+                        "Reagendar",
+                        "Cancelar",
+                        "Volver",
+                    ];
+                    match menu("Accion", workflow_op) {
+                        Some(0) => {
+                            let prev = a.estado.nombre().to_string();
+                            a.avanzar_workflow(ahora);
+                            let nuevo_est = a.estado.nombre().to_string();
+                            let _ = a;
+                            let _ = state.guardar();
+                            println!("  {} {} -> {}", "OK".green(), prev, nuevo_est);
+                        }
+                        Some(1) => {
+                            a.marcar_completada(ahora);
+                            let _ = state.guardar();
+                            println!("  {} Alerta completada", "OK".green());
+                        }
+                        Some(2) => {
+                            print!("  Motivo por el que no se pudo: ");
+                            let motivo = leer_linea();
+                            let nueva = leer_fecha_hora("Nueva fecha", "Hora");
+                            a.reagendar(nueva, motivo);
+                            let _ = state.guardar();
+                            println!(
+                                "  {} Reagendado para: {} — no olvides agregar al calendario",
+                                "OK".green(),
+                                nueva
+                            );
+                        }
+                        Some(3) => {
+                            print!("  Motivo de cancelacion (requerido): ");
+                            let motivo = leer_linea();
+                            if !motivo.is_empty() {
+                                a.cancelar(motivo);
+                                let _ = state.guardar();
+                                println!(
+                                    "  {} Alerta cancelada con motivo documentado",
+                                    "OK".green()
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                } else {
+                    println!("  {} Alerta no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(3) => {
+                let id = match buscar_alerta_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(a) = state.cobranzas.alerta_mut(&id) {
+                    print!("  Motivo (por que no se pudo): ");
+                    let motivo = leer_linea();
+                    let nueva = leer_fecha_hora("Nueva fecha", "Hora");
+                    a.reagendar(nueva, motivo);
+                    let _ = state.guardar();
+                    println!(
+                        "  {} Reagendado: {} — no olvides agregar al calendario",
+                        "OK".green(),
+                        nueva
+                    );
+                } else {
+                    println!("  {} Alerta no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(4) => {
+                let id = match buscar_alerta_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                if let Some(a) = state.cobranzas.alerta_mut(&id) {
+                    let tipo_op = &["Llamada", "Email", "WhatsApp", "Reunion", "Fax"];
+                    let tipo = match menu("Tipo de contacto", tipo_op) {
+                        Some(1) => TipoContacto::Email,
+                        Some(2) => TipoContacto::WhatsApp,
+                        Some(3) => TipoContacto::Reunion,
+                        Some(4) => TipoContacto::Fax,
+                        _ => TipoContacto::Llamada,
+                    };
+                    let res_op = &[
+                        "Exitoso",
+                        "Sin contestacion",
+                        "Voicemail",
+                        "Ocupado",
+                        "Cliente reagendo",
+                        "Rechazado",
+                    ];
+                    let resultado = match menu("Resultado", res_op) {
+                        Some(0) => ResultadoContacto::Exitoso,
+                        Some(2) => ResultadoContacto::Voicemail,
+                        Some(3) => ResultadoContacto::Ocupado,
+                        Some(4) => ResultadoContacto::ClienteReagendo,
+                        Some(5) => ResultadoContacto::Rechazado,
+                        _ => ResultadoContacto::SinContestacion,
+                    };
+                    print!("  Telefono usado: ");
+                    let tel = leer_linea();
+                    print!("  Agente: ");
+                    let agente = leer_linea();
+                    print!("  Notas: ");
+                    let notas = leer_linea();
+                    let mut intento =
+                        IntentoContacto::nuevo(ahora, tipo, resultado.clone(), tel, agente);
+                    intento.notas = notas;
+                    if matches!(resultado, ResultadoContacto::ClienteReagendo) {
+                        let dt_acordado =
+                            leer_fecha_hora("Fecha acordada con el cliente", "Hora acordada");
+                        intento.proximo_intento_acordado = Some(dt_acordado);
+                        print!("  Descripcion del acuerdo: ");
+                        intento.acuerdo_descripcion = leer_linea();
+                        if let Some(dt) = intento.proximo_intento_acordado {
+                            println!(
+                                "  {} Acuerdo registrado: {} — CREAR RECORDATORIO EN CALENDARIO",
+                                "AVISO".yellow(),
+                                dt
+                            );
+                        }
+                    }
+                    let sin_exito = a.intentos_sin_exito()
+                        + if matches!(resultado, ResultadoContacto::Exitoso) {
+                            0
+                        } else {
+                            1
+                        };
+                    a.intentos.push(intento);
+                    if sin_exito >= 3 {
+                        println!(
+                            "  {} {} intentos fallidos — considera cambiar canal o escalar",
+                            "WARN".red(),
+                            sin_exito
+                        );
+                    }
+                    let _ = state.guardar();
+                    println!("  {} Intento registrado", "OK".green());
+                } else {
+                    println!("  {} Alerta no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(5) => {
+                limpiar();
+                let llamadas = state.cobranzas.llamadas_hoy(hoy);
+                if llamadas.is_empty() {
+                    println!("  {}", "No hay llamadas programadas para hoy.".green());
+                } else {
+                    println!("  {} LLAMADAS DE HOY:", "==>".yellow());
+                    for l in &llamadas {
+                        println!(
+                            "  {} | {} | {} | Tel: {} | ${:.0}",
+                            l.id.cyan(),
+                            l.cliente.yellow(),
+                            l.tipo.nombre(),
+                            l.telefono_contacto,
+                            l.monto_relacionado
+                        );
+                        if !l.intentos.is_empty() {
+                            println!("    Intentos previos: {}", l.intentos.len());
+                        }
+                    }
+                }
+                pausa();
+            }
+            Some(6) => {
+                limpiar();
+                println!(
+                    "  {:<10} {:<20} {:<12} {:<12} {:<12} {:<8}",
+                    "ID", "Cliente", "Total", "Cobrado", "Pendiente", "Estado"
+                );
+                separador("");
+                for c in &state.cobranzas.cuentas {
+                    let color = match c.estado {
+                        EstadoCuenta::Vencida => c.estado.nombre().red(),
+                        EstadoCuenta::PorVencer => c.estado.nombre().yellow(),
+                        EstadoCuenta::Pagada => c.estado.nombre().green(),
+                        _ => c.estado.nombre().white(),
+                    };
+                    println!(
+                        "  {:<10} {:<20} ${:<11.0} ${:<11.0} ${:<11.0} {}",
+                        c.id.cyan(),
+                        c.cliente,
+                        c.monto_total,
+                        c.monto_cobrado,
+                        c.monto_pendiente(),
+                        color
+                    );
+                }
+                pausa();
+            }
+            Some(7) => {
+                limpiar();
+                let vencidas = state.cobranzas.cuentas_vencidas(hoy);
+                if vencidas.is_empty() {
+                    println!("  {}", "No hay cuentas vencidas.".green());
+                } else {
+                    println!("  {} CUENTAS VENCIDAS — ACTUAR DE INMEDIATO:", "==>".red());
+                    for c in &vencidas {
+                        println!(
+                            "  {} | {} | ${:.2} pendiente | {} dias mora | Factura: {}",
+                            c.id.cyan(),
+                            c.cliente.red(),
+                            c.monto_pendiente(),
+                            c.dias_mora(hoy).to_string().red(),
+                            c.numero_factura
+                        );
+                    }
+                }
+                pausa();
+            }
+            Some(8) => {
+                print!("  Cliente: ");
+                let cliente = leer_linea();
+                print!("  Descripcion: ");
+                let desc = leer_linea();
+                print!("  Monto total: $");
+                let m_str = leer_linea();
+                let monto = m_str.parse::<f64>().unwrap_or(0.0);
+                print!("  No. Factura: ");
+                let num_fac = leer_linea();
+                print!("  Dias de credito (Enter=30): ");
+                let dc_str = leer_linea();
+                let dias_cred = dc_str.parse::<i64>().unwrap_or(30);
+                let vencimiento = hoy + chrono::Duration::days(dias_cred);
+                let mut c =
+                    CuentaCobrar::nueva(String::new(), cliente, desc, monto, hoy, vencimiento);
+                c.numero_factura = num_fac;
+                let cid = c.id.clone();
+                state.cobranzas.agregar_cuenta(c);
+                let _ = state.guardar();
+                println!(
+                    "  {} Cuenta creada: {} | Vence: {}",
+                    "OK".green(),
+                    cid,
+                    vencimiento
+                );
+                pausa();
+            }
+            Some(9) => {
+                let id = match buscar_cuenta_id(state) {
+                    Some(id) => id,
+                    None => {
+                        pausa();
+                        continue;
+                    }
+                };
+                // Mostrar detalle de la cuenta y HISTORIAL antes de pedir el monto
+                if let Some(c) = state.cobranzas.cuenta(&id) {
+                    limpiar();
+                    println!(
+                        "  {} — Factura: {}",
+                        c.cliente.cyan().bold(),
+                        c.numero_factura
+                    );
+                    println!("  Descripción: {}", c.descripcion);
+                    separador("");
+                    println!(
+                        "  {:<28} {:>12}",
+                        "Total facturado:",
+                        format!("${:.2}", c.monto_total)
+                    );
+                    println!(
+                        "  {:<28} {:>12}",
+                        "Ya cobrado:",
+                        format!("${:.2}", c.monto_cobrado).green().to_string()
+                    );
+                    let pend = c.monto_pendiente();
+                    let pend_str = if pend <= 0.0 {
+                        format!("${:.2}", pend).green().to_string()
+                    } else {
+                        format!("${:.2}", pend).yellow().to_string()
+                    };
+                    println!("  {:<28} {:>12}", "Pendiente:", pend_str);
+                    println!(
+                        "  {:<28} {:>12}",
+                        "Vencimiento:",
+                        c.fecha_vencimiento.to_string()
+                    );
+                    let mora = c.dias_mora(hoy);
+                    if mora > 0 {
+                        println!(
+                            "  {} Días en mora: {}",
+                            "VENCIDA".red(),
+                            mora.to_string().red()
+                        );
+                    }
+                    if !c.pagos.is_empty() {
+                        separador("Historial de pagos");
+                        println!(
+                            "  {:<12} {:<18} {:>10}  Referencia",
+                            "Fecha", "Tipo", "Monto"
+                        );
+                        for p in &c.pagos {
+                            println!(
+                                "  {:<12} {:<18} {:>10.2}  {}",
+                                p.fecha,
+                                p.tipo.nombre(),
+                                p.monto,
+                                p.referencia_bancaria
+                            );
+                        }
+                    } else {
+                        println!("  (Sin pagos previos registrados)");
+                    }
+                    separador("");
+                } else {
+                    println!("  {} Cuenta no encontrada", "X".red());
+                    pausa();
+                    continue;
+                }
+                if let Some(c) = state.cobranzas.cuenta_mut(&id) {
+                    let sugerido = c.monto_pendiente().max(0.0);
+                    print!("  Monto recibido (Enter = ${:.0}): $", sugerido);
+                    let m_str = leer_linea();
+                    let monto = if m_str.trim().is_empty() {
+                        sugerido
+                    } else {
+                        m_str.parse::<f64>().unwrap_or(sugerido)
+                    };
+                    let tipo_op = &["Transferencia", "Efectivo", "Cheque", "Tarjeta"];
+                    let tipo = match menu("Tipo de pago", tipo_op) {
+                        Some(1) => TipoCobro::Efectivo,
+                        Some(2) => TipoCobro::Cheque,
+                        Some(3) => TipoCobro::TarjetaCredito,
+                        _ => TipoCobro::Transferencia,
+                    };
+                    print!("  Referencia bancaria: ");
+                    let ref_str = leer_linea();
+                    print!("  Registrado por: ");
+                    let por = leer_linea();
+                    let cobro = RegistroCobro::nuevo(hoy, monto, tipo, ref_str, por);
+                    c.registrar_pago(cobro, hoy);
+                    let pendiente = c.monto_pendiente();
+                    let _ = state.guardar();
+                    if pendiente <= 0.0 {
+                        println!("  {} CUENTA SALDADA COMPLETAMENTE", "OK".green());
+                    } else {
+                        println!(
+                            "  {} Pago registrado. Pendiente: ${:.2}",
+                            "OK".green(),
+                            pendiente
+                        );
+                    }
+                } else {
+                    println!("  {} Cuenta no encontrada", "X".red());
+                }
+                pausa();
+            }
+            Some(10) => {
+                print!("  Cliente: ");
+                let cliente = leer_linea();
+                print!("  Titulo de la alerta: ");
+                let titulo = leer_linea();
+                print!("  Telefono del cliente: ");
+                let tel = leer_linea();
+                print!("  Monto relacionado: $");
+                let m_str = leer_linea();
+                let monto = m_str.parse::<f64>().unwrap_or(0.0);
+                let prio_op = &["Baja", "Media", "Alta", "Critica"];
+                let prio = match menu("Prioridad", prio_op) {
+                    Some(2) => Prioridad::Alta,
+                    Some(3) => Prioridad::Critica,
+                    Some(0) => Prioridad::Baja,
+                    _ => Prioridad::Media,
+                };
+                let tipo_op = &[
+                    "Llamada programada",
+                    "Llamada acordada con cliente",
+                    "Factura pendiente",
+                    "Recordatorio general",
+                    "Reunion pendiente",
+                ];
+                let tipo = match menu("Tipo", tipo_op) {
+                    Some(1) => TipoAlerta::LlamadaAcordadaCliente,
+                    Some(2) => TipoAlerta::FacturaPendiente,
+                    Some(4) => TipoAlerta::ReunionPendiente,
+                    _ => TipoAlerta::LlamadaProgramada,
+                };
+                let mut a = AlertaCobranza::nueva(
+                    String::new(),
+                    String::new(),
+                    cliente,
+                    tipo,
+                    prio,
+                    titulo,
+                    String::new(),
+                    monto,
+                    ahora,
+                );
+                a.telefono_contacto = tel;
+                print!("  Fecha de vencimiento / accion (YYYY-MM-DD): ");
+                let fv_str = leer_linea();
+                if let Ok(fv) = NaiveDate::parse_from_str(&fv_str, "%Y-%m-%d") {
+                    a.fecha_vencimiento = Some(fv);
+                }
+                let aid = a.id.clone();
+                state.cobranzas.agregar_alerta(a);
+                let _ = state.guardar();
+                println!("  {} Alerta creada: {}", "OK".green(), aid);
+                pausa();
+            }
+            Some(11) => {
+                let sub_op = &[
+                    "Listar perfiles",
+                    "Nuevo perfil",
+                    "Detalle de perfil",
+                    "Volver",
+                ];
+                match menu("Perfiles de clientes", sub_op) {
+                    Some(0) => {
+                        for p in &state.cobranzas.perfiles {
+                            println!(
+                                "  {} | {} | {} | Tel: {} | Banco: {}",
+                                p.id.cyan(),
+                                p.nombre,
+                                p.empresa,
+                                p.telefono_principal,
+                                p.banco
+                            );
+                        }
+                        pausa();
+                    }
+                    Some(1) => {
+                        print!("  Nombre del responsable de pago: ");
+                        let nombre = leer_linea();
+                        let mut p = PerfilCobranzaCliente::nuevo(nombre, hoy);
+                        print!("  Empresa: ");
+                        p.empresa = leer_linea();
+                        print!("  RUT/Cedula: ");
+                        p.rut_cedula = leer_linea();
+                        print!("  Telefono principal: ");
+                        p.telefono_principal = leer_linea();
+                        print!("  WhatsApp: ");
+                        p.whatsapp = leer_linea();
+                        print!("  Email: ");
+                        p.email = leer_linea();
+                        print!("  Banco: ");
+                        p.banco = leer_linea();
+                        print!("  No. cuenta: ");
+                        p.numero_cuenta = leer_linea();
+                        print!("  Dias de credito (Enter=30): ");
+                        let dc = leer_linea();
+                        p.dias_credito = dc.parse::<i32>().unwrap_or(30);
+                        print!("  Horario preferido de contacto: ");
+                        p.horario_preferido_contacto = leer_linea();
+                        let pid = p.id.clone();
+                        state.cobranzas.agregar_perfil(p);
+                        let _ = state.guardar();
+                        println!("  {} Perfil creado: {}", "OK".green(), pid);
+                        pausa();
+                    }
+                    Some(2) => {
+                        let id = match buscar_perfil_cobranza_id(state) {
+                            Some(id) => id,
+                            None => {
+                                pausa();
+                                continue;
+                            }
+                        };
+                        if let Some(p) = state.cobranzas.perfil(&id) {
+                            limpiar();
+                            println!("  {} — {}", p.nombre.cyan(), p.empresa);
+                            println!(
+                                "  RUT: {}  |  Responsable pago: {}",
+                                p.rut_cedula, p.responsable_pago
+                            );
+                            println!(
+                                "  Tel principal: {}  |  WhatsApp: {}  |  Email: {}",
+                                p.telefono_principal, p.whatsapp, p.email
+                            );
+                            println!(
+                                "  Banco: {}  |  Cuenta: {}  |  Titular: {}",
+                                p.banco, p.numero_cuenta, p.titular_cuenta
+                            );
+                            println!(
+                                "  Dias credito: {}  |  Horario: {}",
+                                p.dias_credito, p.horario_preferido_contacto
+                            );
+                            println!("  Historial: {}", p.historial_pago.nombre());
+                        } else {
+                            println!("  {} No encontrado", "X".red());
+                        }
+                        pausa();
+                    }
+                    _ => {}
+                }
+            }
+            Some(12) => {
+                let antes = state.cobranzas.alertas.len();
+                state.cobranzas.generar_alertas_automaticas(hoy, ahora);
+                let nuevas = state.cobranzas.alertas.len() - antes;
+                let _ = state.guardar();
+                println!("  {} {} alertas nuevas generadas", "OK".green(), nuevas);
+                pausa();
+            }
+            Some(13) => {
+                let csv = state.cobranzas.exportar_csv_facturacion(hoy);
+                let ruta_str = {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        if let Some(dir) = AppState::ruta_datos().parent() {
+                            let ruta = dir.join("facturacion_export.csv");
+                            let _ = std::fs::write(&ruta, &csv);
+                            ruta.to_string_lossy().to_string()
+                        } else {
+                            "facturacion_export.csv".to_string()
+                        }
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        "facturacion_export.csv".to_string()
+                    }
+                };
+                println!("  {} CSV exportado: {}", "OK".green(), ruta_str.cyan());
+                println!(
+                    "  {} lineas de facturacion exportadas",
+                    csv.lines().count() - 1
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", &ruta_str])
+                        .spawn();
+                }
+                pausa();
+            }
+            _ => break,
         }
     }
 }
@@ -16319,14 +22768,6 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
     }
 }
 
-fn truncar(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max - 1).collect::<String>())
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 //  Sugerencias de Pago — plan inteligente del mes
 // ═══════════════════════════════════════════════════════════════════════
@@ -16465,131 +22906,802 @@ pub(crate) fn menu_sugerencias_pago(state: &mut AppState) {
 //  Asistente Financiero — Conversación en lenguaje natural
 // ═══════════════════════════════════════════════════════════════════════
 
-fn menu_asistente_financiero(state: &mut AppState) {
-    use omniplanner::nlp::asistente;
-    use omniplanner::nlp::intent::{CategoriaIntencion, Intencion};
-    limpiar();
+/// ── FUNCIÓN DE AYUDA ────────────────────────────────────────────────────────
+/// Muestra todos los comandos especiales y ejemplos de uso del asistente.
+fn af_ayuda() {
+    println!();
     println!(
         "{}",
-        "╔══════════════════════════════════════════════════════════════╗".cyan()
+        "  ╔══════════════════════════════════════════════════════════════╗".cyan()
     );
     println!(
         "{}",
-        "║  💬 A S I S T E N T E   F I N A N C I E R O   I N T E L I G E N T E ║"
+        "  ║  ❓  A Y U D A   —   A s i s t e n t e   F i n a n c i e r o  ║"
             .cyan()
             .bold()
     );
     println!(
         "{}",
-        "╚══════════════════════════════════════════════════════════════╝".cyan()
+        "  ╚══════════════════════════════════════════════════════════════╝".cyan()
     );
     println!();
-    println!("  {}", "Háblame en lenguaje natural. Ejemplos:".dimmed());
-    println!("    {}", "• \"gasté 50 en gasolina hoy\"".dimmed());
-    println!("    {}", "• \"recibí 1500 de sueldo\"".dimmed());
-    println!("    {}", "• \"cuánto llevo gastado este mes\"".dimmed());
-    println!("    {}", "• \"qué deuda debo pagar primero\"".dimmed());
-    println!("    {}", "• \"cómo voy financieramente\"".dimmed());
-    println!("    {}", "• \"recordarme pagar la luz el 15\"".dimmed());
+    println!("  {}", "COMANDOS ESPECIALES:".yellow().bold());
+    println!(
+        "  {}  {}",
+        "ayuda / help / ?".green(),
+        "→ Muestra esta pantalla de ayuda".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "buscar <término>".green(),
+        "→ Busca transacciones por descripción".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "validar".green(),
+        "→ Valida la integridad de tus datos financieros".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "optimizar".green(),
+        "→ Analiza patrones y sugiere optimizaciones".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "debug <mensaje>".green(),
+        "→ Muestra análisis NLP detallado de un mensaje".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "salir / exit".green(),
+        "→ Vuelve al menú principal".dimmed()
+    );
+    println!();
+    println!("  {}", "EJEMPLOS DE LENGUAJE NATURAL:".yellow().bold());
+    let ejemplos = [
+        ("Registrar gasto", "\"gasté 80 en gasolina hoy\""),
+        ("Registrar ingreso", "\"recibí 1500 de sueldo el viernes\""),
+        ("Consultar gastos", "\"cuánto llevo gastado este mes\""),
+        ("Ver balance", "\"cómo voy financieramente\""),
+        ("Deudas", "\"qué deuda debo pagar primero\""),
+        ("Agendar pago", "\"recordarme pagar la luz el 15\""),
+        ("Resumen", "\"dame un resumen de enero\""),
+    ];
+    for (tipo, ejemplo) in &ejemplos {
+        println!("  {} {}  {}", "•".dimmed(), tipo.cyan(), ejemplo.dimmed());
+    }
     println!();
     println!(
-        "  Escribe '{}' o '{}' para volver al menú.\n",
-        "salir".yellow(),
-        "exit".yellow()
+        "  {} El asistente aprende de tus correcciones. Si no entiende algo,",
+        "💡".yellow()
     );
+    println!("    te pedirá aclaraciones para mejorar su precisión.");
+    println!();
+}
 
-    loop {
-        let input: String = match Input::new().with_prompt("  💬 Tú").interact_text() {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-
-        let input = input.trim().to_string();
-        if input.is_empty() {
-            continue;
-        }
-        if input == "salir" || input == "exit" || input == "quit" || input == "volver" {
-            return;
-        }
-
-        // Clasificar intención usando el motor NLP
-        let intencion = state.nlp.motor.intencion.clasificar(&input);
-
-        // Intentar despachar
-        let respuesta = asistente::responder(&input, &intencion, &mut *state);
-
-        // Si no se entendió, iniciar diálogo de clarificación
-        let respuesta = if matches!(
-            respuesta.intent,
-            CategoriaIntencion::Desconocido
-                | CategoriaIntencion::Consultar
-                | CategoriaIntencion::Listar
-                | CategoriaIntencion::Buscar
-                | CategoriaIntencion::Modificar
-                | CategoriaIntencion::Crear
-        ) && respuesta.confianza < 0.7
-        {
-            println!();
-            println!(
-                "  {} No entendí bien \"{}\".",
-                "🤔".yellow(),
-                input.dimmed()
-            );
-            match clarificar_intencion_financiera() {
-                Some(cat) => {
-                    let intencion_clara = Intencion {
-                        categoria: cat,
-                        confianza: 1.0,
-                        entidades: vec![],
-                        alternativas: vec![],
-                    };
-                    asistente::responder(&input, &intencion_clara, &mut *state)
-                }
-                None => {
-                    println!("  {} Cancelado.\n", "↩".dimmed());
-                    continue;
-                }
-            }
-        } else {
-            respuesta
-        };
-
-        // Auditar acceso a datos financieros
-        state.auditoria.registrar(
-            TipoAuditoria::AccesoDatosFinancieros,
-            Some(&format!("asistente: {}", respuesta.intent.nombre())),
-        );
-
-        // Mostrar respuesta
-        println!();
-        println!("  {} {}", "🤖".cyan(), respuesta.texto);
-        println!();
+/// ── FUNCIÓN DE BÚSQUEDA ──────────────────────────────────────────────────────
+/// Busca transacciones por palabra clave en descripción, categoría o notas.
+fn af_buscar(state: &AppState, query: &str) {
+    if query.is_empty() {
         println!(
-            "  {} Intención: {} · Confianza: {:.0}%",
-            "→".dimmed(),
-            respuesta.intent.nombre().yellow(),
-            respuesta.confianza * 100.0,
+            "\n  {} Indica un término: {} o {}\n",
+            "⚠".yellow(),
+            "buscar gasolina".green(),
+            "buscar enero".green()
         );
+        return;
+    }
+    println!();
+    println!("  {} Buscando \"{}\"...", "🔍".cyan(), query.yellow());
+    println!();
 
-        if let Some(accion) = &respuesta.accion_realizada {
-            println!("  {} Acción: {}", "✓".green(), accion.green());
-        }
+    // Buscar en gastos
+    let resultados = state.gastos.buscar_por_keyword(query);
 
-        if !respuesta.seguimientos.is_empty() {
-            println!("  {} Sugerencias de seguimiento:", "💡".yellow());
-            for s in &respuesta.seguimientos {
-                println!("    • {}", s.dimmed());
+    // También buscar en categoría y notas manualmente
+    let query_lower = query.to_lowercase();
+    let resultados_extra: Vec<_> = state
+        .gastos
+        .transacciones
+        .iter()
+        .filter(|g| {
+            !resultados.iter().any(|r| r.id == g.id)
+                && (g.categoria.nombre().to_lowercase().contains(&query_lower)
+                    || g.notas.to_lowercase().contains(&query_lower)
+                    || g.metodo_pago.to_lowercase().contains(&query_lower))
+        })
+        .collect();
+
+    let total = resultados.len() + resultados_extra.len();
+    if total == 0 {
+        println!(
+            "  {} No se encontraron transacciones con \"{}\".\n",
+            "✗".red(),
+            query
+        );
+        return;
+    }
+
+    println!("  {} {} resultado(s) encontrado(s):\n", "✓".green(), total);
+    println!(
+        "  {:<12}  {:<8}  {:<24}  {:<16}  {}",
+        "Fecha".cyan().bold(),
+        "Monto".cyan().bold(),
+        "Descripción".cyan().bold(),
+        "Categoría".cyan().bold(),
+        "Notas".cyan().bold()
+    );
+    println!("  {}", "─".repeat(75).dimmed());
+
+    let mut suma_gastos: f64 = 0.0;
+    let mut suma_ingresos: f64 = 0.0;
+
+    let imprimir = |g: &&omniplanner::ml::gastos::GastoReal| {
+        let monto_str = if g.es_ingreso() {
+            format!("+{:.2}", g.monto_abs()).green().to_string()
+        } else {
+            format!("-{:.2}", g.monto_abs()).red().to_string()
+        };
+        println!(
+            "  {:<12}  {:<14}  {:<24}  {:<16}  {}",
+            g.fecha.to_string().dimmed(),
+            monto_str,
+            if g.descripcion.len() > 22 {
+                format!("{}…", &g.descripcion[..21])
+            } else {
+                g.descripcion.clone()
+            },
+            g.categoria.nombre(),
+            if g.notas.is_empty() {
+                "—".dimmed().to_string()
+            } else if g.notas.len() > 20 {
+                format!("{}…", &g.notas[..19]).dimmed().to_string()
+            } else {
+                g.notas.dimmed().to_string()
             }
-        }
-        println!();
+        );
+    };
 
-        // Persistir si hubo cambios
-        if respuesta.modifico_estado {
-            if let Err(e) = state.guardar() {
-                eprintln!("  {} Error guardando: {}", "✗".red(), e);
+    for g in &resultados {
+        imprimir(g);
+        if g.es_ingreso() {
+            suma_ingresos += g.monto_abs();
+        } else {
+            suma_gastos += g.monto_abs();
+        }
+    }
+    for g in &resultados_extra {
+        imprimir(g);
+        if g.es_ingreso() {
+            suma_ingresos += g.monto_abs();
+        } else {
+            suma_gastos += g.monto_abs();
+        }
+    }
+
+    println!("  {}", "─".repeat(75).dimmed());
+    if suma_gastos > 0.0 {
+        println!(
+            "  Total gastos encontrados:   {}",
+            format!("-{:.2}", suma_gastos).red()
+        );
+    }
+    if suma_ingresos > 0.0 {
+        println!(
+            "  Total ingresos encontrados: {}",
+            format!("+{:.2}", suma_ingresos).green()
+        );
+    }
+    println!();
+}
+
+/// ── FUNCIÓN DE VALIDACIÓN ────────────────────────────────────────────────────
+/// Revisa la integridad y calidad de los datos financieros registrados.
+fn af_validar(state: &AppState) {
+    println!();
+    println!(
+        "{}",
+        "  ╔══════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "  ║  🔎  V A L I D A C I Ó N   D E   D A T O S             ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "  ╚══════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+
+    let transacciones = &state.gastos.transacciones;
+    let mut advertencias: Vec<String> = Vec::new();
+    let mut errores: Vec<String> = Vec::new();
+
+    // ── 1. Transacciones sin descripción ──────────────────────────────
+    let sin_desc: Vec<_> = transacciones
+        .iter()
+        .filter(|g| g.descripcion.trim().is_empty())
+        .collect();
+    if !sin_desc.is_empty() {
+        errores.push(format!(
+            "{} transacción(es) sin descripción (IDs: {})",
+            sin_desc.len(),
+            sin_desc
+                .iter()
+                .map(|g| g.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    // ── 2. Transacciones con monto cero ───────────────────────────────
+    let monto_cero: Vec<_> = transacciones.iter().filter(|g| g.monto == 0.0).collect();
+    if !monto_cero.is_empty() {
+        errores.push(format!(
+            "{} transacción(es) con monto cero",
+            monto_cero.len()
+        ));
+    }
+
+    // ── 3. Posibles duplicados (misma fecha + monto + categoría) ──────
+    let mut vistos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for g in transacciones {
+        let clave = format!("{}-{:.2}-{}", g.fecha, g.monto.abs(), g.categoria.nombre());
+        *vistos.entry(clave).or_insert(0) += 1;
+    }
+    let duplicados: Vec<_> = vistos.iter().filter(|(_, c)| **c > 1).collect();
+    if !duplicados.is_empty() {
+        advertencias.push(format!(
+            "{} posible(s) transacción(es) duplicada(s) (misma fecha, monto y categoría)",
+            duplicados.len()
+        ));
+    }
+
+    // ── 4. Gastos muy altos (outliers > media + 3σ) ───────────────────
+    if transacciones.len() > 5 {
+        let montos: Vec<f64> = transacciones
+            .iter()
+            .filter(|g| !g.es_ingreso())
+            .map(|g| g.monto_abs())
+            .collect();
+        if !montos.is_empty() {
+            let media = montos.iter().sum::<f64>() / montos.len() as f64;
+            let varianza =
+                montos.iter().map(|m| (m - media).powi(2)).sum::<f64>() / montos.len() as f64;
+            let sigma = varianza.sqrt();
+            let umbral = media + 3.0 * sigma;
+            let outliers: Vec<_> = transacciones
+                .iter()
+                .filter(|g| !g.es_ingreso() && g.monto_abs() > umbral)
+                .collect();
+            if !outliers.is_empty() {
+                advertencias.push(format!(
+                    "{} gasto(s) inusualmente alto(s) (> {:.2}, umbral estadístico)",
+                    outliers.len(),
+                    umbral
+                ));
+                for g in &outliers {
+                    advertencias.push(format!(
+                        "  → {} | {} | {:.2}",
+                        g.fecha,
+                        g.descripcion,
+                        g.monto_abs()
+                    ));
+                }
             }
         }
     }
+
+    // ── 5. Sin presupuesto activo ──────────────────────────────────────
+    if state.presupuesto.plantilla.is_none() && state.presupuesto.meses.is_empty() {
+        advertencias.push(
+            "No tienes presupuesto configurado. Usa el módulo de Presupuesto Base Cero.".into(),
+        );
+    }
+
+    // ── 6. Balance general negativo ────────────────────────────────────
+    let hoy = chrono::Local::now().date_naive();
+    let total_ingresos = state.gastos.total_ingresos_rango(
+        NaiveDate::from_ymd_opt(hoy.year(), 1, 1).unwrap_or(hoy),
+        hoy,
+    );
+    let total_gastos = state.gastos.total_gastos_rango(
+        NaiveDate::from_ymd_opt(hoy.year(), 1, 1).unwrap_or(hoy),
+        hoy,
+    );
+    if total_gastos > total_ingresos && total_ingresos > 0.0 {
+        advertencias.push(format!(
+            "Balance anual negativo: ingresos {:.2} < gastos {:.2}",
+            total_ingresos, total_gastos
+        ));
+    }
+
+    // ── Reporte final ──────────────────────────────────────────────────
+    let total_tx = transacciones.len();
+    println!(
+        "  {} {} transacción(es) analizada(s)\n",
+        "📊".cyan(),
+        total_tx
+    );
+
+    if errores.is_empty() && advertencias.is_empty() {
+        println!(
+            "  {} {} Todo en orden. No se encontraron problemas.\n",
+            "✓".green().bold(),
+            "OK —".green()
+        );
+        return;
+    }
+
+    if !errores.is_empty() {
+        println!("  {} ERRORES ({}):", "✗".red().bold(), errores.len());
+        for e in &errores {
+            println!("    {} {}", "•".red(), e);
+        }
+        println!();
+    }
+
+    if !advertencias.is_empty() {
+        println!(
+            "  {} ADVERTENCIAS ({}):",
+            "⚠".yellow().bold(),
+            advertencias.len()
+        );
+        for a in &advertencias {
+            println!("    {} {}", "•".yellow(), a);
+        }
+        println!();
+    }
+
+    println!(
+        "  {} Revisa y corrige los problemas para mantener datos precisos.\n",
+        "💡".dimmed()
+    );
+}
+
+/// ── FUNCIÓN DE DEPURACIÓN NLP ────────────────────────────────────────────────
+/// Muestra el análisis NLP detallado de un mensaje: tokens, intención, entidades.
+fn af_debug_nlp(state: &mut AppState, _raw: &str, mensaje: &str) {
+    let msg = if mensaje.is_empty() {
+        println!(
+            "\n  {} Uso: {} <mensaje a analizar>\n  Ej: {}\n",
+            "ℹ".cyan(),
+            "debug".green(),
+            "debug gasté 50 en comida".dimmed()
+        );
+        return;
+    } else {
+        mensaje
+    };
+
+    println!();
+    println!(
+        "{}",
+        "  ╔══════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "  ║  🐛  D E P U R A C I Ó N   N L P                       ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "  ╚══════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+    println!("  {} \"{}\"", "Mensaje:".yellow().bold(), msg);
+    println!();
+
+    // Tokenización simple (split por espacios y signos)
+    let tokens: Vec<&str> = msg
+        .split(|c: char| c.is_whitespace() || ",;:.!?¿¡()\"'".contains(c))
+        .filter(|t| !t.is_empty())
+        .collect();
+    println!("  {} {}", "Tokens:".cyan(), tokens.join(" | ").dimmed());
+
+    // Clasificación de intención
+    let intencion = state.nlp.motor.intencion.clasificar(msg);
+    println!(
+        "  {} {} (confianza: {:.1}%)",
+        "Intención principal:".cyan(),
+        intencion.categoria.nombre().yellow().bold(),
+        intencion.confianza * 100.0
+    );
+
+    if !intencion.alternativas.is_empty() {
+        println!("  {} ", "Alternativas:".cyan());
+        for alt in &intencion.alternativas {
+            println!(
+                "    {} {} — {:.1}%",
+                "·".dimmed(),
+                alt.0.nombre().dimmed(),
+                alt.1 * 100.0
+            );
+        }
+    }
+
+    // Entidades detectadas
+    if !intencion.entidades.is_empty() {
+        println!("  {} ", "Entidades detectadas:".cyan());
+        for ent in &intencion.entidades {
+            println!("    {} {:?}", "·".dimmed(), ent);
+        }
+    } else {
+        println!("  {} {}", "Entidades:".cyan(), "ninguna detectada".dimmed());
+    }
+
+    // Análisis de sentimiento
+    let sentimiento = state.nlp.motor.sentimiento.analizar(msg);
+    println!(
+        "  {} {} (score: {:.3})",
+        "Sentimiento:".cyan(),
+        sentimiento.polaridad.nombre().yellow(),
+        sentimiento.score
+    );
+
+    println!();
+    println!(
+        "  {} Para que el asistente procese este mensaje normalmente, escríbelo sin el prefijo 'debug'.",
+        "💡".dimmed()
+    );
+    println!();
+}
+
+/// ── FUNCIÓN DE OPTIMIZACIÓN ──────────────────────────────────────────────────
+/// Analiza patrones de gasto y proporciona sugerencias de optimización.
+fn af_optimizar(state: &AppState) {
+    println!();
+    println!(
+        "{}",
+        "  ╔══════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "  ║  ⚡  O P T I M I Z A C I Ó N   F I N A N C I E R A     ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "  ╚══════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+
+    let hoy = chrono::Local::now().date_naive();
+    let (anio, mes) = (hoy.year(), hoy.month());
+
+    // Resumen del mes actual
+    let resumen_actual = state.gastos.resumen_mes(anio, mes);
+
+    // Resumen del mes anterior
+    let (anio_ant, mes_ant) = if mes == 1 {
+        (anio - 1, 12u32)
+    } else {
+        (anio, mes - 1)
+    };
+    let resumen_ant = state.gastos.resumen_mes(anio_ant, mes_ant);
+
+    println!("  {} Mes actual vs. mes anterior:\n", "📅".cyan());
+    println!(
+        "  {:<22} {:>12}  {:>12}",
+        "",
+        "Mes actual".cyan().bold(),
+        "Mes anterior".cyan().bold()
+    );
+    println!(
+        "  {:<22} {:>12}  {:>12}",
+        "Gastos totales:",
+        format!("{:.2}", resumen_actual.total_gastos).red(),
+        format!("{:.2}", resumen_ant.total_gastos).red()
+    );
+    println!(
+        "  {:<22} {:>12}  {:>12}",
+        "Ingresos totales:",
+        format!("{:.2}", resumen_actual.total_ingresos).green(),
+        format!("{:.2}", resumen_ant.total_ingresos).green()
+    );
+    println!(
+        "  {:<22} {:>12}  {:>12}",
+        "Balance:",
+        if resumen_actual.balance >= 0.0 {
+            format!("+{:.2}", resumen_actual.balance)
+                .green()
+                .to_string()
+        } else {
+            format!("{:.2}", resumen_actual.balance).red().to_string()
+        },
+        if resumen_ant.balance >= 0.0 {
+            format!("+{:.2}", resumen_ant.balance).green().to_string()
+        } else {
+            format!("{:.2}", resumen_ant.balance).red().to_string()
+        }
+    );
+    println!(
+        "  {:<22} {:>12}  {:>12}",
+        "Transacciones:", resumen_actual.num_transacciones, resumen_ant.num_transacciones
+    );
+    println!();
+
+    // Análisis por categoría (mes actual)
+    let desde_mes = NaiveDate::from_ymd_opt(anio, mes, 1).unwrap_or(hoy);
+    let por_cat = state.gastos.por_categoria(desde_mes, hoy);
+
+    if !por_cat.is_empty() {
+        println!(
+            "  {} Distribución por categoría (mes actual):\n",
+            "📊".cyan()
+        );
+        let total_cat: f64 = por_cat
+            .iter()
+            .filter(|(c, _)| c.nombre() != "Ingreso")
+            .map(|(_, v)| *v)
+            .sum();
+        let mut cats_gasto: Vec<_> = por_cat
+            .iter()
+            .filter(|(c, _)| c.nombre() != "Ingreso")
+            .collect();
+        cats_gasto.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (cat, monto) in &cats_gasto {
+            let pct = if total_cat > 0.0 {
+                monto / total_cat * 100.0
+            } else {
+                0.0
+            };
+            let barras = (pct / 5.0).round() as usize;
+            let barra = "█".repeat(barras) + &"░".repeat(20 - barras.min(20));
+            println!(
+                "  {} {}  {:>7.2}  ({:4.1}%)  {}",
+                cat.emoji(),
+                format!("{:<15}", cat.nombre()).cyan(),
+                monto,
+                pct,
+                barra.dimmed()
+            );
+        }
+        println!();
+    }
+
+    // Variación mes a mes
+    if resumen_ant.total_gastos > 0.0 {
+        let variacion = (resumen_actual.total_gastos - resumen_ant.total_gastos)
+            / resumen_ant.total_gastos
+            * 100.0;
+        if variacion > 15.0 {
+            println!(
+                "  {} Tus gastos subieron un {:.1}% respecto al mes anterior.",
+                "⚠".yellow(),
+                variacion
+            );
+        } else if variacion < -10.0 {
+            println!(
+                "  {} Tus gastos bajaron un {:.1}% respecto al mes anterior. ¡Excelente!",
+                "✓".green(),
+                variacion.abs()
+            );
+        }
+    }
+
+    // Sugerencias de optimización
+    println!("  {} Sugerencias de optimización:\n", "💡".yellow().bold());
+    let mut sugs: Vec<&str> = Vec::new();
+
+    if resumen_actual.balance < 0.0 {
+        sugs.push("Tu balance es negativo este mes. Revisa los gastos variables para reducirlos.");
+    }
+    if resumen_actual.total_gastos > resumen_actual.total_ingresos * 0.9
+        && resumen_actual.total_ingresos > 0.0
+    {
+        sugs.push("Estás gastando más del 90% de tus ingresos. Considera aumentar el ahorro.");
+    }
+    if resumen_actual.num_transacciones > 50 {
+        sugs.push(
+            "Tienes muchas transacciones pequeñas. Agrupa compras para reducir gastos impulsivos.",
+        );
+    }
+
+    // Categoría dominante
+    let desde_mes_cat = NaiveDate::from_ymd_opt(anio, mes, 1).unwrap_or(hoy);
+    let cats = state.gastos.por_categoria(desde_mes_cat, hoy);
+    if let Some((cat_top, monto_top)) = cats
+        .iter()
+        .filter(|(c, _)| c.nombre() != "Ingreso")
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        if resumen_actual.total_gastos > 0.0 && monto_top / resumen_actual.total_gastos > 0.5 {
+            sugs.push(&*Box::leak(
+                format!(
+                    "La categoría '{}' representa más del 50% de tus gastos. ¿Puedes reducirla?",
+                    cat_top.nombre()
+                )
+                .into_boxed_str(),
+            ));
+        }
+    }
+
+    if sugs.is_empty() {
+        println!(
+            "  {} Tu situación financiera se ve saludable este mes.\n",
+            "✓".green()
+        );
+    } else {
+        for s in &sugs {
+            println!("  {} {}", "→".yellow(), s);
+        }
+        println!();
+    }
+
+    // Proyección de ahorro
+    if resumen_actual.total_ingresos > 0.0 {
+        let tasa_ahorro = ((resumen_actual.total_ingresos - resumen_actual.total_gastos)
+            / resumen_actual.total_ingresos)
+            .max(0.0);
+        println!(
+            "  {} Tasa de ahorro actual: {:.1}%",
+            "🏦".cyan(),
+            tasa_ahorro * 100.0
+        );
+        if tasa_ahorro < 0.1 {
+            println!("    {} Intenta llegar al 10-20% recomendado.", "→".dimmed());
+        } else if tasa_ahorro >= 0.2 {
+            println!("    {} ¡Excelente tasa de ahorro!", "✓".green());
+        }
+        println!();
+    }
+}
+
+/// Flujo interactivo completo para programar un pago futuro con confirmación.
+/// Pregunta todos los datos y solo guarda si el usuario confirma explícitamente.
+fn programar_pago_interactivo(state: &mut AppState) {
+    limpiar();
+    separador("💰  Programar Pago Futuro");
+    println!();
+
+    // 1) Descripción / nombre del pago
+    let descripcion =
+        match pedir_texto("  Nombre o descripción del pago  (ej: Carrington Mortgage)") {
+            Some(d) if !d.trim().is_empty() => d.trim().to_string(),
+            _ => {
+                println!("  {} Cancelado.\n", "↩".dimmed());
+                pausa();
+                return;
+            }
+        };
+
+    // 2) Monto
+    let monto = pedir_f64("  Monto a pagar ($)", 0.0);
+    if monto <= 0.0 {
+        println!("  {} Monto inválido. Cancelado.\n", "✗".red());
+        pausa();
+        return;
+    }
+
+    // 3) Fecha del primer pago
+    let fecha = match pedir_fecha("  Fecha del pago  (YYYY-MM-DD o DD/MM/YYYY)") {
+        Some(f) => f,
+        None => {
+            println!("  {} Cancelado.\n", "↩".dimmed());
+            pausa();
+            return;
+        }
+    };
+
+    // 4) Frecuencia
+    let frecs = &[
+        "Una sola vez",
+        "Mensual (cada mes)  ← recomendado para hipotecas/deudas",
+        "Semanal",
+        "Trimestral (cada 3 meses)",
+        "Anual",
+    ];
+    let frecuencia = match menu("  ¿Con qué frecuencia se repite?", frecs) {
+        Some(0) => Frecuencia::UnaVez,
+        Some(1) => Frecuencia::Mensual,
+        Some(2) => Frecuencia::Semanal,
+        Some(3) => Frecuencia::Trimestral,
+        Some(4) => Frecuencia::Anual,
+        _ => {
+            println!("  {} Cancelado.\n", "↩".dimmed());
+            pausa();
+            return;
+        }
+    };
+
+    let freq_label = match frecuencia {
+        Frecuencia::UnaVez => "una sola vez",
+        Frecuencia::Mensual => "mensual",
+        Frecuencia::Semanal => "semanal",
+        Frecuencia::Trimestral => "trimestral",
+        Frecuencia::Semestral => "semestral",
+        Frecuencia::Anual => "anual",
+    };
+
+    // 5) ── CONFIRMACIÓN EXPLÍCITA ────────────────────────────────────────
+    println!();
+    println!("  ┌─────────────────────────────────────────────────┐");
+    println!("  │  Resumen del pago a programar                   │");
+    println!("  ├─────────────────────────────────────────────────┤");
+    println!(
+        "  │  📝 {}{}│",
+        descripcion,
+        " ".repeat(49usize.saturating_sub(descripcion.len()))
+    );
+    println!(
+        "  │  💵 ${:.2}{}│",
+        monto,
+        " ".repeat(47usize.saturating_sub(format!("{:.2}", monto).len()))
+    );
+    println!(
+        "  │  📅 {}{}│",
+        fecha.format("%d/%m/%Y"),
+        " ".repeat(41usize)
+    );
+    println!(
+        "  │  🔁 {}{}│",
+        freq_label,
+        " ".repeat(49usize.saturating_sub(freq_label.len()))
+    );
+    println!("  └─────────────────────────────────────────────────┘");
+    println!();
+
+    if !confirmar("  ¿Confirmar y guardar este pago?", true) {
+        println!(
+            "  {} Pago NO guardado. Puedes volver a intentarlo.\n",
+            "↩".yellow()
+        );
+        pausa();
+        return;
+    }
+
+    // 6) Crear y guardar el evento
+    let hora = NaiveTime::from_hms_opt(9, 0, 0).unwrap_or_default();
+    let mut evento = Evento::new(
+        descripcion.clone(),
+        format!("Pago programado: ${:.2}", monto),
+        TipoEvento::Pago,
+        fecha,
+        hora,
+        None,
+    );
+    evento = evento
+        .con_frecuencia(frecuencia)
+        .con_concepto(descripcion.clone());
+
+    // Emitir al bus de eventos
+    {
+        use omniplanner::eventos::{
+            EstadoEvento as BusEstado, EventoSistema as BusEvento, Modulo as BusModulo,
+            Referencia as BusRef, TipoEvento as BusTipo,
+        };
+        let ev = BusEvento::nuevo(
+            BusModulo::Agenda,
+            BusTipo::PagoProgramado,
+            format!("Pago: {} ${:.2}", descripcion, monto),
+        )
+        .con_fecha(fecha)
+        .con_estado(BusEstado::Pendiente)
+        .con_referencia(BusRef::nueva("agenda", "pago", &evento.id, &descripcion))
+        .con_etiqueta("pago_futuro");
+        state.bus.emitir(ev);
+    }
+
+    state.agenda.agregar_evento(evento);
+
+    if let Err(e) = state.guardar() {
+        eprintln!("  {} Error al guardar: {}", "✗".red(), e);
+    } else {
+        println!(
+            "\n  {} Pago «{}» de ${:.2} guardado para el {} ({}).",
+            "✅".green(),
+            descripcion.bold(),
+            monto,
+            fecha.format("%d/%m/%Y"),
+            freq_label,
+        );
+    }
+    pausa();
 }
 
 /// Diálogo de clarificación paso a paso cuando el asistente no entendió.
