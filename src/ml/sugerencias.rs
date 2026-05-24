@@ -93,7 +93,7 @@ impl PlanPagosMes {
         // Solo contamos gastos positivos (no deudas ya registradas en rastreador)
         let gastos_mes = resumen.total_gastos;
         let pagos_minimos = rastreador.pagos_minimos_mensuales();
-        let excedente = (ingreso - gastos_mes - pagos_minimos).max(0.0);
+        let excedente = (ingreso - gastos_mes.a_f64() - pagos_minimos).max(0.0);
 
         let mut advertencias: Vec<String> = Vec::new();
         let mut sugerencias: Vec<SugerenciaPago> = Vec::new();
@@ -103,7 +103,7 @@ impl PlanPagosMes {
                 "No hay ingresos confirmados registrados. Ve al Rastreador → Ingresos.".to_string(),
             );
         }
-        if gastos_mes > ingreso * 0.9 {
+        if gastos_mes.a_f64() > ingreso * 0.9 {
             advertencias.push(format!(
                 "Los gastos del mes (${:.2}) superan el 90% del ingreso mensual. Revisa tu presupuesto.",
                 gastos_mes
@@ -248,7 +248,7 @@ impl PlanPagosMes {
 
         PlanPagosMes {
             ingreso_mensual: ingreso,
-            gastos_reales_mes: gastos_mes,
+            gastos_reales_mes: gastos_mes.a_f64(),
             pagos_minimos_total: pagos_minimos,
             excedente,
             sugerencias,

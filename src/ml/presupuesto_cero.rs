@@ -6,6 +6,7 @@
 //! Ingreso total - Gastos fijos - Gastos variables - Pagos deuda - Ahorro = 0
 
 use super::advisor::FrecuenciaPago;
+use crate::dinero::Dinero;
 use serde::{Deserialize, Serialize};
 
 fn frecuencia_mensual_default() -> FrecuenciaPago {
@@ -51,7 +52,7 @@ impl Categoria {
 pub struct LineaPresupuesto {
     pub nombre: String,
     pub categoria: Categoria,
-    pub monto: f64,
+    pub monto: Dinero,
     pub pagado: bool,
     #[serde(default)]
     pub fecha_limite: String,
@@ -59,10 +60,10 @@ pub struct LineaPresupuesto {
     pub notas: String,
     /// Saldo total de la deuda (solo para PagoDeuda)
     #[serde(default)]
-    pub saldo_total_deuda: Option<f64>,
+    pub saldo_total_deuda: Option<Dinero>,
     /// Monto realmente pagado en este mes (acumulado, soporta pagos parciales).
     #[serde(default)]
-    pub monto_pagado_real: f64,
+    pub monto_pagado_real: Dinero,
     /// Meses anteriores aún no pagados (atrasados). 0 = al día.
     #[serde(default)]
     pub meses_atrasados: u32,
@@ -73,13 +74,13 @@ pub struct LineaPresupuesto {
 
 impl LineaPresupuesto {
     /// Monto total que se debe pagar este mes (mes corriente + meses atrasados).
-    pub fn monto_a_pagar(&self) -> f64 {
-        self.monto * (1.0 + self.meses_atrasados as f64)
+    pub fn monto_a_pagar(&self) -> Dinero {
+        std::iter::repeat(self.monto).take((1 + self.meses_atrasados) as usize).sum()
     }
 
     /// Lo que falta por pagar después de los pagos parciales.
-    pub fn pendiente_real(&self) -> f64 {
-        (self.monto_a_pagar() - self.monto_pagado_real).max(0.0)
+    pub fn pendiente_real(&self) -> Dinero {
+        (self.monto_a_pagar() - self.monto_pagado_real).max_cero()
     }
 
     /// ¿Está atrasado y aún no se ha cubierto el mes corriente?
@@ -108,7 +109,7 @@ impl PresupuestoMensual {
         self.lineas.push(linea);
     }
 
-    pub fn total_ingresos(&self) -> f64 {
+    pub fn total_ingresos(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.categoria == Categoria::Ingreso)
@@ -116,7 +117,7 @@ impl PresupuestoMensual {
             .sum()
     }
 
-    pub fn total_gastos_fijos(&self) -> f64 {
+    pub fn total_gastos_fijos(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.categoria == Categoria::GastoFijo)
@@ -124,7 +125,7 @@ impl PresupuestoMensual {
             .sum()
     }
 
-    pub fn total_gastos_variables(&self) -> f64 {
+    pub fn total_gastos_variables(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.categoria == Categoria::GastoVariable)
@@ -132,7 +133,7 @@ impl PresupuestoMensual {
             .sum()
     }
 
-    pub fn total_pagos_deuda(&self) -> f64 {
+    pub fn total_pagos_deuda(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.categoria == Categoria::PagoDeuda)
@@ -140,7 +141,7 @@ impl PresupuestoMensual {
             .sum()
     }
 
-    pub fn total_ahorro(&self) -> f64 {
+    pub fn total_ahorro(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.categoria == Categoria::Ahorro)
@@ -148,18 +149,18 @@ impl PresupuestoMensual {
             .sum()
     }
 
-    pub fn total_egresos(&self) -> f64 {
+    pub fn total_egresos(&self) -> Dinero {
         self.total_gastos_fijos()
             + self.total_gastos_variables()
             + self.total_pagos_deuda()
             + self.total_ahorro()
     }
 
-    pub fn saldo(&self) -> f64 {
+    pub fn saldo(&self) -> Dinero {
         self.total_ingresos() - self.total_egresos()
     }
 
-    pub fn total_pagado(&self) -> f64 {
+    pub fn total_pagado(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.pagado && l.categoria != Categoria::Ingreso)
@@ -168,7 +169,7 @@ impl PresupuestoMensual {
     }
 
     /// Suma del dinero realmente pagado (incluye pagos parciales).
-    pub fn total_pagado_real(&self) -> f64 {
+    pub fn total_pagado_real(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| l.categoria != Categoria::Ingreso)
@@ -177,7 +178,7 @@ impl PresupuestoMensual {
     }
 
     /// Dinero disponible considerando lo realmente pagado.
-    pub fn disponible_real(&self) -> f64 {
+    pub fn disponible_real(&self) -> Dinero {
         self.total_ingresos() - self.total_pagado_real()
     }
 
@@ -186,7 +187,7 @@ impl PresupuestoMensual {
         self.lineas.iter().any(|l| l.esta_atrasado())
     }
 
-    pub fn total_pendiente(&self) -> f64 {
+    pub fn total_pendiente(&self) -> Dinero {
         self.lineas
             .iter()
             .filter(|l| !l.pagado && l.categoria != Categoria::Ingreso)
@@ -199,14 +200,14 @@ impl PresupuestoMensual {
     }
 
     /// Devuelve info de deudas con saldo total (nombre, pago mensual, saldo total, meses restantes)
-    pub fn info_deudas(&self) -> Vec<(&str, f64, f64, u32)> {
+    pub fn info_deudas(&self) -> Vec<(&str, Dinero, Dinero, u32)> {
         self.lineas
             .iter()
             .filter(|l| l.categoria == Categoria::PagoDeuda && l.saldo_total_deuda.is_some())
             .map(|l| {
                 let saldo = l.saldo_total_deuda.unwrap();
-                let meses = if l.monto > 0.0 {
-                    (saldo / l.monto).ceil() as u32
+                let meses = if !l.monto.es_cero() {
+                    saldo.ratio(l.monto).ceil() as u32
                 } else {
                     0
                 };
@@ -227,33 +228,17 @@ impl PresupuestoMensual {
         let pagado = self.total_pagado();
         let pendiente = self.total_pendiente();
 
-        let pct_fijos = if ingresos > 0.0 {
-            fijos / ingresos * 100.0
-        } else {
-            0.0
-        };
-        let pct_variables = if ingresos > 0.0 {
-            variables / ingresos * 100.0
-        } else {
-            0.0
-        };
-        let pct_deuda = if ingresos > 0.0 {
-            deuda / ingresos * 100.0
-        } else {
-            0.0
-        };
-        let pct_ahorro = if ingresos > 0.0 {
-            ahorro / ingresos * 100.0
-        } else {
-            0.0
-        };
+        let pct_fijos = fijos.ratio(ingresos) * 100.0;
+        let pct_variables = variables.ratio(ingresos) * 100.0;
+        let pct_deuda = deuda.ratio(ingresos) * 100.0;
+        let pct_ahorro = ahorro.ratio(ingresos) * 100.0;
 
-        let salud = if saldo.abs() < 0.01 {
+        let salud = if saldo.abs() < Dinero::desde_f64(0.01) {
             SaludPresupuesto::Perfecto
-        } else if saldo > 0.0 {
+        } else if !saldo.es_negativo() {
             SaludPresupuesto::SobraDinero(saldo)
         } else {
-            SaludPresupuesto::FaltaDinero(-saldo)
+            SaludPresupuesto::FaltaDinero(saldo.abs())
         };
 
         let mut alertas = Vec::new();
@@ -264,12 +249,12 @@ impl PresupuestoMensual {
                 pct_deuda
             ));
         }
-        if pct_ahorro < 5.0 && ahorro > 0.0 {
+        if pct_ahorro < 5.0 && !ahorro.es_cero() {
             alertas.push(format!(
                 "⚠️ Solo {:.0}% va a ahorro — intenta llegar al 10%",
                 pct_ahorro
             ));
-        } else if ahorro == 0.0 {
+        } else if ahorro.es_cero() {
             alertas.push("⚠️ No tienes ahorro asignado — aunque sea $25 ayudan".into());
         }
         if let SaludPresupuesto::FaltaDinero(f) = &salud {
@@ -302,21 +287,21 @@ impl PresupuestoMensual {
 #[derive(Debug, Clone)]
 pub enum SaludPresupuesto {
     Perfecto,
-    SobraDinero(f64),
-    FaltaDinero(f64),
+    SobraDinero(Dinero),
+    FaltaDinero(Dinero),
 }
 
 #[derive(Debug, Clone)]
 pub struct ResumenPresupuesto {
-    pub ingresos: f64,
-    pub gastos_fijos: f64,
-    pub gastos_variables: f64,
-    pub pagos_deuda: f64,
-    pub ahorro: f64,
-    pub egresos: f64,
-    pub saldo: f64,
-    pub pagado: f64,
-    pub pendiente: f64,
+    pub ingresos: Dinero,
+    pub gastos_fijos: Dinero,
+    pub gastos_variables: Dinero,
+    pub pagos_deuda: Dinero,
+    pub ahorro: Dinero,
+    pub egresos: Dinero,
+    pub saldo: Dinero,
+    pub pagado: Dinero,
+    pub pendiente: Dinero,
     pub pct_fijos: f64,
     pub pct_variables: f64,
     pub pct_deuda: f64,
@@ -337,11 +322,11 @@ pub struct PlantillaPresupuesto {
 pub struct LineaPlantilla {
     pub nombre: String,
     pub categoria: Categoria,
-    pub monto_default: f64,
+    pub monto_default: Dinero,
     pub fecha_limite: String,
     /// Saldo total de la deuda (solo para PagoDeuda)
     #[serde(default)]
-    pub saldo_total_deuda: Option<f64>,
+    pub saldo_total_deuda: Option<Dinero>,
     /// Meses atrasados arrastrados de la fuente (Carrington-style)
     #[serde(default)]
     pub meses_atrasados: u32,
@@ -408,7 +393,7 @@ impl PlantillaPresupuesto {
                 fecha_limite: pl.fecha_limite.clone(),
                 notas: String::new(),
                 saldo_total_deuda: pl.saldo_total_deuda,
-                monto_pagado_real: 0.0,
+                monto_pagado_real: Dinero::CERO,
                 meses_atrasados: pl.meses_atrasados,
                 frecuencia: pl.frecuencia.clone(),
             })
@@ -574,12 +559,12 @@ pub fn importar_excel(ruta: &Path) -> ImportacionExcel {
                     pres.agregar(LineaPresupuesto {
                         nombre,
                         categoria: cat,
-                        monto,
+                        monto: Dinero::desde_f64(monto),
                         pagado: true, // datos históricos
                         fecha_limite: String::new(),
                         notas: nombre_hoja.clone(),
                         saldo_total_deuda: None,
-                        monto_pagado_real: 0.0,
+                        monto_pagado_real: Dinero::CERO,
                         meses_atrasados: 0,
                         frecuencia: FrecuenciaPago::Mensual,
                     });
@@ -636,7 +621,7 @@ pub fn generar_plantilla_desde_importacion(meses: &[PresupuestoMensual]) -> Plan
     use std::collections::HashMap;
 
     // Agrupar por nombre y categoría, promediar montos
-    let mut cuentas: HashMap<String, (Categoria, Vec<f64>)> = HashMap::new();
+    let mut cuentas: HashMap<String, (Categoria, Vec<Dinero>)> = HashMap::new();
 
     for mes in meses {
         for linea in &mes.lineas {
@@ -651,7 +636,8 @@ pub fn generar_plantilla_desde_importacion(meses: &[PresupuestoMensual]) -> Plan
     let mut lineas: Vec<LineaPlantilla> = cuentas
         .into_iter()
         .map(|(nombre_lower, (cat, montos))| {
-            let promedio = montos.iter().sum::<f64>() / montos.len() as f64;
+            let suma: f64 = montos.iter().map(|d| d.a_f64()).sum();
+            let promedio = Dinero::desde_f64(suma / montos.len() as f64).redondear();
             // Capitalizar nombre
             let nombre = nombre_lower
                 .split_whitespace()
@@ -668,7 +654,7 @@ pub fn generar_plantilla_desde_importacion(meses: &[PresupuestoMensual]) -> Plan
             LineaPlantilla {
                 nombre,
                 categoria: cat,
-                monto_default: (promedio * 100.0).round() / 100.0,
+                monto_default: promedio,
                 fecha_limite: String::new(),
                 saldo_total_deuda: None,
                 meses_atrasados: 0,
@@ -713,80 +699,80 @@ mod tests {
         pres.agregar(LineaPresupuesto {
             nombre: "Sueldo".into(),
             categoria: Categoria::Ingreso,
-            monto: 3500.0,
+            monto: Dinero::desde_f64(3500.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Casa".into(),
             categoria: Categoria::GastoFijo,
-            monto: 1500.0,
+            monto: Dinero::desde_f64(1500.0),
             pagado: false,
             fecha_limite: "1".into(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Carro".into(),
             categoria: Categoria::GastoFijo,
-            monto: 750.0,
+            monto: Dinero::desde_f64(750.0),
             pagado: false,
             fecha_limite: "15".into(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "BOFA".into(),
             categoria: Categoria::PagoDeuda,
-            monto: 300.0,
+            monto: Dinero::desde_f64(300.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Comida".into(),
             categoria: Categoria::GastoVariable,
-            monto: 400.0,
+            monto: Dinero::desde_f64(400.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Savings".into(),
             categoria: Categoria::Ahorro,
-            monto: 50.0,
+            monto: Dinero::desde_f64(50.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
 
         // 3500 - 1500 - 750 - 300 - 400 - 50 = 500
-        assert_eq!(pres.total_ingresos(), 3500.0);
-        assert_eq!(pres.total_egresos(), 3000.0);
-        assert!((pres.saldo() - 500.0).abs() < 0.01);
+        assert_eq!(pres.total_ingresos(), Dinero::desde_f64(3500.0));
+        assert_eq!(pres.total_egresos(), Dinero::desde_f64(3000.0));
+        assert_eq!(pres.saldo(), Dinero::desde_f64(500.0));
     }
 
     #[test]
@@ -795,42 +781,42 @@ mod tests {
         pres.agregar(LineaPresupuesto {
             nombre: "Sueldo".into(),
             categoria: Categoria::Ingreso,
-            monto: 1000.0,
+            monto: Dinero::desde_f64(1000.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Renta".into(),
             categoria: Categoria::GastoFijo,
-            monto: 800.0,
+            monto: Dinero::desde_f64(800.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
         pres.agregar(LineaPresupuesto {
             nombre: "Ahorro".into(),
             categoria: Categoria::Ahorro,
-            monto: 200.0,
+            monto: Dinero::desde_f64(200.0),
             pagado: false,
             fecha_limite: String::new(),
             notas: String::new(),
             saldo_total_deuda: None,
-            monto_pagado_real: 0.0,
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: FrecuenciaPago::Mensual,
         });
 
         let resumen = pres.resumen();
-        assert!(resumen.saldo.abs() < 0.01);
+        assert!(resumen.saldo.abs() < Dinero::desde_f64(0.01));
         assert!(matches!(resumen.salud, SaludPresupuesto::Perfecto));
     }
 
@@ -852,7 +838,7 @@ mod tests {
                 LineaPlantilla {
                     nombre: "Sueldo".into(),
                     categoria: Categoria::Ingreso,
-                    monto_default: 3000.0,
+                    monto_default: Dinero::desde_f64(3000.0),
                     fecha_limite: String::new(),
                     saldo_total_deuda: None,
                     meses_atrasados: 0,
@@ -862,7 +848,7 @@ mod tests {
                 LineaPlantilla {
                     nombre: "Renta".into(),
                     categoria: Categoria::GastoFijo,
-                    monto_default: 1500.0,
+                    monto_default: Dinero::desde_f64(1500.0),
                     fecha_limite: "1".into(),
                     saldo_total_deuda: None,
                     meses_atrasados: 0,
@@ -872,7 +858,7 @@ mod tests {
                 LineaPlantilla {
                     nombre: "Seguro Vida".into(),
                     categoria: Categoria::GastoFijo,
-                    monto_default: 800.0,
+                    monto_default: Dinero::desde_f64(800.0),
                     fecha_limite: String::new(),
                     saldo_total_deuda: None,
                     meses_atrasados: 0,
@@ -887,11 +873,11 @@ mod tests {
         assert_eq!(mes_mayo.mes, "2026-05");
         assert_eq!(mes_mayo.lineas.len(), 2); // sin el seguro anual
         assert!(!mes_mayo.lineas[0].pagado);
-        assert_eq!(mes_mayo.lineas[0].monto, 3000.0);
+        assert_eq!(mes_mayo.lineas[0].monto, Dinero::desde_f64(3000.0));
 
         // Marzo (mes 3): anual con mes_pago=3 SÍ debe aparecer
         let mes_marzo = plantilla.generar_mes("2026-03");
         assert_eq!(mes_marzo.lineas.len(), 3);
-        assert_eq!(mes_marzo.lineas[2].monto, 800.0);
+        assert_eq!(mes_marzo.lineas[2].monto, Dinero::desde_f64(800.0));
     }
 }

@@ -20,6 +20,7 @@ use super::intent::{CategoriaIntencion, Intencion};
 use super::router;
 use crate::agenda::Agenda;
 use crate::ml::gastos::{AlmacenGastos, GastoReal};
+use crate::dinero::Dinero;
 use crate::ml::presupuesto_cero::Categoria;
 use crate::ml::sugerencias::{PlanPagosMes, TipoSugerencia};
 use crate::storage::AppState;
@@ -462,7 +463,7 @@ fn responder_resumen_financiero(
     let deuda_total: f64 = rastreador.deudas.iter().map(|d| d.saldo_actual()).sum();
     let num_deudas = rastreador.deudas.len();
 
-    let flujo_libre = ingreso - resumen.total_gastos - pagos_min;
+    let flujo_libre = ingreso - resumen.total_gastos.a_f64() - pagos_min;
     let salud = if ingreso <= 0.0 {
         ("Sin datos de ingreso", "⚪")
     } else if flujo_libre < 0.0 {
@@ -1457,17 +1458,17 @@ fn responder_historial_acreedor(
         return r;
     }
 
-    let total_gastos: f64 = encontrados
+    let total_gastos: Dinero = encontrados
         .iter()
-        .filter(|g| g.monto > 0.0)
+        .filter(|g| g.monto.es_positivo())
         .map(|g| g.monto)
         .sum();
-    let total_ingresos: f64 = encontrados
+    let total_ingresos: Dinero = encontrados
         .iter()
-        .filter(|g| g.monto < 0.0)
+        .filter(|g| g.monto.es_negativo())
         .map(|g| g.monto.abs())
         .sum();
-    let veces_pagado = encontrados.iter().filter(|g| g.monto > 0.0).count();
+    let veces_pagado = encontrados.iter().filter(|g| g.monto.es_positivo()).count();
 
     let mut texto = format!(
         "🔍 Historial de \"{}\" — {} registro(s) encontrado(s)\n\n\
@@ -1479,7 +1480,7 @@ fn responder_historial_acreedor(
         veces_pagado,
         total_gastos,
     );
-    if total_ingresos > 0.0 {
+    if total_ingresos.es_positivo() {
         texto.push_str(&format!("  💵 Total reembolso: ${:.2}\n", total_ingresos));
     }
 
@@ -1489,7 +1490,7 @@ fn responder_historial_acreedor(
     ];
     for g in &encontrados {
         let mes_str = meses.get(g.fecha.month0() as usize).unwrap_or(&"?");
-        let tipo = if g.monto < 0.0 {
+        let tipo = if g.monto.es_negativo() {
             "💵 Reembolso"
         } else {
             "💸 Pago    "

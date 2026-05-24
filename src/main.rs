@@ -41,6 +41,7 @@ use omniplanner::nlp::{DatosEntrenamiento, TipoRelacion, Valoracion};
 use omniplanner::seguridad::{
     self, banner_advertencia, resumen_auditoria_reciente, SesionSegura, TipoAuditoria,
 };
+use omniplanner::dinero::Dinero;
 use omniplanner::storage::AppState;
 use omniplanner::sync;
 use omniplanner::tasks::{Prioridad, Task, TaskStatus};
@@ -11346,7 +11347,7 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_pl
     // ── Estado real del mes (efectivo) ───────────────────────────────
     let pagado_real = pres.total_pagado_real();
     let te_queda = res.ingresos - pagado_real;
-    let falta_por_pagar: f64 = pres
+    let falta_por_pagar: Dinero = pres
         .lineas
         .iter()
         .filter(|l| l.categoria != Categoria::Ingreso)
@@ -11355,8 +11356,8 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_pl
 
     println!();
     println!("    {}", "▸ Estado real del mes (efectivo):".bold());
-    if res.egresos > 0.0 {
-        let pct_pagado = (pagado_real / res.egresos * 100.0).clamp(0.0, 100.0);
+    if res.egresos.es_positivo() {
+        let pct_pagado = (pagado_real.ratio(res.egresos) * 100.0).clamp(0.0, 100.0);
         let barra_len = 30;
         let lleno = ((pct_pagado / 100.0) * barra_len as f64) as usize;
         let vacio = barra_len - lleno;
@@ -11372,7 +11373,7 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_pl
         println!("    ✅ Pagado:        ${:.2}", pagado_real);
     }
     let te_queda_lbl = format!("    💰 Te queda:      ${:.2}", te_queda);
-    if te_queda >= 0.0 {
+    if !te_queda.es_negativo() {
         println!("{}", te_queda_lbl.green());
     } else {
         println!(
@@ -11388,11 +11389,11 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_pl
 
     // ── Colchón de seguridad ─────────────────────────────────────────
     if let Some(plan) = ing_plan {
-        let colchon_total = res.ingresos - plan;
+        let colchon_total = res.ingresos.a_f64() - plan;
         if colchon_total > 0.0 {
-            let colchon_plan_usado = (res.egresos - plan).max(0.0);
+            let colchon_plan_usado = (res.egresos.a_f64() - plan).max(0.0);
             let pagado_real = pres.total_pagado_real();
-            let colchon_real_usado = (pagado_real - plan).max(0.0);
+            let colchon_real_usado = (pagado_real.a_f64() - plan).max(0.0);
             let colchon_restante = (colchon_total - colchon_real_usado).max(0.0);
 
             println!();
@@ -11436,7 +11437,7 @@ pub(crate) fn mostrar_resumen_presupuesto_cero(pres: &PresupuestoMensual, ing_pl
                     "    {}",
                     format!(
                         "🔴 Déficit total: ${:.2} — excede incluso el colchón",
-                        res.egresos - res.ingresos
+                        (res.egresos - res.ingresos).a_f64()
                     )
                     .red()
                 );
@@ -11462,7 +11463,7 @@ pub(crate) fn configurar_colchon(state: &mut AppState) {
             .presupuesto
             .meses
             .last()
-            .map(|m| m.total_ingresos())
+            .map(|m| m.total_ingresos().a_f64())
             .unwrap_or(0.0);
         if ingresos_reales > 0.0 {
             let colchon = ingresos_reales - actual;
@@ -11608,7 +11609,7 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre: m.concepto.clone(),
             categoria: Categoria::Ingreso,
-            monto_default: (monto * 100.0).round() / 100.0,
+            monto_default: Dinero::desde_f64((monto * 100.0).round() / 100.0),
             fecha_limite: String::new(),
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -11629,7 +11630,7 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre: ing.concepto.clone(),
             categoria: Categoria::Ingreso,
-            monto_default: (monto * 100.0).round() / 100.0,
+            monto_default: Dinero::desde_f64((monto * 100.0).round() / 100.0),
             fecha_limite: String::new(),
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -11652,7 +11653,7 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre: g.concepto.clone(),
             categoria: cat,
-            monto_default: (monto * 100.0).round() / 100.0,
+            monto_default: Dinero::desde_f64((monto * 100.0).round() / 100.0),
             fecha_limite: String::new(),
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -11794,7 +11795,7 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
                 lineas.push(presupuesto_cero::LineaPlantilla {
                     nombre: d.nombre.clone(),
                     categoria: Categoria::GastoFijo,
-                    monto_default: monto_linea,
+                    monto_default: Dinero::desde_f64(monto_linea),
                     fecha_limite: String::new(),
                     saldo_total_deuda: None,
                     meses_atrasados: if es_mensual { atras_pi } else { 0 },
@@ -11813,9 +11814,9 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
             lineas.push(presupuesto_cero::LineaPlantilla {
                 nombre: d.nombre.clone(),
                 categoria: Categoria::PagoDeuda,
-                monto_default: (pi * 100.0).round() / 100.0,
+                monto_default: Dinero::desde_f64((pi * 100.0).round() / 100.0),
                 fecha_limite: String::new(),
-                saldo_total_deuda: if saldo > 0.0 { Some(saldo) } else { None },
+                saldo_total_deuda: if saldo > 0.0 { Some(Dinero::desde_f64(saldo)) } else { None },
                 meses_atrasados: atras_pi,
                 frecuencia: FrecuenciaPago::Mensual,
                 mes_pago: None,
@@ -11832,7 +11833,7 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
             lineas.push(presupuesto_cero::LineaPlantilla {
                 nombre: format!("{} — Escrow", d.nombre),
                 categoria: Categoria::GastoFijo,
-                monto_default: (escrow * 100.0).round() / 100.0,
+                monto_default: Dinero::desde_f64((escrow * 100.0).round() / 100.0),
                 fecha_limite: String::new(),
                 saldo_total_deuda: None,
                 meses_atrasados: atras_escrow,
@@ -11886,7 +11887,7 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
             lineas.push(presupuesto_cero::LineaPlantilla {
                 nombre: nombre.clone(),
                 categoria: Categoria::GastoFijo,
-                monto_default: monto,
+                monto_default: Dinero::desde_f64(monto),
                 fecha_limite: String::new(),
                 saldo_total_deuda: None,
                 meses_atrasados: atras,
@@ -11922,12 +11923,12 @@ pub(crate) fn importar_plantilla_desde_asesor(state: &mut AppState) -> bool {
     let total_ing: f64 = lineas
         .iter()
         .filter(|l| l.categoria == Categoria::Ingreso)
-        .map(|l| l.monto_default)
+        .map(|l| l.monto_default.a_f64())
         .sum();
     let total_eg: f64 = lineas
         .iter()
         .filter(|l| l.categoria != Categoria::Ingreso)
-        .map(|l| l.monto_default)
+        .map(|l| l.monto_default.a_f64())
         .sum();
 
     println!();
@@ -11994,7 +11995,7 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre,
             categoria: Categoria::Ingreso,
-            monto_default: monto,
+            monto_default: Dinero::desde_f64(monto),
             fecha_limite: fecha,
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -12025,7 +12026,7 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre,
             categoria: Categoria::GastoFijo,
-            monto_default: monto,
+            monto_default: Dinero::desde_f64(monto),
             fecha_limite: fecha,
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -12055,7 +12056,7 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre,
             categoria: Categoria::GastoVariable,
-            monto_default: monto,
+            monto_default: Dinero::desde_f64(monto),
             fecha_limite: String::new(),
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -12097,10 +12098,10 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre,
             categoria: Categoria::PagoDeuda,
-            monto_default: monto,
+            monto_default: Dinero::desde_f64(monto),
             fecha_limite: fecha,
             saldo_total_deuda: if saldo_total > 0.0 {
-                Some(saldo_total)
+                Some(Dinero::desde_f64(saldo_total))
             } else {
                 None
             },
@@ -12131,7 +12132,7 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
         lineas.push(presupuesto_cero::LineaPlantilla {
             nombre,
             categoria: Categoria::Ahorro,
-            monto_default: monto,
+            monto_default: Dinero::desde_f64(monto),
             fecha_limite: String::new(),
             saldo_total_deuda: None,
             meses_atrasados: 0,
@@ -12150,12 +12151,12 @@ pub(crate) fn crear_plantilla_manual(state: &mut AppState) {
     let total_ing: f64 = lineas
         .iter()
         .filter(|l| l.categoria == Categoria::Ingreso)
-        .map(|l| l.monto_default)
+        .map(|l| l.monto_default.a_f64())
         .sum();
     let total_eg: f64 = lineas
         .iter()
         .filter(|l| l.categoria != Categoria::Ingreso)
-        .map(|l| l.monto_default)
+        .map(|l| l.monto_default.a_f64())
         .sum();
     let saldo = total_ing - total_eg;
 
@@ -12401,8 +12402,8 @@ pub(crate) fn sincronizar_presupuesto_desde_rastreador(
         ln == needle || ln.contains(&needle) || needle.contains(&ln)
     })?;
 
-    linea.monto_pagado_real = monto_nuevo;
-    linea.pagado = monto_nuevo >= linea.monto * 0.95;
+    linea.monto_pagado_real = Dinero::desde_f64(monto_nuevo);
+    linea.pagado = monto_nuevo >= linea.monto.a_f64() * 0.95;
     let nombre_linea = linea.nombre.clone();
 
     // ── Emitir evento de pago en presupuesto y devolver su ID ──
@@ -12449,7 +12450,7 @@ pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
             .lineas
             .iter()
             .enumerate()
-            .filter(|(_, l)| l.categoria != Categoria::Ingreso && l.monto_pagado_real > 0.001)
+            .filter(|(_, l)| l.categoria != Categoria::Ingreso && l.monto_pagado_real.es_positivo())
             .map(|(i, _)| i)
             .collect();
 
@@ -12503,27 +12504,27 @@ pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
             "➖ Quitar solo una parte (monto específico)",
             "🔙 Cancelar",
         ];
-        let monto_a_revertir = match menu("¿Qué hacer?", sub) {
+        let monto_a_revertir: Dinero = match menu("¿Qué hacer?", sub) {
             Some(0) => pagado_actual,
             Some(1) => {
                 let m = pedir_f64(
                     &format!("  ¿Cuánto devolver? (máx ${:.2})", pagado_actual),
-                    pagado_actual,
+                    pagado_actual.a_f64(),
                 );
-                m.max(0.0).min(pagado_actual)
+                Dinero::desde_f64(m.max(0.0).min(pagado_actual.a_f64()))
             }
             _ => continue,
         };
 
-        if monto_a_revertir <= 0.0 {
+        if !monto_a_revertir.es_positivo() {
             continue;
         }
 
         // Aplicar reversión en presupuesto
         let l = &mut pres.lineas[idx];
-        l.monto_pagado_real = (l.monto_pagado_real - monto_a_revertir).max(0.0);
+        l.monto_pagado_real = (l.monto_pagado_real - monto_a_revertir).max_cero();
         // Si ya no cubre todo, dejar de marcar como pagado
-        if l.monto_pagado_real + 0.001 < l.monto_a_pagar() {
+        if l.monto_pagado_real.a_f64() + 0.001 < l.monto_a_pagar().a_f64() {
             l.pagado = false;
         }
 
@@ -12534,7 +12535,7 @@ pub(crate) fn quitar_pago(state: &mut AppState, mes: &str) {
         );
 
         // Revertir en Rastreador
-        let revertido = revertir_pago_rastreador(state, &nombre, mes, monto_a_revertir);
+        let revertido = revertir_pago_rastreador(state, &nombre, mes, monto_a_revertir.a_f64());
         if revertido {
             println!("  {} Saldo restaurado en Rastreador.", "🔗".cyan());
         }
@@ -12676,12 +12677,12 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                         pres.lineas.push(LineaPresupuesto {
                             nombre,
                             categoria: cat,
-                            monto,
+                            monto: Dinero::desde_f64(monto),
                             pagado: false,
                             fecha_limite: String::new(),
                             notas: String::new(),
-                            saldo_total_deuda: saldo,
-                            monto_pagado_real: 0.0,
+                            saldo_total_deuda: saldo.map(Dinero::desde_f64),
+                            monto_pagado_real: Dinero::CERO,
                             meses_atrasados: 0,
                             frecuencia: frec,
                         });
@@ -12747,12 +12748,12 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                             pres.lineas.push(LineaPresupuesto {
                                 nombre,
                                 categoria: Categoria::Ingreso,
-                                monto,
+                                monto: Dinero::desde_f64(monto),
                                 pagado: true, // ingresos se marcan como recibidos
                                 fecha_limite: String::new(),
                                 notas: String::new(),
                                 saldo_total_deuda: None,
-                                monto_pagado_real: monto,
+                                monto_pagado_real: Dinero::desde_f64(monto),
                                 meses_atrasados: 0,
                                 frecuencia: frec,
                             });
@@ -12776,7 +12777,7 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
         let ingresos = pres.total_ingresos();
         let pagado_real = pres.total_pagado_real();
         let disponible = ingresos - pagado_real;
-        let pendiente_total: f64 = pres
+        let pendiente_total: Dinero = pres
             .lineas
             .iter()
             .filter(|l| l.categoria != Categoria::Ingreso)
@@ -12789,7 +12790,7 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
         );
         println!("  │  💵 Ingresos del mes:   ${:>12.2}    │", ingresos);
         println!("  │  ✅ Pagado hasta ahora: ${:>12.2}    │", pagado_real);
-        let restante_lbl = if disponible >= 0.0 {
+        let restante_lbl = if !disponible.es_negativo() {
             format!("  │  💰 Te queda:           ${:>12.2}    │", disponible)
                 .green()
                 .to_string()
@@ -12855,7 +12856,7 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                 } else {
                     String::new()
                 };
-                let parcial = if l.monto_pagado_real > 0.0 {
+                let parcial = if l.monto_pagado_real.es_positivo() {
                     format!(" (parcial: ${:.2})", l.monto_pagado_real)
                         .yellow()
                         .to_string()
@@ -12886,14 +12887,14 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                 println!("  💳 {} — pendiente: ${:.2}", nombre.bold(), pendiente);
                 let monto_pago = pedir_f64(
                     &format!("  ¿Cuánto pagaste? (Enter = ${:.2})", pendiente),
-                    pendiente,
+                    pendiente.a_f64(),
                 );
                 if monto_pago <= 0.0 {
                     continue;
                 }
 
                 // Aviso si excede lo disponible
-                if monto_pago > disponible + 0.001 {
+                if monto_pago > disponible.a_f64() + 0.001 {
                     println!(
                         "  {} Este pago (${:.2}) excede tu dinero disponible (${:.2}).",
                         "⚠️".yellow(),
@@ -12911,11 +12912,11 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                 }
 
                 let l = &mut pres.lineas[idx];
-                l.monto_pagado_real += monto_pago;
+                l.monto_pagado_real += Dinero::desde_f64(monto_pago);
 
                 // Si cubrió un mes completo (o más), reducir meses_atrasados
-                if l.monto > 0.0 && l.meses_atrasados > 0 {
-                    let meses_cubiertos = (l.monto_pagado_real / l.monto).floor() as u32;
+                if l.monto.es_positivo() && l.meses_atrasados > 0 {
+                    let meses_cubiertos = (l.monto_pagado_real.ratio(l.monto)).floor() as u32;
                     let total_meses_a_pagar = l.meses_atrasados + 1;
                     if meses_cubiertos >= total_meses_a_pagar {
                         l.pagado = true;
@@ -12925,7 +12926,7 @@ pub(crate) fn marcar_pagos(state: &mut AppState, mes: &str) {
                         // mantén meses_atrasados pero descuenta los cubiertos
                         l.meses_atrasados = (l.meses_atrasados + 1).saturating_sub(meses_cubiertos);
                     }
-                } else if l.monto_pagado_real + 0.001 >= l.monto_a_pagar() {
+                } else if l.monto_pagado_real.a_f64() + 0.001 >= l.monto_a_pagar().a_f64() {
                     l.pagado = true;
                 }
 
@@ -13054,12 +13055,12 @@ pub(crate) fn agregar_linea_mes(state: &mut AppState, mes: &str) {
     pres.agregar(LineaPresupuesto {
         nombre: nombre.clone(),
         categoria: cat,
-        monto,
+        monto: Dinero::desde_f64(monto),
         pagado: false,
         fecha_limite: String::new(),
         notas: String::new(),
-        saldo_total_deuda: saldo_deuda,
-        monto_pagado_real: 0.0,
+        saldo_total_deuda: saldo_deuda.map(Dinero::desde_f64),
+        monto_pagado_real: Dinero::CERO,
         meses_atrasados,
         frecuencia,
     });
@@ -13081,7 +13082,7 @@ pub(crate) fn empujar_presupuesto_a_rastreador(state: &mut AppState, mes: &str) 
                 .filter(|l| {
                     l.categoria == Categoria::PagoDeuda || l.categoria == Categoria::GastoFijo
                 })
-                .map(|l| (l.nombre.clone(), l.monto_pagado_real))
+                .map(|l| (l.nombre.clone(), l.monto_pagado_real.a_f64()))
                 .collect()
         })
         .unwrap_or_default();
@@ -13264,12 +13265,12 @@ pub(crate) fn sincronizar_ingresos_rastreador(state: &mut AppState, mes: &str) {
                 pres.lineas.push(LineaPresupuesto {
                     nombre,
                     categoria: Categoria::Ingreso,
-                    monto,
+                    monto: Dinero::desde_f64(monto),
                     pagado: true,
                     fecha_limite: String::new(),
                     notas: String::new(),
                     saldo_total_deuda: None,
-                    monto_pagado_real: monto,
+                    monto_pagado_real: Dinero::desde_f64(monto),
                     meses_atrasados: 0,
                     frecuencia: frec,
                 });
@@ -13332,10 +13333,10 @@ pub(crate) fn editar_monto_linea(state: &mut AppState, mes: &str) {
                         "Nuevo monto para '{}' (actual: ${:.2})",
                         pres.lineas[idx].nombre, pres.lineas[idx].monto
                     ),
-                    pres.lineas[idx].monto,
+                    pres.lineas[idx].monto.a_f64(),
                 );
                 if nuevo > 0.0 {
-                    pres.lineas[idx].monto = nuevo;
+                    pres.lineas[idx].monto = Dinero::desde_f64(nuevo);
                     println!("  ✅ Actualizado a ${:.2}", nuevo);
                 }
             }
@@ -13357,7 +13358,7 @@ pub(crate) fn editar_monto_linea(state: &mut AppState, mes: &str) {
                 );
             }
             Some(2) => {
-                pres.lineas[idx].monto_pagado_real = 0.0;
+                pres.lineas[idx].monto_pagado_real = Dinero::CERO;
                 pres.lineas[idx].pagado = false;
                 println!("  ✅ Pago parcial reseteado");
             }
@@ -13394,22 +13395,22 @@ pub(crate) fn ver_pagos_realizados(state: &AppState, mes: &str) {
     let pagados: Vec<&LineaPresupuesto> = pres
         .lineas
         .iter()
-        .filter(|l| l.categoria != Categoria::Ingreso && l.monto_pagado_real > 0.0)
+        .filter(|l| l.categoria != Categoria::Ingreso && l.monto_pagado_real.es_positivo())
         .collect();
     let pendientes: Vec<&LineaPresupuesto> = pres
         .lineas
         .iter()
         .filter(|l| {
             l.categoria != Categoria::Ingreso
-                && l.monto_pagado_real <= 0.001
-                && l.pendiente_real() > 0.0
+                && !l.monto_pagado_real.es_positivo()
+                && l.pendiente_real().es_positivo()
         })
         .collect();
 
     println!();
     println!("  💵 Ingresos del mes:        ${:>12.2}", ingresos);
     println!("  ✅ Pagado hasta ahora:      ${:>12.2}", pagado);
-    let lbl_disp = if disponible >= 0.0 {
+    let lbl_disp = if !disponible.es_negativo() {
         format!("  💰 Te queda:                ${:>12.2}", disponible).green()
     } else {
         format!("  🔴 SOBREGIRO:               ${:>12.2}", disponible.abs()).red()
@@ -13519,13 +13520,13 @@ pub(crate) fn exportar_pagos_csv(state: &AppState, mes: &str) {
             .iter()
             .filter(|l| l.categoria != Categoria::Ingreso)
             .map(|l| l.monto_a_pagar())
-            .sum::<f64>(),
+            .sum::<Dinero>(),
         pres.total_pagado_real(),
         pres.lineas
             .iter()
             .filter(|l| l.categoria != Categoria::Ingreso)
             .map(|l| l.pendiente_real())
-            .sum::<f64>(),
+            .sum::<Dinero>(),
     ));
 
     match std::fs::write(&archivo, csv) {
@@ -13568,7 +13569,7 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
         Categoria::Ahorro,
     ];
 
-    let mut _running_total: f64 = 0.0;
+    let mut _running_total: Dinero = Dinero::CERO;
 
     for cat in &categorias {
         let items = pres.por_categoria(cat);
@@ -13576,7 +13577,7 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
             continue;
         }
 
-        let subtotal: f64 = items.iter().map(|l| l.monto).sum();
+        let subtotal: Dinero = items.iter().map(|l| l.monto).sum();
         let pagados = items.iter().filter(|l| l.pagado).count();
 
         println!();
@@ -13612,7 +13613,7 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
             } else {
                 String::new()
             };
-            let parcial = if item.monto_pagado_real > 0.0 && !item.pagado {
+            let parcial = if item.monto_pagado_real.es_positivo() && !item.pagado {
                 format!("  💵 parcial ${:.2}", item.monto_pagado_real)
                     .yellow()
                     .to_string()
@@ -13631,8 +13632,8 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
             // Mostrar info de saldo total para deudas
             if item.categoria == Categoria::PagoDeuda {
                 if let Some(saldo) = item.saldo_total_deuda {
-                    let meses_rest = if item.monto > 0.0 {
-                        (saldo / item.monto).ceil() as u32
+                    let meses_rest = if item.monto.es_positivo() {
+                        (saldo.ratio(item.monto)).ceil() as u32
                     } else {
                         0
                     };
@@ -13683,8 +13684,8 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
     }
 
     // Barra de progreso
-    if res.egresos > 0.0 {
-        let pct = res.pagado / res.egresos * 100.0;
+    if res.egresos.es_positivo() {
+        let pct = res.pagado.ratio(res.egresos) * 100.0;
         let barra_len = 40;
         let lleno = ((pct / 100.0) * barra_len as f64) as usize;
         let vacio = barra_len - lleno;
@@ -13713,11 +13714,11 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
         println!();
         println!("  💳 RESUMEN DE DEUDAS:");
         println!("  ─────────────────────────────────────────────────");
-        let mut total_deuda = 0.0f64;
-        let mut total_pago_mes = 0.0f64;
+        let mut total_deuda = Dinero::CERO;
+        let mut total_pago_mes = Dinero::CERO;
         for (nombre, pago, saldo, meses) in &deudas {
-            total_deuda += saldo;
-            total_pago_mes += pago;
+            total_deuda += *saldo;
+            total_pago_mes += *pago;
             println!(
                 "    • {:<25} Saldo: ${:>10.2}  Pago: ${:>7.2}/mes  ~{} meses",
                 nombre, saldo, pago, meses
@@ -13726,8 +13727,8 @@ pub(crate) fn ver_presupuesto_completo(state: &AppState, mes: &str) {
         println!("    ─────────────────────────────────────────────");
         println!("    Deuda total:  ${:.2}", total_deuda);
         println!("    Pago total/mes: ${:.2}", total_pago_mes);
-        if total_pago_mes > 0.0 {
-            let meses_global = (total_deuda / total_pago_mes).ceil() as u32;
+        if total_pago_mes.es_positivo() {
+            let meses_global = (total_deuda.ratio(total_pago_mes)).ceil() as u32;
             println!(
                 "    Libre de deuda en ~{} meses ({:.1} años)",
                 meses_global,
@@ -22539,7 +22540,7 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
             format!("{}/{}", ahora.month(), ahora.year()).cyan(),
             format!("${:.2}", resumen.total_gastos).red(),
             format!("${:.2}", resumen.total_ingresos).green(),
-            if resumen.balance >= 0.0 {
+            if !resumen.balance.es_negativo() {
                 format!("${:.2}", resumen.balance).green().to_string()
             } else {
                 format!("-${:.2}", resumen.balance.abs()).red().to_string()
@@ -22682,7 +22683,7 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                     );
                     println!("  {}", "─".repeat(72));
                     for g in &transacciones {
-                        let monto_fmt = if g.monto < 0.0 {
+                        let monto_fmt = if g.monto.es_negativo() {
                             format!("+${:.2}", g.monto.abs()).green().to_string()
                         } else {
                             format!("-${:.2}", g.monto).red().to_string()
@@ -22711,10 +22712,10 @@ pub(crate) fn menu_gastos_reales(state: &mut AppState) {
                 if por_cat.is_empty() {
                     println!("  {}", "(sin gastos este mes)".dimmed());
                 } else {
-                    let total: f64 = por_cat.iter().map(|(_, m)| m).sum();
+                    let total: f64 = por_cat.iter().map(|(_, m)| m.a_f64()).sum();
                     for (cat, monto) in &por_cat {
                         let pct = if total > 0.0 {
-                            monto / total * 100.0
+                            monto.a_f64() / total * 100.0
                         } else {
                             0.0
                         };
@@ -23033,8 +23034,8 @@ fn af_buscar(state: &AppState, query: &str) {
     );
     println!("  {}", "─".repeat(75).dimmed());
 
-    let mut suma_gastos: f64 = 0.0;
-    let mut suma_ingresos: f64 = 0.0;
+    let mut suma_gastos = Dinero::CERO;
+    let mut suma_ingresos = Dinero::CERO;
 
     let imprimir = |g: &&omniplanner::ml::gastos::GastoReal| {
         let monto_str = if g.es_ingreso() {
@@ -23080,13 +23081,13 @@ fn af_buscar(state: &AppState, query: &str) {
     }
 
     println!("  {}", "─".repeat(75).dimmed());
-    if suma_gastos > 0.0 {
+    if suma_gastos.es_positivo() {
         println!(
             "  Total gastos encontrados:   {}",
             format!("-{:.2}", suma_gastos).red()
         );
     }
-    if suma_ingresos > 0.0 {
+    if suma_ingresos.es_positivo() {
         println!(
             "  Total ingresos encontrados: {}",
             format!("+{:.2}", suma_ingresos).green()
@@ -23164,7 +23165,7 @@ fn af_validar(state: &AppState) {
         let montos: Vec<f64> = transacciones
             .iter()
             .filter(|g| !g.es_ingreso())
-            .map(|g| g.monto_abs())
+            .map(|g| g.monto_abs().a_f64())
             .collect();
         if !montos.is_empty() {
             let media = montos.iter().sum::<f64>() / montos.len() as f64;
@@ -23174,7 +23175,7 @@ fn af_validar(state: &AppState) {
             let umbral = media + 3.0 * sigma;
             let outliers: Vec<_> = transacciones
                 .iter()
-                .filter(|g| !g.es_ingreso() && g.monto_abs() > umbral)
+                .filter(|g| !g.es_ingreso() && g.monto_abs().a_f64() > umbral)
                 .collect();
             if !outliers.is_empty() {
                 advertencias.push(format!(
@@ -23211,7 +23212,7 @@ fn af_validar(state: &AppState) {
         NaiveDate::from_ymd_opt(hoy.year(), 1, 1).unwrap_or(hoy),
         hoy,
     );
-    if total_gastos > total_ingresos && total_ingresos > 0.0 {
+    if total_gastos > total_ingresos && total_ingresos.es_positivo() {
         advertencias.push(format!(
             "Balance anual negativo: ingresos {:.2} < gastos {:.2}",
             total_ingresos, total_gastos
@@ -23406,14 +23407,14 @@ fn af_optimizar(state: &AppState) {
     println!(
         "  {:<22} {:>12}  {:>12}",
         "Balance:",
-        if resumen_actual.balance >= 0.0 {
+        if !resumen_actual.balance.es_negativo() {
             format!("+{:.2}", resumen_actual.balance)
                 .green()
                 .to_string()
         } else {
             format!("{:.2}", resumen_actual.balance).red().to_string()
         },
-        if resumen_ant.balance >= 0.0 {
+        if !resumen_ant.balance.es_negativo() {
             format!("+{:.2}", resumen_ant.balance).green().to_string()
         } else {
             format!("{:.2}", resumen_ant.balance).red().to_string()
@@ -23437,16 +23438,16 @@ fn af_optimizar(state: &AppState) {
         let total_cat: f64 = por_cat
             .iter()
             .filter(|(c, _)| c.nombre() != "Ingreso")
-            .map(|(_, v)| *v)
+            .map(|(_, v)| v.a_f64())
             .sum();
         let mut cats_gasto: Vec<_> = por_cat
             .iter()
             .filter(|(c, _)| c.nombre() != "Ingreso")
             .collect();
-        cats_gasto.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        cats_gasto.sort_by(|a, b| b.1.cmp(&a.1));
         for (cat, monto) in &cats_gasto {
             let pct = if total_cat > 0.0 {
-                monto / total_cat * 100.0
+                monto.a_f64() / total_cat * 100.0
             } else {
                 0.0
             };
@@ -23465,10 +23466,9 @@ fn af_optimizar(state: &AppState) {
     }
 
     // Variación mes a mes
-    if resumen_ant.total_gastos > 0.0 {
-        let variacion = (resumen_actual.total_gastos - resumen_ant.total_gastos)
-            / resumen_ant.total_gastos
-            * 100.0;
+    if resumen_ant.total_gastos.es_positivo() {
+        let variacion = resumen_actual.total_gastos
+            .ratio(resumen_ant.total_gastos) * 100.0 - 100.0;
         if variacion > 15.0 {
             println!(
                 "  {} Tus gastos subieron un {:.1}% respecto al mes anterior.",
@@ -23488,12 +23488,10 @@ fn af_optimizar(state: &AppState) {
     println!("  {} Sugerencias de optimización:\n", "💡".yellow().bold());
     let mut sugs: Vec<&str> = Vec::new();
 
-    if resumen_actual.balance < 0.0 {
+    if resumen_actual.balance.es_negativo() {
         sugs.push("Tu balance es negativo este mes. Revisa los gastos variables para reducirlos.");
     }
-    if resumen_actual.total_gastos > resumen_actual.total_ingresos * 0.9
-        && resumen_actual.total_ingresos > 0.0
-    {
+    if resumen_actual.total_gastos.ratio(resumen_actual.total_ingresos) > 0.9 {
         sugs.push("Estás gastando más del 90% de tus ingresos. Considera aumentar el ahorro.");
     }
     if resumen_actual.num_transacciones > 50 {
@@ -23510,7 +23508,7 @@ fn af_optimizar(state: &AppState) {
         .filter(|(c, _)| c.nombre() != "Ingreso")
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
     {
-        if resumen_actual.total_gastos > 0.0 && monto_top / resumen_actual.total_gastos > 0.5 {
+        if monto_top.ratio(resumen_actual.total_gastos) > 0.5 {
             sugs.push(&*Box::leak(
                 format!(
                     "La categoría '{}' representa más del 50% de tus gastos. ¿Puedes reducirla?",
@@ -23534,9 +23532,9 @@ fn af_optimizar(state: &AppState) {
     }
 
     // Proyección de ahorro
-    if resumen_actual.total_ingresos > 0.0 {
-        let tasa_ahorro = ((resumen_actual.total_ingresos - resumen_actual.total_gastos)
-            / resumen_actual.total_ingresos)
+    if resumen_actual.total_ingresos.es_positivo() {
+        let tasa_ahorro = (resumen_actual.total_ingresos - resumen_actual.total_gastos)
+            .ratio(resumen_actual.total_ingresos)
             .max(0.0);
         println!(
             "  {} Tasa de ahorro actual: {:.1}%",

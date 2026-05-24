@@ -9,6 +9,8 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::dinero::Dinero;
+
 // ─── Transacción individual ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,7 +20,7 @@ pub struct GastoReal {
     pub descripcion: String,
     pub categoria: Categoria,
     /// Monto positivo = gasto/egreso; negativo = ingreso/reembolso
-    pub monto: f64,
+    pub monto: Dinero,
     /// Nombre de la línea de presupuesto a la que pertenece (opcional)
     #[serde(default)]
     pub linea_presupuesto: Option<String>,
@@ -41,7 +43,7 @@ impl GastoReal {
             fecha,
             descripcion: descripcion.into(),
             categoria,
-            monto,
+            monto: Dinero::desde_f64(monto),
             linea_presupuesto: None,
             metodo_pago: String::new(),
             notas: String::new(),
@@ -49,10 +51,10 @@ impl GastoReal {
     }
 
     pub fn es_ingreso(&self) -> bool {
-        self.monto < 0.0
+        self.monto.es_negativo()
     }
 
-    pub fn monto_abs(&self) -> f64 {
+    pub fn monto_abs(&self) -> Dinero {
         self.monto.abs()
     }
 }
@@ -78,30 +80,30 @@ impl AlmacenGastos {
     }
 
     /// Total de gastos (positivos) en un rango de fechas
-    pub fn total_gastos_rango(&self, desde: NaiveDate, hasta: NaiveDate) -> f64 {
+    pub fn total_gastos_rango(&self, desde: NaiveDate, hasta: NaiveDate) -> Dinero {
         self.transacciones
             .iter()
-            .filter(|g| g.fecha >= desde && g.fecha <= hasta && g.monto > 0.0)
+            .filter(|g| g.fecha >= desde && g.fecha <= hasta && g.monto.es_positivo())
             .map(|g| g.monto)
             .sum()
     }
 
     /// Total de ingresos (negativos → abs) en un rango de fechas
-    pub fn total_ingresos_rango(&self, desde: NaiveDate, hasta: NaiveDate) -> f64 {
+    pub fn total_ingresos_rango(&self, desde: NaiveDate, hasta: NaiveDate) -> Dinero {
         self.transacciones
             .iter()
-            .filter(|g| g.fecha >= desde && g.fecha <= hasta && g.monto < 0.0)
+            .filter(|g| g.fecha >= desde && g.fecha <= hasta && g.monto.es_negativo())
             .map(|g| g.monto.abs())
             .sum()
     }
 
     /// Gastos agrupados por categoría en un rango
-    pub fn por_categoria(&self, desde: NaiveDate, hasta: NaiveDate) -> Vec<(Categoria, f64)> {
-        let mut mapa: Vec<(Categoria, f64)> = Vec::new();
+    pub fn por_categoria(&self, desde: NaiveDate, hasta: NaiveDate) -> Vec<(Categoria, Dinero)> {
+        let mut mapa: Vec<(Categoria, Dinero)> = Vec::new();
         for g in self
             .transacciones
             .iter()
-            .filter(|g| g.fecha >= desde && g.fecha <= hasta && g.monto > 0.0)
+            .filter(|g| g.fecha >= desde && g.fecha <= hasta && g.monto.es_positivo())
         {
             if let Some(entry) = mapa.iter_mut().find(|(c, _)| c == &g.categoria) {
                 entry.1 += g.monto;
@@ -109,8 +111,8 @@ impl AlmacenGastos {
                 mapa.push((g.categoria.clone(), g.monto));
             }
         }
-        // Ordenar de mayor a menor gasto
-        mapa.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Ordenar de mayor a menor gasto (Dinero: Ord, sin unwrap)
+        mapa.sort_by(|a, b| b.1.cmp(&a.1));
         mapa
     }
 
@@ -138,14 +140,14 @@ impl AlmacenGastos {
     /// Resumen textual de un mes: total gasto, total ingreso, balance
     pub fn resumen_mes(&self, anio: i32, mes: u32) -> ResumenMes {
         let transacciones = self.del_mes(anio, mes);
-        let total_gastos: f64 = transacciones
+        let total_gastos: Dinero = transacciones
             .iter()
-            .filter(|g| g.monto > 0.0)
+            .filter(|g| g.monto.es_positivo())
             .map(|g| g.monto)
             .sum();
-        let total_ingresos: f64 = transacciones
+        let total_ingresos: Dinero = transacciones
             .iter()
-            .filter(|g| g.monto < 0.0)
+            .filter(|g| g.monto.es_negativo())
             .map(|g| g.monto.abs())
             .sum();
         ResumenMes {
@@ -163,9 +165,9 @@ impl AlmacenGastos {
 pub struct ResumenMes {
     pub anio: i32,
     pub mes: u32,
-    pub total_gastos: f64,
-    pub total_ingresos: f64,
-    pub balance: f64,
+    pub total_gastos: Dinero,
+    pub total_ingresos: Dinero,
+    pub balance: Dinero,
     pub num_transacciones: usize,
 }
 

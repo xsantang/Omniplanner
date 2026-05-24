@@ -170,6 +170,18 @@ impl AppState {
         fs::copy(&ruta, &backup_1).ok();
     }
 
+    /// Escribe `contenido` en `ruta` de forma atómica:
+    /// primero vuelca a `ruta.tmp`, luego hace rename.
+    /// Si el proceso muere a mitad, el archivo original queda intacto.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn escribir_atomico(ruta: &PathBuf, contenido: &str) -> Result<(), String> {
+        let tmp = ruta.with_extension("json.tmp");
+        fs::write(&tmp, contenido)
+            .map_err(|e| format!("Error escribiendo tmp {}: {}", tmp.display(), e))?;
+        fs::rename(&tmp, ruta)
+            .map_err(|e| format!("Error renombrando a {}: {}", ruta.display(), e))
+    }
+
     pub fn guardar(&mut self) -> Result<(), String> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -190,8 +202,7 @@ impl AppState {
 
             let json = serde_json::to_string_pretty(self)
                 .map_err(|e| format!("Error serializando: {}", e))?;
-            fs::write(&ruta, &json)
-                .map_err(|e| format!("Error escribiendo {}: {}", ruta.display(), e))?;
+            Self::escribir_atomico(&ruta, &json)?;
 
             // Auto-sync a Gist (silencioso, no bloquea en error)
             #[cfg(feature = "desktop")]
@@ -200,8 +211,9 @@ impl AppState {
                     Ok(gist_id) => {
                         if self.sync.gist_id.is_empty() || self.sync.gist_id != gist_id {
                             self.sync.gist_id = gist_id;
-                            let json2 = serde_json::to_string_pretty(self).unwrap_or_default();
-                            fs::write(&ruta, json2).ok();
+                            if let Ok(json2) = serde_json::to_string_pretty(self) {
+                                Self::escribir_atomico(&ruta, &json2).ok();
+                            }
                         }
                     }
                     Err(_e) => {}
@@ -281,8 +293,9 @@ impl AppState {
                         state.sync.email_remitente = sync_local.email_remitente;
                         state.sync.email_destinatario = sync_local.email_destinatario;
                         // Guardar la versión más nueva localmente
-                        let json = serde_json::to_string_pretty(&state).unwrap_or_default();
-                        fs::write(&ruta, json).ok();
+                        if let Ok(json) = serde_json::to_string_pretty(&state) {
+                            Self::escribir_atomico(&ruta, &json).ok();
+                        }
                         eprintln!("  ☁ Datos actualizados desde la nube.");
                     }
                 }
@@ -310,7 +323,7 @@ impl AppState {
                 if let Ok(state) = serde_json::from_str::<Self>(&contenido) {
                     eprintln!("  ✓ Restaurado desde backup local #{}", i);
                     // Reescribir data.json con el backup bueno
-                    fs::write(&ruta, &contenido).ok();
+                    Self::escribir_atomico(&ruta, &contenido).ok();
                     return Ok(state);
                 }
             }
@@ -339,7 +352,7 @@ impl AppState {
                             if let Ok(contenido_remoto) = crate::sync::gist::gist_pull(&cfg) {
                                 if let Ok(state) = serde_json::from_str::<Self>(&contenido_remoto) {
                                     eprintln!("  ✓ Restaurado desde GitHub Gist.");
-                                    fs::write(&ruta, &contenido_remoto).ok();
+                                    Self::escribir_atomico(&ruta, &contenido_remoto).ok();
                                     return Ok(state);
                                 }
                             }

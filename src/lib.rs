@@ -23,6 +23,7 @@ pub mod canvas;
 pub mod casos;
 pub mod cobranzas;
 pub mod contrasenias;
+pub mod dinero;
 pub mod cripto;
 pub mod diagrams;
 pub mod eventos;

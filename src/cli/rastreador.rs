@@ -2543,7 +2543,7 @@ pub fn rastreador_revisar_deuda_individual(state: &AppState) {
                             ln.contains(&dn) || dn.contains(&ln)
                         })
                     })
-                    .map(|l| (l.monto, l.monto_pagado_real));
+                    .map(|l| (l.monto.a_f64(), l.monto_pagado_real.a_f64()));
                 mostrar_analisis_deuda_individual(deuda, datos_pres);
             }
             _ => return,
@@ -6802,6 +6802,38 @@ pub fn rastreador_seleccionar_calcular(state: &mut AppState) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 pub fn rastreador_consolidar_deudas(state: &mut AppState) {
+    loop {
+        limpiar();
+        println!(
+            "{}",
+            "╔══════════════════════════════════════════════════════════════════╗".cyan()
+        );
+        println!(
+            "{}",
+            "║  🔄 CONSOLIDACIÓN DE DEUDAS                                    ║"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "╚══════════════════════════════════════════════════════════════════╝".cyan()
+        );
+        println!();
+
+        let sub_opciones = &[
+            "💰  Evaluar nuevo préstamo de consolidación",
+            "📋  Ver detalle de mi préstamo de consolidación",
+            "🔙  Volver",
+        ];
+        match menu("¿Qué deseas hacer?", sub_opciones) {
+            Some(0) => rastreador_consolidar_evaluar(state),
+            Some(1) => rastreador_detalle_prestamo_consolidacion(state),
+            _ => return,
+        }
+    }
+}
+
+fn rastreador_consolidar_evaluar(state: &mut AppState) {
     limpiar();
     println!(
         "{}",
@@ -6809,13 +6841,13 @@ pub fn rastreador_consolidar_deudas(state: &mut AppState) {
     );
     println!(
         "{}",
-        "║  🔄 CONSOLIDACIÓN DE DEUDAS                                    ║"
+        "║  💰 EVALUAR NUEVO PRÉSTAMO DE CONSOLIDACIÓN                    ║"
             .cyan()
             .bold()
     );
     println!(
         "{}",
-        "║  Evalúa si un préstamo de consolidación te conviene            ║".cyan()
+        "║  ¿Conviene este préstamo para saldar tus deudas?               ║".cyan()
     );
     println!(
         "{}",
@@ -7237,6 +7269,586 @@ pub fn rastreador_consolidar_deudas(state: &mut AppState) {
             _ => return,
         }
     }
+}
+
+fn rastreador_detalle_prestamo_consolidacion(state: &mut AppState) {
+    limpiar();
+    separador("📋 DETALLE DE PRÉSTAMO DE CONSOLIDACIÓN");
+
+    let indices_activas: Vec<usize> = state
+        .asesor
+        .rastreador
+        .deudas
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.activa && d.saldo_actual() > 0.01)
+        .map(|(i, _)| i)
+        .collect();
+
+    if indices_activas.is_empty() {
+        println!("  Sin deudas activas. Primero agrega o evalúa un préstamo de consolidación.");
+        pausa();
+        return;
+    }
+
+    let etiquetas: Vec<String> = indices_activas
+        .iter()
+        .map(|&i| {
+            let d = &state.asesor.rastreador.deudas[i];
+            format!(
+                "{} — ${:.2} saldo | {:.1}% APR | ${:.2}/mes",
+                d.nombre,
+                d.saldo_actual(),
+                d.tasa_anual,
+                d.pago_total_mensual()
+            )
+        })
+        .collect();
+
+    let refs: Vec<&str> = etiquetas.iter().map(|s| s.as_str()).collect();
+    let idx_sel = match menu("Selecciona el préstamo de consolidación a revisar:", &refs) {
+        Some(i) => i,
+        None => return,
+    };
+    let idx_real = indices_activas[idx_sel];
+    let deuda = state.asesor.rastreador.deudas[idx_real].clone();
+
+    limpiar();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        format!(
+            "║  📋 {:<59}║",
+            &deuda.nombre[..deuda.nombre.len().min(58)]
+        )
+        .cyan()
+        .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+
+    let saldo_actual = deuda.saldo_actual();
+    let saldo_inicial = if deuda.saldo_inicial > 0.01 {
+        deuda.saldo_inicial
+    } else {
+        deuda.historial.first().map(|m| m.saldo_inicio).unwrap_or(saldo_actual)
+    };
+    let tasa_mensual = deuda.tasa_anual / 100.0 / 12.0;
+    let pago_mensual = deuda.pago_total_mensual();
+    let meses_pagados = deuda.historial.len() as u32;
+
+    let (meses_restantes, int_restante, total_restante) =
+        simular_pagos_simple(saldo_actual, tasa_mensual, pago_mensual);
+
+    let total_pagado_hist: f64 = deuda.historial.iter().map(|m| m.pago).sum();
+    let int_pagado_hist: f64 = deuda.historial.iter().map(|m| m.intereses).sum();
+    let capital_pagado_hist = (total_pagado_hist - int_pagado_hist).max(0.0);
+
+    // ── SECCIÓN 1: Datos del préstamo ─────────────────────────────────────
+    separador("📌 DATOS DEL PRÉSTAMO");
+    println!("  {:<38} {}", "Nombre:", deuda.nombre.cyan().bold());
+    println!(
+        "  {:<38} {}",
+        "Saldo inicial declarado:",
+        format!("${:.2}", saldo_inicial).yellow()
+    );
+    println!(
+        "  {:<38} {}",
+        "Saldo actual:",
+        format!("${:.2}", saldo_actual).cyan().bold()
+    );
+    println!(
+        "  {:<38} {}",
+        "Tasa anual (APR):",
+        format!("{:.2}%", deuda.tasa_anual).red()
+    );
+    println!(
+        "  {:<38} {}",
+        "Pago mensual:",
+        format!("${:.2}", pago_mensual).green().bold()
+    );
+    println!("  {:<38} {}", "Meses pagados:", format!("{}", meses_pagados).yellow());
+    println!(
+        "  {:<38} {}",
+        "Meses restantes (proyección):",
+        format!("{}", meses_restantes).cyan()
+    );
+    println!();
+    println!(
+        "  {:<38} {}",
+        "Ya pagaste (acumulado):",
+        format!("${:.2}", total_pagado_hist).green()
+    );
+    println!(
+        "  {:<38} {}",
+        "  ↳ en intereses:",
+        format!("${:.2}", int_pagado_hist).red()
+    );
+    println!(
+        "  {:<38} {}",
+        "  ↳ abono a capital:",
+        format!("${:.2}", capital_pagado_hist).cyan()
+    );
+    println!();
+    println!(
+        "  {:<38} {}",
+        "Intereses restantes por pagar:",
+        format!("${:.2}", int_restante).red()
+    );
+    println!(
+        "  {:<38} {}",
+        "Total restante a pagar:",
+        format!("${:.2}", total_restante).yellow()
+    );
+    println!(
+        "  {:<38} {}",
+        "GRAN TOTAL (pagado + por pagar):",
+        format!("${:.2}", total_pagado_hist + total_restante).red().bold()
+    );
+    println!();
+    pausa();
+
+    // ── SECCIÓN 2: Historial de pagos ─────────────────────────────────────
+    if !deuda.historial.is_empty() {
+        limpiar();
+        separador("📅 HISTORIAL DE PAGOS MES A MES");
+        println!(
+            "  {:<8} {:>12} {:>12} {:>12} {:>12} {:>12}",
+            "Mes", "Saldo ini.", "Pago", "Intereses", "A capital", "Saldo fin."
+        );
+        println!("  {}", "─".repeat(74));
+
+        let mut acum_pago = 0.0f64;
+        let mut acum_int = 0.0f64;
+        let mut acum_cap = 0.0f64;
+
+        for m in &deuda.historial {
+            let a_capital = (m.pago - m.intereses).max(0.0);
+            acum_pago += m.pago;
+            acum_int += m.intereses;
+            acum_cap += a_capital;
+            let nota_str = if !m.nota.is_empty() {
+                format!("  ← {}", m.nota)
+            } else {
+                String::new()
+            };
+            println!(
+                "  {:<8} {:>12} {:>12} {:>12} {:>12} {:>12}{}",
+                m.mes,
+                format!("${:.2}", m.saldo_inicio),
+                format!("${:.2}", m.pago).green(),
+                format!("${:.2}", m.intereses).red(),
+                format!("${:.2}", a_capital).cyan(),
+                format!("${:.2}", m.saldo_final),
+                nota_str.dimmed()
+            );
+        }
+        println!("  {}", "─".repeat(74));
+        println!(
+            "  {:<8} {:>12} {:>12} {:>12} {:>12}",
+            "TOTAL",
+            "",
+            format!("${:.2}", acum_pago).green().bold(),
+            format!("${:.2}", acum_int).red().bold(),
+            format!("${:.2}", acum_cap).cyan().bold()
+        );
+        println!();
+        pausa();
+    }
+
+    // ── SECCIÓN 3: Proyección de amortización ─────────────────────────────
+    limpiar();
+    separador("📈 PROYECCIÓN DE AMORTIZACIÓN (desde saldo actual)");
+    println!(
+        "  Saldo actual: {}  |  Tasa: {:.2}%/año  |  Pago: ${:.2}/mes",
+        format!("${:.2}", saldo_actual).cyan(),
+        deuda.tasa_anual,
+        pago_mensual
+    );
+    println!();
+
+    if meses_restantes > 0 {
+        let max_mostrar = meses_restantes.min(36);
+        println!(
+            "  {:<6} {:>12} {:>12} {:>12} {:>12} {:>13}",
+            "Mes", "Saldo ini.", "Interés", "A capital", "Pago", "Saldo fin."
+        );
+        println!("  {}", "─".repeat(74));
+
+        let mut saldo = saldo_actual;
+        for mes_num in 1..=max_mostrar {
+            let saldo_ini = saldo;
+            let interes = saldo_ini * tasa_mensual;
+            saldo = saldo_ini + interes;
+            let pago = pago_mensual.min(saldo);
+            let a_capital = (pago - interes).max(0.0);
+            saldo -= pago;
+            let saldo_fin = if saldo < 0.01 { 0.0 } else { saldo };
+
+            println!(
+                "  {:<6} {:>12} {:>12} {:>12} {:>12} {:>13}",
+                mes_num,
+                format!("${:.2}", saldo_ini),
+                format!("${:.2}", interes).red(),
+                format!("${:.2}", a_capital).cyan(),
+                format!("${:.2}", pago).green(),
+                format!("${:.2}", saldo_fin)
+            );
+
+            saldo = saldo_fin;
+            if saldo_fin <= 0.01 {
+                break;
+            }
+        }
+        println!("  {}", "─".repeat(74));
+        if meses_restantes > 36 {
+            println!(
+                "  {} mostrando primeros 36 de {} meses totales",
+                "...".dimmed(),
+                meses_restantes
+            );
+        }
+        println!(
+            "  Intereses totales restantes: {}",
+            format!("${:.2}", int_restante).red().bold()
+        );
+    } else {
+        println!("  ✅ El préstamo está liquidado.");
+    }
+    println!();
+    pausa();
+
+    // ── SECCIÓN 4: Comparativa ────────────────────────────────────────────
+    limpiar();
+    separador("⚖️  COMPARATIVA — Lo que hiciste vs lo que no estabas haciendo");
+    println!();
+    println!("  Compara el préstamo de consolidación contra las deudas originales.");
+    println!();
+
+    let opciones_comp = &[
+        "📋  Usar deudas inactivas del rastreador (las que el préstamo liquidó)",
+        "✏️   Ingresar datos manualmente",
+        "🔙  Omitir",
+    ];
+    match menu("¿Cómo obtener los datos del escenario anterior?", opciones_comp) {
+        Some(0) => {
+            let inactivas: Vec<usize> = state
+                .asesor
+                .rastreador
+                .deudas
+                .iter()
+                .enumerate()
+                .filter(|(i, d)| !d.activa && *i != idx_real)
+                .map(|(i, _)| i)
+                .collect();
+
+            if inactivas.is_empty() {
+                println!("  Sin deudas inactivas registradas. Usa la opción manual.");
+                pausa();
+                return;
+            }
+
+            let mut seleccionadas: Vec<usize> = Vec::new();
+            loop {
+                let mut opts: Vec<String> = inactivas
+                    .iter()
+                    .map(|&i| {
+                        let d = &state.asesor.rastreador.deudas[i];
+                        let saldo_d = d
+                            .historial
+                            .first()
+                            .map(|m| m.saldo_inicio)
+                            .unwrap_or(d.saldo_inicial);
+                        let mark = if seleccionadas.contains(&i) { "✅ " } else { "   " };
+                        format!("{}{} — ${:.2} al {:.1}%", mark, d.nombre, saldo_d, d.tasa_anual)
+                    })
+                    .collect();
+                opts.push("✅  Listo — calcular comparativa".to_string());
+                let refs2: Vec<&str> = opts.iter().map(|s| s.as_str()).collect();
+                match menu(
+                    "Selecciona deudas liquidadas por este préstamo ('Listo' para terminar)",
+                    &refs2,
+                ) {
+                    Some(i) if i < inactivas.len() => {
+                        let real_i = inactivas[i];
+                        if seleccionadas.contains(&real_i) {
+                            seleccionadas.retain(|&x| x != real_i);
+                        } else {
+                            seleccionadas.push(real_i);
+                        }
+                    }
+                    _ => break,
+                }
+            }
+
+            if seleccionadas.is_empty() {
+                pausa();
+                return;
+            }
+
+            let mut saldo_orig_total = 0.0f64;
+            let mut pago_orig_total = 0.0f64;
+            let mut int_orig_total = 0.0f64;
+            let mut total_orig_pago = 0.0f64;
+            let mut meses_orig_max = 0u32;
+
+            for &idx_d in &seleccionadas {
+                let d = &state.asesor.rastreador.deudas[idx_d];
+                let saldo_d = d
+                    .historial
+                    .first()
+                    .map(|m| m.saldo_inicio)
+                    .unwrap_or(d.saldo_inicial);
+                let tasa_m_d = d.tasa_anual / 100.0 / 12.0;
+                let pago_d = d.pago_total_mensual();
+                let (meses_d, int_d, total_d) = simular_pagos_simple(saldo_d, tasa_m_d, pago_d);
+                saldo_orig_total += saldo_d;
+                pago_orig_total += pago_d;
+                int_orig_total += int_d;
+                total_orig_pago += total_d;
+                meses_orig_max = meses_orig_max.max(meses_d);
+            }
+
+            mostrar_comparativa_consolidacion(
+                &deuda,
+                saldo_orig_total,
+                pago_orig_total,
+                int_orig_total,
+                total_orig_pago,
+                meses_orig_max,
+                pago_mensual,
+                int_restante,
+                total_restante,
+                meses_restantes,
+                int_pagado_hist,
+                total_pagado_hist,
+            );
+        }
+        Some(1) => {
+            println!();
+            println!("  Ingresa los datos de las deudas ANTES de consolidarlas:");
+            let saldo_orig = pedir_f64("  Saldo total original de las deudas ($)", 0.0);
+            if saldo_orig < 0.01 {
+                return;
+            }
+            let tasa_orig = pedir_f64("  Tasa promedio anual que pagabas (%)", 0.0);
+            let pago_orig = pedir_f64("  Pago mensual total que hacías ($)", 0.0);
+            if pago_orig < 0.01 {
+                return;
+            }
+            let tasa_m_orig = tasa_orig / 100.0 / 12.0;
+            let (meses_orig, int_orig, total_orig) =
+                simular_pagos_simple(saldo_orig, tasa_m_orig, pago_orig);
+
+            mostrar_comparativa_consolidacion(
+                &deuda,
+                saldo_orig,
+                pago_orig,
+                int_orig,
+                total_orig,
+                meses_orig,
+                pago_mensual,
+                int_restante,
+                total_restante,
+                meses_restantes,
+                int_pagado_hist,
+                total_pagado_hist,
+            );
+        }
+        _ => {}
+    }
+    pausa();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mostrar_comparativa_consolidacion(
+    deuda: &DeudaRastreada,
+    saldo_orig_total: f64,
+    pago_orig_mensual: f64,
+    int_orig_total: f64,
+    total_orig_pagado: f64,
+    meses_orig: u32,
+    pago_prest_mensual: f64,
+    int_prest_restante: f64,
+    total_prest_restante: f64,
+    meses_prest_restantes: u32,
+    int_prest_ya_pagado: f64,
+    total_prest_ya_pagado: f64,
+) {
+    limpiar();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║  ⚖️  LO QUE HICISTE vs LO QUE NO ESTABAS HACIENDO             ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════════════════════════╝".cyan()
+    );
+    println!();
+
+    let int_prest_total = int_prest_ya_pagado + int_prest_restante;
+    let total_prest_completo = total_prest_ya_pagado + total_prest_restante;
+    let meses_prest_total = deuda.historial.len() as u32 + meses_prest_restantes;
+
+    println!(
+        "  {:<42} {:>13} {:>13}",
+        "", "SIN consolid.", "CON consolid."
+    );
+    println!("  {}", "─".repeat(72));
+    println!(
+        "  {:<42} {:>13} {:>13}",
+        "Saldo de deudas consolidadas ($):",
+        format!("${:.2}", saldo_orig_total).red(),
+        format!("${:.2}", saldo_orig_total).cyan()
+    );
+    println!(
+        "  {:<42} {:>13} {:>13}",
+        "Pago mensual:",
+        format!("${:.2}", pago_orig_mensual).yellow(),
+        format!("${:.2}", pago_prest_mensual).green().bold()
+    );
+    println!(
+        "  {:<42} {:>13} {:>13}",
+        "Meses para liquidar:",
+        format!("{}", meses_orig).yellow(),
+        format!("{}", meses_prest_total).cyan()
+    );
+    println!(
+        "  {:<42} {:>13} {:>13}",
+        "Total en intereses:",
+        format!("${:.2}", int_orig_total).red().bold(),
+        format!("${:.2}", int_prest_total).yellow()
+    );
+    println!(
+        "  {:<42} {:>13} {:>13}",
+        "Total pagado (capital + intereses):",
+        format!("${:.2}", total_orig_pagado).red(),
+        format!("${:.2}", total_prest_completo).cyan()
+    );
+    println!("  {}", "─".repeat(72));
+
+    let ahorro_intereses = int_orig_total - int_prest_total;
+    let flujo_liberado = pago_orig_mensual - pago_prest_mensual;
+
+    if ahorro_intereses >= 0.0 {
+        println!(
+            "  {:<42} {}",
+            "Ahorro en intereses:",
+            format!("✅ +${:.2}", ahorro_intereses).green().bold()
+        );
+    } else {
+        println!(
+            "  {:<42} {}",
+            "Diferencia en intereses:",
+            format!("❌ −${:.2} (pagas más)", ahorro_intereses.abs()).red().bold()
+        );
+    }
+
+    if flujo_liberado > 0.01 {
+        println!(
+            "  {:<42} {}",
+            "Flujo mensual liberado:",
+            format!(
+                "✅ +${:.2}/mes  (${:.2}/año)",
+                flujo_liberado,
+                flujo_liberado * 12.0
+            )
+            .green()
+            .bold()
+        );
+    } else if flujo_liberado < -0.01 {
+        println!(
+            "  {:<42} {}",
+            "Flujo mensual extra (pagas más/mes):",
+            format!("⚠️  +${:.2}/mes", flujo_liberado.abs()).yellow()
+        );
+    } else {
+        println!("  Pago mensual: igual que antes.");
+    }
+
+    // Progreso real (meses ya pagados con el préstamo)
+    if total_prest_ya_pagado > 0.01 {
+        println!();
+        println!("  {}", "─".repeat(72));
+        println!("  📊 Progreso real ({} meses pagados):", deuda.historial.len());
+        println!(
+            "     Ya pagaste con el préstamo: {}",
+            format!("${:.2}", total_prest_ya_pagado).green()
+        );
+        println!(
+            "     De eso, en intereses:       {}",
+            format!("${:.2}", int_prest_ya_pagado).red()
+        );
+        println!(
+            "     Abono efectivo a capital:   {}",
+            format!("${:.2}", (total_prest_ya_pagado - int_prest_ya_pagado).max(0.0)).cyan()
+        );
+        let pagado_sin_consolidar = pago_orig_mensual * deuda.historial.len() as f64;
+        println!(
+            "     Sin consolidar habrías pagado: {}",
+            format!("${:.2}", pagado_sin_consolidar).red()
+        );
+        let diferencia_ya = pagado_sin_consolidar - total_prest_ya_pagado;
+        if diferencia_ya > 0.0 {
+            println!(
+                "     {} en estos {} meses.",
+                format!("Ya ahorraste ${:.2}", diferencia_ya).green().bold(),
+                deuda.historial.len()
+            );
+        } else if diferencia_ya < -0.01 {
+            println!(
+                "     Pagaste ${:.2} más que antes en estos {} meses.",
+                diferencia_ya.abs(),
+                deuda.historial.len()
+            );
+        }
+    }
+
+    println!();
+    println!("  {}", "═".repeat(72));
+    if ahorro_intereses > 0.0 && flujo_liberado >= 0.0 {
+        println!(
+            "  {}",
+            "✅ EXCELENTE DECISIÓN — Ahorras en intereses Y liberas flujo mensual."
+                .green()
+                .bold()
+        );
+    } else if ahorro_intereses > 0.0 {
+        println!(
+            "  {}",
+            "✅ BUENA EN INTERESES — Pagas más por mes, pero ahorras en total."
+                .yellow()
+                .bold()
+        );
+    } else if flujo_liberado > 0.0 {
+        println!(
+            "  {}",
+            "⚠️  LIBERA FLUJO PERO CON MÁS INTERESES — Considera liquidar pronto."
+                .yellow()
+                .bold()
+        );
+    } else {
+        println!(
+            "  {}",
+            "❌ REVISA LAS CONDICIONES — Podrías haber obtenido mejores términos."
+                .red()
+                .bold()
+        );
+    }
+    println!("  {}", "═".repeat(72));
+    println!();
 }
 
 /// Muestra el análisis financiero completo de la consolidación.

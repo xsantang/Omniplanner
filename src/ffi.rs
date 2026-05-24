@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::contrasenias;
+use crate::dinero::Dinero;
 use crate::storage::AppState;
 
 // Estado global protegido por mutex (un solo hilo de JNI a la vez)
@@ -437,13 +438,13 @@ fn cmd_dashboard() -> String {
                     .lineas
                     .iter()
                     .filter(|l| l.categoria == crate::ml::presupuesto_cero::Categoria::Ingreso)
-                    .map(|l| l.monto)
+                    .map(|l| l.monto.a_f64())
                     .sum();
                 let gas: f64 = p
                     .lineas
                     .iter()
                     .filter(|l| l.categoria != crate::ml::presupuesto_cero::Categoria::Ingreso)
-                    .map(|l| l.monto)
+                    .map(|l| l.monto.a_f64())
                     .sum();
                 (ing, gas)
             })
@@ -766,13 +767,13 @@ fn cmd_presupuesto_resumen() -> String {
                     .lineas
                     .iter()
                     .filter(|l| l.categoria == Categoria::Ingreso)
-                    .map(|l| l.monto)
+                    .map(|l| l.monto.a_f64())
                     .sum();
                 let gas: f64 = m
                     .lineas
                     .iter()
                     .filter(|l| l.categoria != Categoria::Ingreso)
-                    .map(|l| l.monto)
+                    .map(|l| l.monto.a_f64())
                     .sum();
                 serde_json::json!({
                     "mes": m.mes,
@@ -849,12 +850,12 @@ fn cmd_presupuesto_agregar(params: &Value) -> String {
         mes.lineas.push(LineaPresupuesto {
             nombre,
             categoria,
-            monto,
+            monto: Dinero::desde_f64(monto),
             pagado,
             fecha_limite,
             notas,
-            saldo_total_deuda,
-            monto_pagado_real: 0.0,
+            saldo_total_deuda: saldo_total_deuda.map(Dinero::desde_f64),
+            monto_pagado_real: Dinero::CERO,
             meses_atrasados: 0,
             frecuencia: crate::ml::FrecuenciaPago::Mensual,
         });
@@ -962,7 +963,7 @@ fn cmd_presupuesto_actualizar_linea(params: &Value) -> String {
             linea.nombre = n.to_string();
         }
         if let Some(m) = params.get("monto").and_then(|v| v.as_f64()) {
-            linea.monto = m;
+            linea.monto = Dinero::desde_f64(m);
         }
         if let Some(cat) = params.get("categoria").and_then(|v| v.as_str()) {
             linea.categoria = match cat {
@@ -983,7 +984,7 @@ fn cmd_presupuesto_actualizar_linea(params: &Value) -> String {
             linea.notas = n.to_string();
         }
         if let Some(s) = params.get("saldo_total_deuda").and_then(|v| v.as_f64()) {
-            linea.saldo_total_deuda = Some(s);
+            linea.saldo_total_deuda = Some(Dinero::desde_f64(s));
         }
         state.guardar()?;
         Ok("Línea actualizada")
